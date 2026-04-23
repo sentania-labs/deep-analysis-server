@@ -1,16 +1,8 @@
-# docker-compose.yml — Deep Analysis server stack (W1a: infra-only)
-#
-# This slice stands up the three infrastructure containers — postgres, redis,
-# and the Caddy gateway. Application service containers (auth, ingest, parser,
-# analytics, web) land in W1b; their stubs are commented out below.
+# docker-compose.yml — Deep Analysis server stack
 #
 # Usage:
 #   cp .env.example .env        # set POSTGRES_PASSWORD
-#   docker compose up -d        # brings up postgres, redis, gateway
-#
-# Upstreams referenced in the Caddyfile will 502 until W1b lands — that is
-# expected. The gateway topology is live from W1a forward so later slices
-# only add containers, never rewire routing.
+#   docker compose up -d
 
 name: deep-analysis
 
@@ -25,6 +17,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
     networks:
       - backend
     healthcheck:
@@ -70,15 +64,131 @@ services:
       retries: 3
       start_period: 15s
 
-  # TODO(W1b): auth service stub — add here
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      DA_SERVICE_NAME: auth
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # TODO(W1b): ingest service stub — add here
+  ingest:
+    build:
+      context: .
+      dockerfile: services/ingest/Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      DA_SERVICE_NAME: ingest
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # TODO(W1b): parser service stub — add here
+  parser:
+    build:
+      context: .
+      dockerfile: services/parser/Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      DA_SERVICE_NAME: parser
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # TODO(W1b): analytics service stub — add here
+  analytics:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      DA_SERVICE_NAME: analytics
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # TODO(W1b): web service stub — add here
+  web:
+    build:
+      context: .
+      dockerfile: services/web/Dockerfile
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    environment:
+      DA_SERVICE_NAME: web
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 networks:
   frontend:

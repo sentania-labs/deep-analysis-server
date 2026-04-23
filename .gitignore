@@ -30,3 +30,4 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+docker-compose.override.yml

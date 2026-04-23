@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deep-analysis-common"
+version = "0.4.0.dev0"
+requires-python = ">=3.12"
+dependencies = [
+    "structlog>=24.2",
+    "prometheus-client>=0.20",
+    "redis>=5.0",
+    "pyjwt[crypto]>=2.8",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+]
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"__init__.py" = "common/__init__.py"
+"logging.py" = "common/logging.py"
+"metrics.py" = "common/metrics.py"
+"events.py" = "common/events.py"
+"jwt_verify.py" = "common/jwt_verify.py"
+"redis_client.py" = "common/redis_client.py"
+"settings.py" = "common/settings.py"

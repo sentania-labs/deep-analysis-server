@@ -1,45 +1,42 @@
-# gateway/Caddyfile — Deep Analysis edge proxy (W1a: infra-only)
-#
-# The gateway is the only externally-reachable container. It terminates TLS
-# and reverse-proxies to internal services over the `backend` docker network.
-#
-# W1a stands up the topology with route stubs pointing at services that do
-# not exist yet. Those routes will 502 until W1b lands the service containers
-# — intentional, so we never rewire edge routing once apps start arriving.
-#
-# /health is served locally by Caddy so the container healthcheck works on
-# the W1a infra slice alone.
 {
-	# Disable automatic HTTPS entirely for the W1a slice — no public hostname
-	# configured yet. W1b/W1c will introduce a proper site block with real
-	# certs (ACME or `tls internal` for dev).
-	auto_https off
+    # tls internal issues a locally-trusted self-signed cert for deepanalysis.local.
+    # Add this hostname to /etc/hosts: 127.0.0.1 deepanalysis.local
+    # For host-machine curl: curl -k https://deepanalysis.local/auth/healthz
 }
 
 :80 {
-	handle /health {
-		respond "ok" 200
-	}
+    handle /health {
+        respond "ok" 200
+    }
+    handle {
+        redir https://{host}{uri} 301
+    }
+}
 
-	# Upstream services (commented until W1b). Leaving these here as a
-	# reference for the routing topology; uncommenting before the matching
-	# container exists will cause DNS resolution failures at request time
-	# (not at startup — Caddy resolves upstreams lazily).
-	#
-	# handle /api/auth/* {
-	#     reverse_proxy auth:8000
-	# }
-	# handle /api/ingest/* {
-	#     reverse_proxy ingest:8000
-	# }
-	# handle /api/analytics/* {
-	#     reverse_proxy analytics:8000
-	# }
-	# handle {
-	#     reverse_proxy web:8000
-	# }
+deepanalysis.local {
+    tls internal
 
-	handle {
-		respond "Deep Analysis gateway — W1a infra slice. Services land in W1b." 503
-	}
+    handle /health {
+        respond "ok" 200
+    }
+
+    handle_path /auth/* {
+        reverse_proxy auth:8000
+    }
+
+    handle_path /ingest/* {
+        reverse_proxy ingest:8000
+    }
+
+    handle_path /analytics/* {
+        reverse_proxy analytics:8000
+    }
+
+    handle /admin/* {
+        reverse_proxy web:8000
+    }
+
+    handle {
+        reverse_proxy web:8000
+    }
 }

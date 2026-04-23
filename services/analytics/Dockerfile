@@ -1,10 +1,17 @@
-# services/analytics/Dockerfile — STUB
-#
-# This Dockerfile will be implemented in Phase 2.
-# Placeholder to make docker-compose.yml's build context valid.
-#
-# Target: Python 3.12-slim base, non-root user, /app workdir
 FROM python:3.12-slim
+
 WORKDIR /app
-# TODO: implement in Phase 2
-CMD ["echo", "service not yet implemented"]
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir fastapi "uvicorn[standard]" structlog prometheus-client
+
+COPY common/ ./common/
+RUN pip install --no-cache-dir ./common/
+
+COPY services/analytics/ ./service/
+RUN pip install --no-cache-dir ./service/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "analytics_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
