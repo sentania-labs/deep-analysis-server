@@ -8,7 +8,7 @@ infrastructure — the four logical schemas (`auth`, `ingest`, `parser`,
 `deep_analysis_analytics`).
 
 Starting in W2, each service adds its own Alembic head under
-`alembic/<service>/` and manages only its own schema's tables. This
+`services/<name>/alembic/` and manages only its own schema's tables. This
 keeps services independently migratable: the `parser` service can ship
 a schema change without coordinating with `analytics`, and vice-versa.
 Each service's README documents its migration head.
@@ -22,11 +22,21 @@ keeps credentials out of migration history and out of the repo.
 
 ## Common commands
 
+Root head (schemas + roles):
+
 ```
 uv run alembic upgrade head       # apply all pending migrations
 uv run alembic current            # show current revision
 uv run alembic downgrade -1       # roll back one step
 uv run alembic history            # list all revisions
+```
+
+Service head (e.g. auth) — point `-c` at the service's `alembic.ini`:
+
+```
+uv run alembic -c services/auth/alembic.ini upgrade head
+uv run alembic -c services/auth/alembic.ini current
+uv run alembic -c services/auth/alembic.ini downgrade base
 ```
 
 ## Running against the compose Postgres
@@ -43,14 +53,33 @@ Use whatever `POSTGRES_USER` / `POSTGRES_PASSWORD` you put in your
 `.env`. The driver prefix is `postgresql+psycopg://` — we use the
 sync psycopg driver for migrations, not asyncpg.
 
-## Service-specific migrations
+## Service-scoped heads
 
-Once a service adds its head (W2+), run it with a different script
-location:
+Each service owns its own Alembic config under
+`services/<name>/alembic/` with its own `alembic.ini`. Per-service
+heads:
+
+- use their own `version_table` (e.g. `auth_alembic_version`) inside
+  their own schema, so they can be applied and rolled back
+  independently of the root head and each other;
+- set `include_name` / `include_schemas` in `env.py` to scope
+  autogenerate to their own schema — no cross-service proposals.
+
+Run them from the repo root by pointing `-c` at the service's
+`alembic.ini`. The root head must be applied first, since it owns the
+schemas and service roles.
+
+### auth
 
 ```
-uv run alembic -c alembic.ini -x head=auth upgrade head     # example; TBD in W2
+DATABASE_URL=postgresql+psycopg://da:changeme@localhost:5432/deep_analysis \
+  uv run alembic upgrade head                              # root head
+
+DATABASE_URL=postgresql+psycopg://da:changeme@localhost:5432/deep_analysis \
+  uv run alembic -c services/auth/alembic.ini upgrade head # auth head
 ```
 
-The exact invocation will be pinned in each service's README when its
-head lands.
+The auth head creates `auth.users`, `auth.sessions`, and
+`auth.agent_registrations`, plus the `pgcrypto` extension (for
+`gen_random_uuid()`). `pgcrypto` is left in place on downgrade — it
+is a cluster-wide extension with potentially other consumers.

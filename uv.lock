@@ -266,16 +266,22 @@ name = "deep-analysis-auth"
 version = "0.4.0.dev0"
 source = { editable = "services/auth" }
 dependencies = [
+    { name = "alembic" },
     { name = "fastapi" },
     { name = "prometheus-client" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.13" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "prometheus-client", specifier = ">=0.20" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

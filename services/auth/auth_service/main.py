@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from auth_service import models as _models  # noqa: F401 — ensure Base.metadata loaded
 from common.logging import configure_logging
 from common.metrics import mount_metrics
 
