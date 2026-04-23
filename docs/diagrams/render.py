@@ -171,18 +171,30 @@ def render(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render Excalidraw JSON to PNG")
-    parser.add_argument("input", type=Path, help="Path to .excalidraw JSON file")
-    parser.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path (default: same name with .png)")
+    parser.add_argument("input", type=Path, nargs="?", default=None, help="Path to .excalidraw JSON file (default: glob *.excalidraw in cwd)")
+    parser.add_argument("--output", "-o", type=Path, default=None, help="Output PNG path (default: same name with .png). Only valid with single input.")
     parser.add_argument("--scale", "-s", type=int, default=2, help="Device scale factor (default: 2)")
     parser.add_argument("--width", "-w", type=int, default=1920, help="Max viewport width (default: 1920)")
     args = parser.parse_args()
 
-    if not args.input.exists():
-        print(f"ERROR: File not found: {args.input}", file=sys.stderr)
-        sys.exit(1)
+    if args.input is None:
+        inputs = sorted(Path.cwd().glob("*.excalidraw"))
+        if not inputs:
+            print("ERROR: No .excalidraw files found in current directory.", file=sys.stderr)
+            sys.exit(1)
+        if args.output is not None:
+            print("ERROR: --output is only valid when a single input file is given.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        if not args.input.exists():
+            print(f"ERROR: File not found: {args.input}", file=sys.stderr)
+            sys.exit(1)
+        inputs = [args.input]
 
-    png_path = render(args.input, args.output, args.scale, args.width)
-    print(str(png_path))
+    for excalidraw_path in inputs:
+        output = args.output if len(inputs) == 1 else None
+        png_path = render(excalidraw_path, output, args.scale, args.width)
+        print(str(png_path))
 
 
 if __name__ == "__main__":

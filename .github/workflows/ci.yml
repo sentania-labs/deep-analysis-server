@@ -151,3 +151,23 @@ jobs:
       - name: docker compose down
         if: always()
         run: docker compose down -v
+
+  diagram-drift:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    needs: [lint, typecheck, test-common]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Sync diagram renderer deps
+        working-directory: docs/diagrams
+        run: uv sync
+      - name: Install chromium
+        working-directory: docs/diagrams
+        run: uv run playwright install --with-deps chromium
+      - name: Re-render all diagrams
+        working-directory: docs/diagrams
+        run: uv run render.py
+      - name: Check for drift
+        run: git diff --exit-code 'docs/diagrams/*.png'

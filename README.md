@@ -17,6 +17,12 @@ The matching Windows agent (MIT license) lives at [sentania-labs/deep-analysis-a
 - [docs/migrations.md](docs/migrations.md) — Alembic usage
 - [docs/diagrams/](docs/diagrams/) — Architecture + flow diagrams (diagram content arrives in W1c-iii)
 
+## Architecture
+
+![Deep Analysis architecture — 6-service topology with Postgres logical schemas, Redis event bus, and AI add-on seam](docs/diagrams/architecture.png)
+
+Source: [`docs/diagrams/architecture.excalidraw`](docs/diagrams/architecture.excalidraw). See [`docs/diagrams/README.md`](docs/diagrams/README.md) for regeneration instructions.
+
 ## Quickstart
 
 The current slice (W1a) stands up the infra containers only — PostgreSQL,
