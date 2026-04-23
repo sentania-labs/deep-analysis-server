@@ -8,6 +8,34 @@ Deep Analysis is a self-hosted platform for tracking and analyzing Magic: The Ga
 
 The matching Windows agent (MIT license) lives at [sentania-labs/deep-analysis-agent](https://github.com/sentania-labs/deep-analysis-agent) *(coming soon)*.
 
+## Quickstart
+
+The current slice (W1a) stands up the infra containers only — PostgreSQL,
+Redis, and the Caddy gateway. Application services land in subsequent
+slices; the gateway will 502 on `/api/*` routes until then.
+
+```bash
+# 1. Clone and enter the repo
+git clone https://github.com/sentania-labs/deep-analysis-server.git
+cd deep-analysis-server
+
+# 2. Configure secrets
+cp .env.example .env
+# Edit .env and set POSTGRES_PASSWORD to a real value
+
+# 3. Start the stack
+docker compose up -d
+
+# 4. Sanity-check
+docker compose ps                  # postgres + redis should report healthy
+curl http://localhost/health       # gateway → "ok"
+
+# 5. Tear down (volumes preserved)
+docker compose down
+```
+
+Requirements: Docker Engine 24+ with the Compose v2 plugin.
+
 ## Services
 
 | Service    | Role                                               |
