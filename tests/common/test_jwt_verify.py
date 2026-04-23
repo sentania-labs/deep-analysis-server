@@ -60,8 +60,12 @@ def test_verify_tampered_signature(tmp_path: Path) -> None:
     private_pem, pub_path = _keypair(tmp_path)
     verifier = JWTVerifier(pub_path, ISSUER, AUDIENCE)
     token = _make_token(private_pem)
-    # flip last char of signature
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Replace the signature segment with a syntactically-valid but
+    # mathematically-bogus one. Flipping a single char isn't reliable:
+    # base64url lets multiple inputs decode to the same signature byte
+    # (padding bits), so the verifier could still accept the token.
+    header, payload, _ = token.split(".")
+    tampered = f"{header}.{payload}.AAAA"
     with pytest.raises(InvalidTokenError):
         verifier.verify(tampered)
 
