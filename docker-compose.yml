@@ -1,0 +1,250 @@
+# docker-compose.yml — Deep Analysis server stack
+#
+# This is the primary compose file for all six application services plus shared
+# infrastructure (Postgres, Redis, Caddy). Services reference local build contexts
+# that don't exist yet — this file is scaffolding for Phase 1.
+#
+# Each service will be implemented incrementally in Phase 2. Build order:
+#   1. auth       (needed by everything)
+#   2. ingest     (upload pipeline)
+#   3. parser     (completes the data pipeline)
+#   4. analytics  (enables dashboards + AI add-on)
+#   5. web        (user-facing dashboard)
+#   6. gateway    (ties everything together, single external port)
+
+name: deep-analysis
+
+services:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ──────────────────────────────────────────────────────────────────────────
+
+  postgres:
+    # Single Postgres instance. Per-service logical schemas:
+    #   auth.*, ingest.*, parser.*, analytics.*
+    # Alembic manages all schemas from a single migration chain.
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: deep_analysis
+      POSTGRES_USER: ${POSTGRES_USER:-da}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    volumes:
+      - da-postgres:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-da} -d deep_analysis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    # Redis serves two purposes:
+    #   1. Event bus: ingest publishes `file.ingested`; parser subscribes
+    #   2. Short-lived caches for auth (session TTL) and analytics (query cache)
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - da-redis:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # APPLICATION SERVICES
+  # ──────────────────────────────────────────────────────────────────────────
+
+  gateway:
+    # TLS termination, HTTP entry point, auth middleware, rate limiting.
+    # Caddy handles TLS + reverse proxy. A thin FastAPI shim may be added for
+    # request mutation (inject auth headers, rate-limit by JWT claims, etc.).
+    # Implementation decision: Caddy-primary with optional FastAPI shim.
+    # This is the ONLY service with an externally-reachable port.
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-gateway:dev
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      auth:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  auth:
+    # User accounts, sessions, agent registrations.
+    # Exposes short-lived JWTs used by all other services for s2s auth.
+    # FastAPI + Postgres auth.* schema.
+    # Admin endpoints: list/revoke agent registrations, manage users.
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-auth:dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-da}:${POSTGRES_PASSWORD:?}@postgres:5432/deep_analysis
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-900}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ingest:
+    # Upload endpoint for .dat and .log files from the Windows agent.
+    # sha256 dedup: game_log_files table holds the canonical record per file;
+    #   user_uploads associates user + file (multi-user attribution from day one).
+    # On successful store, publishes `file.ingested` event to Redis.
+    # FastAPI + Postgres ingest.* schema + Redis pub + volume for raw file archive.
+    build:
+      context: ./services/ingest
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-ingest:dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-da}:${POSTGRES_PASSWORD:?}@postgres:5432/deep_analysis
+      REDIS_URL: redis://redis:6379/0
+      AUTH_SERVICE_URL: http://auth:8000
+      ARCHIVE_ROOT: /data/archive
+    volumes:
+      - da-ingest-archive:/data/archive
+    networks:
+      - backend
+    depends_on:
+      auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  parser:
+    # Async worker — no HTTP server (or minimal one for /healthz + /metrics).
+    # Subscribes to `file.ingested` Redis events.
+    # Reads raw files from shared archive volume, parses .dat/.log format.
+    # Writes parsed records to parser.* schema: matches, games, plays, decks.
+    # Python worker + Redis sub + Postgres parser.* schema.
+    build:
+      context: ./services/parser
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-parser:dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-da}:${POSTGRES_PASSWORD:?}@postgres:5432/deep_analysis
+      REDIS_URL: redis://redis:6379/0
+      ARCHIVE_ROOT: /data/archive
+    volumes:
+      - da-ingest-archive:/data/archive:ro  # read-only; ingest owns the volume
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Parser is a worker; /healthz returns 200 if the event loop is alive
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  analytics:
+    # Read-only query API. No tables of its own.
+    # Reads across parser.*, ingest.*, auth.* schemas for stats and win-rate cuts.
+    # Device-attribution queries use agent_registration_id from ingest.user_uploads.
+    # FastAPI + Postgres read access across schemas.
+    build:
+      context: ./services/analytics
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-analytics:dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-da}:${POSTGRES_PASSWORD:?}@postgres:5432/deep_analysis
+      REDIS_URL: redis://redis:6379/0  # read cache only
+      AUTH_SERVICE_URL: http://auth:8000
+    networks:
+      - backend
+    depends_on:
+      auth:
+        condition: service_healthy
+      parser:
+        condition: service_started  # parser may not be healthy until first event
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    # Dashboard UI. Talks to other services only through the gateway (in prod).
+    # During development, can talk to auth/analytics directly.
+    # FastAPI + Jinja templating (SPA optional in later phases).
+    build:
+      context: ./services/web
+      dockerfile: Dockerfile
+    image: ghcr.io/sentania-labs/deep-analysis-web:dev
+    restart: unless-stopped
+    environment:
+      GATEWAY_URL: http://gateway  # routes through gateway in prod
+      AUTH_SERVICE_URL: http://auth:8000
+      ANALYTICS_SERVICE_URL: http://analytics:8000
+    networks:
+      - backend
+    depends_on:
+      analytics:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  frontend:
+    # External-facing network. Only gateway is on this network.
+  backend:
+    # Internal service mesh. No direct external access.
+
+volumes:
+  da-postgres:
+    # PostgreSQL data directory. Persists across restarts.
+  da-redis:
+    # Redis persistence (AOF or RDB, TBD during auth implementation).
+  da-ingest-archive:
+    # Raw .dat/.log archive. Ingest writes; parser reads (read-only mount).
+    # Shared volume — both ingest and parser mount this.

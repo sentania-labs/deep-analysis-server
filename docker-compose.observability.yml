@@ -1,0 +1,72 @@
+# docker-compose.observability.yml — Optional observability overlay
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# Or add --profile observability (requires profile labels on services — TBD).
+#
+# This overlay adds Loki, Grafana, Prometheus, and OpenTelemetry Collector.
+# Default startup (docker-compose.yml only) does NOT include these services.
+# Users who want dashboards opt in explicitly.
+#
+# Status: STUB — not yet configured. Will be wired in Phase 2 once service
+# metrics endpoints are implemented.
+
+name: deep-analysis
+
+services:
+
+  prometheus:
+    # Scrapes /metrics endpoints on each service.
+    # Config: prometheus.yml (to be added in Phase 2)
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - da-prometheus:/prometheus
+    networks:
+      - backend
+    # TODO: add healthcheck + scrape config in Phase 2
+
+  loki:
+    # Log aggregation. Services ship JSON logs; Promtail/Alloy forwards to Loki.
+    image: grafana/loki:3.0.0
+    restart: unless-stopped
+    volumes:
+      - da-loki:/loki
+    networks:
+      - backend
+
+  grafana:
+    # Dashboards for Deep Analysis service metrics and logs.
+    # Pre-provisioned datasources (Prometheus, Loki) and dashboards TBD Phase 2.
+    image: grafana/grafana:10.4.0
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - da-grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - backend
+    depends_on:
+      - prometheus
+      - loki
+
+  otel-collector:
+    # OpenTelemetry Collector — off by default, future-proofing for distributed tracing.
+    # Currently a stub. Will be wired when services emit OTLP traces.
+    image: otel/opentelemetry-collector-contrib:0.99.0
+    restart: unless-stopped
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+    networks:
+      - backend
+
+volumes:
+  da-prometheus:
+  da-loki:
+  da-grafana:
