@@ -38,6 +38,7 @@ packages = ["common"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = ["docs/diagrams"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

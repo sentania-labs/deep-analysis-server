@@ -8,6 +8,15 @@ Deep Analysis is a self-hosted platform for tracking and analyzing Magic: The Ga
 
 The matching Windows agent (MIT license) lives at [sentania-labs/deep-analysis-agent](https://github.com/sentania-labs/deep-analysis-agent) *(coming soon)*.
 
+## Documentation
+
+- [docs/deploy.md](docs/deploy.md) — Deployment + environment
+- [docs/admin-bootstrap.md](docs/admin-bootstrap.md) — Initial admin password flow
+- [docs/backup.md](docs/backup.md) — Backup strategy
+- [docs/events.md](docs/events.md) — Redis event topics (AI contract)
+- [docs/migrations.md](docs/migrations.md) — Alembic usage
+- [docs/diagrams/](docs/diagrams/) — Architecture + flow diagrams (diagram content arrives in W1c-iii)
+
 ## Quickstart
 
 The current slice (W1a) stands up the infra containers only — PostgreSQL,
