@@ -5,12 +5,13 @@ External subscribers (e.g., deep-analysis-ai) rely on these
 constants and payload shapes. Any change is a breaking contract
 change — bump and coordinate.
 """
+
 from __future__ import annotations
 
 from typing import TypedDict
 
-FILE_INGESTED = "file.ingested"          # producer: ingest (W3)
-MATCH_PARSED = "match.parsed"            # producer: parser (W4)
+FILE_INGESTED = "file.ingested"  # producer: ingest (W3)
+MATCH_PARSED = "match.parsed"  # producer: parser (W4)
 INSIGHT_REQUESTED = "insight.requested"  # reserved for web/AI (W6)
 
 

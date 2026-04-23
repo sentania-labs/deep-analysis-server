@@ -1,4 +1,5 @@
 """Prometheus metrics mixin for FastAPI services."""
+
 from __future__ import annotations
 
 from fastapi import FastAPI

@@ -1,0 +1,153 @@
+name: CI
+
+# openapi-drift CI job deferred until W5 (OpenAPI spec surface stabilizes).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --dev
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --dev
+      # TODO: scope expands as services fill in — stubs are type-clean today.
+      - name: mypy
+        run: uv run mypy common/ services/
+
+  test-common:
+    name: test-common
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --dev
+      - name: pytest tests/common
+        run: uv run pytest tests/common/
+
+  test-integration:
+    name: test-integration
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test-common]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: deep_analysis
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/deep_analysis
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --dev
+      - name: alembic upgrade head
+        run: uv run alembic upgrade head
+      - name: pytest tests/integration
+        run: uv run pytest tests/integration/
+
+  docker-build:
+    name: docker-build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test-common]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, ingest, parser, analytics, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }} image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          tags: deep-analysis-${{ matrix.service }}:ci
+
+  compose-smoke:
+    name: compose-smoke
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test-common]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Map deepanalysis.local to loopback
+        run: echo "127.0.0.1 deepanalysis.local" | sudo tee -a /etc/hosts
+      - name: Seed .env for compose
+        run: cp .env.example .env
+      - name: docker compose up
+        run: docker compose up -d --build
+      - name: Wait for gateway
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sk -o /dev/null -w "%{http_code}" https://deepanalysis.local/auth/healthz | grep -q 200; then
+              echo "gateway up after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "gateway never answered"
+          docker compose ps
+          docker compose logs --tail=100
+          exit 1
+      - name: Assert /auth/healthz
+        run: curl -fsk https://deepanalysis.local/auth/healthz
+      - name: Assert /ingest/healthz
+        run: curl -fsk https://deepanalysis.local/ingest/healthz
+      - name: Assert /analytics/healthz
+        run: curl -fsk https://deepanalysis.local/analytics/healthz
+      - name: Assert /healthz (web)
+        run: curl -fsk https://deepanalysis.local/healthz
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: docker compose down
+        if: always()
+        run: docker compose down -v

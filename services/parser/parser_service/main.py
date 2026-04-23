@@ -1,5 +1,6 @@
 # TODO(W4): replace FastAPI stub with Redis subscriber worker; /healthz + /metrics remain.
 from fastapi import FastAPI
+
 from common.logging import configure_logging
 from common.metrics import mount_metrics
 

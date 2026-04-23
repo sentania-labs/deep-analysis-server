@@ -1,4 +1,5 @@
 """Tests for common.logging."""
+
 import structlog
 
 from common.logging import configure_logging

@@ -1,4 +1,5 @@
 """Public-key-only JWT verification (RS256)."""
+
 from __future__ import annotations
 
 from pathlib import Path

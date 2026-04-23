@@ -1,4 +1,5 @@
 """Tests for common.settings."""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Regression guard: topic constants must not drift."""
+
 from common.events import FILE_INGESTED, INSIGHT_REQUESTED, MATCH_PARSED
 
 

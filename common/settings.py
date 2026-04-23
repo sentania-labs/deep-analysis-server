@@ -1,4 +1,5 @@
 """Shared pydantic-settings base for all services."""
+
 from __future__ import annotations
 
 from pathlib import Path

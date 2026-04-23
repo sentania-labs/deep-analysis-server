@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+
 from common.logging import configure_logging
 from common.metrics import mount_metrics
 

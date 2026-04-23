@@ -1,4 +1,5 @@
 """Async Redis factory and event publisher."""
+
 from __future__ import annotations
 
 import json
