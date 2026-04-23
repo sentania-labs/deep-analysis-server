@@ -17,7 +17,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: uv sync
-        run: uv sync --dev
+        run: uv sync --all-packages --dev
       - name: ruff check
         run: uv run ruff check .
       - name: ruff format --check
@@ -32,7 +32,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: uv sync
-        run: uv sync --dev
+        run: uv sync --all-packages --dev
       # TODO: scope expands as services fill in — stubs are type-clean today.
       - name: mypy
         run: uv run mypy common/ services/
@@ -46,7 +46,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: uv sync
-        run: uv sync --dev
+        run: uv sync --all-packages --dev
       - name: pytest tests/common
         run: uv run pytest tests/common/
 
@@ -87,7 +87,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: uv sync
-        run: uv sync --dev
+        run: uv sync --all-packages --dev
       - name: Generate throwaway JWT keypair
         run: |
           uv run python -m auth_service.keygen --out "$RUNNER_TEMP"
