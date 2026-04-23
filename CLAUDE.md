@@ -37,6 +37,16 @@ This is the server half of a three-repo split:
 
 Shared infra containers: `postgres`, `redis`, `caddy`.
 
+### Event topics
+
+| Topic | Published by | Payload shape |
+|---|---|---|
+| `match.parsed` | `parser` | match_id, user_id, game_count, parsed_at (TBD) |
+| `upload.received` | `ingest` | sha256, user_id, filename, received_at (TBD) |
+| `insight.requested` | `analytics` or client | match_id, user_id, request_id (TBD) |
+
+Payload shapes are TBD — final schema will be in openapi/ or a dedicated events spec. Any subscriber must tolerate extra fields.
+
 ## Design decisions — do not change without discussion
 
 These are locked decisions from the v0.4.0 plan. If you think one needs revisiting, surface it to Scott — don't unilaterally change it.
@@ -51,6 +61,7 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 8. **No data migration.** Alembic starts at `001_initial_schema` covering all six schemas. No carry-forward from the manalog postgres.
 9. **Multi-user attribution from day one.** `ingest` schema design: `game_log_files` (sha PK, device-neutral dedup) + `user_uploads` (user_id + sha FK, per-user attribution). Not a migration after the fact.
 10. **No license-check code / phone-home.** GHCR token auth is the license gate for the AI add-on. Server code is clean.
+11. **Server emits standard events on Redis for cross-service consumption.** Topics: `match.parsed`, `upload.received`, `insight.requested`. The parser and ingest services publish. Any service (internal or add-on) can subscribe. This is the same Redis that ingest→parser uses internally; AI add-on subscribes opportunistically. Don't collapse these into HTTP callbacks.
 
 ## Development guidelines
 
