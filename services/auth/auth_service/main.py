@@ -1,4 +1,3 @@
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -66,17 +65,7 @@ def reset_redis() -> None:
     _redis_client = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    app.state.redis = _get_or_create_redis()
-    try:
-        yield
-    finally:
-        if _redis_client is not None:
-            await _redis_client.aclose()
-
-
-app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
 mount_metrics(app, SERVICE_NAME)
 
 
