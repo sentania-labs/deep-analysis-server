@@ -91,12 +91,8 @@ def upgrade() -> None:
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("user_agent", sa.String(length=512), nullable=True),
         sa.Column("ip", sa.String(length=64), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["user_id"], ["auth.users.id"], ondelete="CASCADE"
-        ),
-        sa.UniqueConstraint(
-            "refresh_token_hash", name="uq_sessions_refresh_token_hash"
-        ),
+        sa.ForeignKeyConstraint(["user_id"], ["auth.users.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("refresh_token_hash", name="uq_sessions_refresh_token_hash"),
         schema="auth",
     )
     op.create_index(
@@ -126,12 +122,8 @@ def upgrade() -> None:
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("client_version", sa.String(length=64), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["user_id"], ["auth.users.id"], ondelete="CASCADE"
-        ),
-        sa.UniqueConstraint(
-            "api_token_hash", name="uq_agent_registrations_api_token_hash"
-        ),
+        sa.ForeignKeyConstraint(["user_id"], ["auth.users.id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("api_token_hash", name="uq_agent_registrations_api_token_hash"),
         schema="auth",
     )
     op.create_index(
@@ -143,13 +135,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_agent_registrations_user_id", table_name="agent_registrations", schema="auth"
-    )
+    op.drop_index("ix_agent_registrations_user_id", table_name="agent_registrations", schema="auth")
     op.drop_table("agent_registrations", schema="auth")
-    op.drop_index(
-        "ix_sessions_user_id_expires_at", table_name="sessions", schema="auth"
-    )
+    op.drop_index("ix_sessions_user_id_expires_at", table_name="sessions", schema="auth")
     op.drop_table("sessions", schema="auth")
     op.drop_index("ix_users_email_lower", table_name="users", schema="auth")
     op.drop_table("users", schema="auth")

@@ -22,6 +22,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,11 @@ extend-exclude = ["docs/diagrams"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI dependencies idiomatically use Depends(...) as a default.
+"services/auth/auth_service/main.py" = ["B008"]
+"services/auth/auth_service/deps.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"

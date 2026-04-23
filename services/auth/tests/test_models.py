@@ -64,18 +64,14 @@ def migrated(engine: Any, db_url: str) -> Iterator[None]:
     root_cfg.set_main_option("sqlalchemy.url", db_url)
 
     auth_cfg = Config(str(AUTH_ALEMBIC_INI))
-    auth_cfg.set_main_option(
-        "script_location", str(REPO_ROOT / "services" / "auth" / "alembic")
-    )
+    auth_cfg.set_main_option("script_location", str(REPO_ROOT / "services" / "auth" / "alembic"))
     auth_cfg.set_main_option("sqlalchemy.url", db_url)
 
     command.upgrade(root_cfg, "head")
     command.upgrade(auth_cfg, "head")
-    try:
-        yield
-    finally:
-        command.downgrade(auth_cfg, "base")
-        # Leave root head in place — other service tests may need it.
+    # Leave migrations in place — other service tests in this package
+    # (W2b+) also need them, and re-upgrading is idempotent.
+    yield
 
 
 @pytest.fixture()
@@ -163,13 +159,9 @@ def test_agent_registration_token_unique(session: OrmSession) -> None:
     session.refresh(u)
 
     token = f"token-{uuid.uuid4()}"
-    session.add(
-        AgentRegistration(user_id=u.id, machine_name="box-a", api_token_hash=token)
-    )
+    session.add(AgentRegistration(user_id=u.id, machine_name="box-a", api_token_hash=token))
     session.commit()
 
-    session.add(
-        AgentRegistration(user_id=u.id, machine_name="box-b", api_token_hash=token)
-    )
+    session.add(AgentRegistration(user_id=u.id, machine_name="box-b", api_token_hash=token))
     with pytest.raises(IntegrityError):
         session.commit()

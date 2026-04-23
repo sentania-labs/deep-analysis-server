@@ -80,16 +80,26 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/deep_analysis
+      DA_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/deep_analysis
+      DA_REDIS_URL: redis://localhost:6379/0
+      DA_JWT_PRIVATE_KEY_PATH: ${{ runner.temp }}/jwt_private.pem
+      DA_JWT_PUBLIC_KEY_PATH: ${{ runner.temp }}/jwt_public.pem
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: uv sync
         run: uv sync --dev
-      - name: alembic upgrade head
+      - name: Generate throwaway JWT keypair
+        run: uv run python -m auth_service.keygen --out ${{ runner.temp }}
+      - name: alembic upgrade head (root)
         run: uv run alembic upgrade head
+      - name: alembic upgrade head (auth)
+        run: uv run alembic -c services/auth/alembic.ini upgrade head
       - name: pytest tests/integration
         run: uv run pytest tests/integration/
+      - name: pytest services/auth/tests
+        run: uv run pytest services/auth/tests/
 
   docker-build:
     name: docker-build (${{ matrix.service }})

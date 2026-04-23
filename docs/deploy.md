@@ -64,6 +64,27 @@ docker compose down -v
 
 > **Lab-box note:** `:443` conflicts with pka-dashboard on the shared lab host. For dev sessions there, drop a `docker-compose.override.yml` (gitignored) that remaps gateway ports to free alternatives.
 
+## JWT keys
+
+The `auth` service signs access tokens with an RS256 private key; every
+other service verifies with the corresponding public key. Operators
+generate the keypair once at deploy time:
+
+```bash
+uv run python -m auth_service.keygen --out ./secrets/
+```
+
+Mount the files into the containers via Docker Compose secrets or a
+read-only bind:
+
+- `auth` container: both keys, with
+  `DA_JWT_PRIVATE_KEY_PATH=/run/secrets/jwt_private.pem` and
+  `DA_JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public.pem`.
+- `ingest`, `parser`, `analytics`, `web`: public key only, mounted at
+  the path named by `DA_JWT_PUBLIC_KEY_PATH`.
+
+See `docs/admin-bootstrap.md` for the rotation procedure.
+
 ## First boot — migrations
 
 The compose stack does **not** run Alembic migrations automatically on startup (intentional — gives operators explicit control over schema changes). After the stack is healthy, run migrations separately against the published Postgres port:
