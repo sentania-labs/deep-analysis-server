@@ -82,8 +82,6 @@ jobs:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/deep_analysis
       DA_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/deep_analysis
       DA_REDIS_URL: redis://localhost:6379/0
-      DA_JWT_PRIVATE_KEY_PATH: ${{ runner.temp }}/jwt_private.pem
-      DA_JWT_PUBLIC_KEY_PATH: ${{ runner.temp }}/jwt_public.pem
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -91,7 +89,10 @@ jobs:
       - name: uv sync
         run: uv sync --dev
       - name: Generate throwaway JWT keypair
-        run: uv run python -m auth_service.keygen --out ${{ runner.temp }}
+        run: |
+          uv run python -m auth_service.keygen --out "$RUNNER_TEMP"
+          echo "DA_JWT_PRIVATE_KEY_PATH=$RUNNER_TEMP/jwt_private.pem" >> "$GITHUB_ENV"
+          echo "DA_JWT_PUBLIC_KEY_PATH=$RUNNER_TEMP/jwt_public.pem" >> "$GITHUB_ENV"
       - name: alembic upgrade head (root)
         run: uv run alembic upgrade head
       - name: alembic upgrade head (auth)
