@@ -85,6 +85,17 @@ read-only bind:
 
 See `docs/admin-bootstrap.md` for the rotation procedure.
 
+## Redis
+
+Redis is both the internal event bus (ingest → parser) and a
+user-facing short-lived cache. Agent registration codes live in
+Redis with a 10-minute TTL (see `docs/agent-protocol.md`), so the
+instance must be reachable from the `auth` service. The connection
+URL is set via `DA_REDIS_URL` (default `redis://redis:6379/0` in
+compose). Persistence is not required — registration codes are
+deliberately ephemeral; if Redis is flushed the user just mints a
+fresh code.
+
 ## First boot — migrations
 
 The compose stack does **not** run Alembic migrations automatically on startup (intentional — gives operators explicit control over schema changes). After the stack is healthy, run migrations separately against the published Postgres port:

@@ -55,3 +55,25 @@ docker compose exec auth cat /data/secrets/initial_admin.txt
 ```
 
 If the file is gone, either the password has already been changed (good — use the new credential) or the `auth_secrets` volume was recreated.
+
+## Generating a registration code
+
+Once logged in as any user, mint a one-shot code that an agent can
+exchange for a long-lived `api_token`:
+
+```bash
+curl -k -X POST https://deepanalysis.local/auth/agent/registration-code \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}"
+```
+
+Response (201):
+
+```json
+{"code": "AB34-XY78", "expires_at": "2026-04-23T15:10:00Z"}
+```
+
+Codes are stored in Redis with a 10-minute TTL and are consumed
+atomically — a code can only be used once. **No audit trail** is
+kept for minted codes (Option A: keeps v0.4.0 simple with no
+extra table or migration). If the code expires or is mis-typed,
+re-mint a new one. Full protocol in `docs/agent-protocol.md`.

@@ -11,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service.db import get_session
+from auth_service.models import AgentRegistration, User
 from auth_service.models import Session as SessionRow
-from auth_service.models import User
+from auth_service.registration import hash_api_token
 from auth_service.settings import get_settings
 from common.jwt_verify import InvalidTokenError, JWTVerifier
 
@@ -95,4 +96,43 @@ async def get_current_user(
         role=user.role,
         session_id=session_row.id,
         must_change_password=user.must_change_password,
+    )
+
+
+@dataclass
+class AuthenticatedAgent:
+    agent_id: uuid.UUID
+    user_id: int
+    machine_name: str
+    client_version: str | None
+
+
+async def get_current_agent(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+) -> AuthenticatedAgent:
+    """Resolve the bearer token as an agent api_token (not a JWT)."""
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        raise _unauthorized()
+    token = auth[7:].strip()
+    if not token:
+        raise _unauthorized()
+
+    row = (
+        await db.execute(
+            select(AgentRegistration).where(
+                AgentRegistration.api_token_hash == hash_api_token(token),
+                AgentRegistration.revoked_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise _unauthorized()
+
+    return AuthenticatedAgent(
+        agent_id=row.id,
+        user_id=row.user_id,
+        machine_name=row.machine_name,
+        client_version=row.client_version,
     )

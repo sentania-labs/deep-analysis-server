@@ -20,6 +20,7 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "cryptography>=42.0",
+    "redis>=5.0",
 ]
 
 [tool.hatch.build.targets.wheel]

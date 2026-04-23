@@ -1,21 +1,40 @@
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service import models as _models  # noqa: F401 — ensure Base.metadata loaded
 from auth_service.db import get_session
-from auth_service.deps import AuthenticatedUser, get_current_user
+from auth_service.deps import (
+    AuthenticatedAgent,
+    AuthenticatedUser,
+    get_current_agent,
+    get_current_user,
+)
 from auth_service.jwt_issue import (
     hash_refresh_token,
     issue_access_token,
     issue_refresh_token,
 )
+from auth_service.models import AgentRegistration, User
 from auth_service.models import Session as SessionRow
-from auth_service.models import User
 from auth_service.passwords import verify_password
+from auth_service.registration import (
+    consume_registration_code,
+    generate_api_token,
+    generate_registration_code,
+    hash_api_token,
+    store_registration_code,
+)
 from auth_service.schemas import (
+    AgentHeartbeatRequest,
+    AgentHeartbeatResponse,
+    AgentRegisterRequest,
+    AgentRegisterResponse,
+    AgentRegistrationCodeResponse,
     LoginRequest,
     MeResponse,
     RefreshRequest,
@@ -27,7 +46,37 @@ from common.metrics import mount_metrics
 
 SERVICE_NAME = "auth"
 configure_logging(SERVICE_NAME)
-app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
+
+
+_redis_client: Redis | None = None
+
+
+def _get_or_create_redis() -> Redis:
+    global _redis_client
+    if _redis_client is None:
+        from redis.asyncio import from_url as redis_from_url
+
+        _redis_client = redis_from_url(get_settings().redis_url)
+    return _redis_client
+
+
+def reset_redis() -> None:
+    """Test hook: clear the cached Redis client after env changes."""
+    global _redis_client
+    _redis_client = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.redis = _get_or_create_redis()
+    try:
+        yield
+    finally:
+        if _redis_client is not None:
+            await _redis_client.aclose()
+
+
+app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 
 
@@ -35,6 +84,17 @@ _INVALID_CREDENTIALS = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
     detail={"error": "invalid_credentials"},
 )
+_INVALID_REGISTRATION_CODE = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail={"error": "invalid_registration_code"},
+)
+
+# Agents call POST /auth/agent/heartbeat every 5 min — see docs/agent-protocol.md.
+_REGISTRATION_CODE_TTL_SECONDS = 600
+
+
+async def get_redis() -> Redis:
+    return _get_or_create_redis()
 
 
 def _client_ip(request: Request) -> str | None:
@@ -180,4 +240,80 @@ async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeResponse:
         email=user.email,
         role=user.role,
         must_change_password=user.must_change_password,
+    )
+
+
+@app.post(
+    "/auth/agent/registration-code",
+    response_model=AgentRegistrationCodeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def mint_registration_code(
+    user: AuthenticatedUser = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> AgentRegistrationCodeResponse:
+    # Rate limiting deferred to gateway W7.
+    code = generate_registration_code()
+    await store_registration_code(
+        redis, code, user.user_id, ttl_seconds=_REGISTRATION_CODE_TTL_SECONDS
+    )
+    expires_at = datetime.now(UTC) + timedelta(seconds=_REGISTRATION_CODE_TTL_SECONDS)
+    return AgentRegistrationCodeResponse(code=code, expires_at=expires_at)
+
+
+@app.post(
+    "/auth/agent/register",
+    response_model=AgentRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_agent(
+    body: AgentRegisterRequest,
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_session),
+) -> AgentRegisterResponse:
+    user_id = await consume_registration_code(redis, body.code)
+    if user_id is None:
+        raise _INVALID_REGISTRATION_CODE
+
+    api_token = generate_api_token()
+    now = datetime.now(UTC)
+    agent = AgentRegistration(
+        user_id=user_id,
+        machine_name=body.machine_name,
+        api_token_hash=hash_api_token(api_token),
+        created_at=now,
+        last_seen_at=now,
+        client_version=body.client_version,
+    )
+    db.add(agent)
+    await db.commit()
+    await db.refresh(agent)
+
+    return AgentRegisterResponse(
+        agent_id=agent.id,
+        api_token=api_token,
+        user_id=user_id,
+    )
+
+
+@app.post("/auth/agent/heartbeat", response_model=AgentHeartbeatResponse)
+async def agent_heartbeat(
+    body: AgentHeartbeatRequest,
+    agent: AuthenticatedAgent = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_session),
+) -> AgentHeartbeatResponse:
+    # Agents call this every 5 min (see docs/agent-protocol.md).
+    row = (
+        await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent.agent_id))
+    ).scalar_one()
+    row.last_seen_at = datetime.now(UTC)
+    if body.client_version is not None:
+        row.client_version = body.client_version
+    await db.commit()
+    await db.refresh(row)
+
+    return AgentHeartbeatResponse(
+        status="ok",
+        registered_at=row.created_at,
+        revoked=row.revoked_at is not None,
     )

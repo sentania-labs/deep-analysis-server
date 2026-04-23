@@ -156,7 +156,22 @@ async def seed_user(db_session: AsyncSession) -> dict[str, Any]:
 
 
 @pytest_asyncio.fixture
-async def client(_truncate: None) -> AsyncIterator[Any]:
+async def redis_client(_keys: Any) -> AsyncIterator[Any]:
+    """Flush the test Redis DB around each test."""
+    from redis.asyncio import from_url as redis_from_url
+
+    url = os.environ.get("DA_REDIS_URL", "redis://localhost:6379/0")
+    client = redis_from_url(url)
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
+
+
+@pytest_asyncio.fixture
+async def client(_truncate: None, redis_client: Any) -> AsyncIterator[Any]:
     # Ensure caches pick up env from _keys fixture.
     from auth_service import db as _db
     from auth_service import deps as _deps
@@ -169,8 +184,10 @@ async def client(_truncate: None) -> AsyncIterator[Any]:
     _deps.reset_verifier()
     _jwt._issuer = None
 
-    from auth_service.main import app
+    from auth_service import main as _main
 
-    transport = ASGITransport(app=app)
+    _main.reset_redis()
+
+    transport = ASGITransport(app=_main.app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
