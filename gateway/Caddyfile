@@ -25,20 +25,21 @@
         respond "ok" 200
     }
 
-    handle_path /auth/* {
+    handle /auth/* {
         reverse_proxy auth:8000
     }
 
-    handle_path /ingest/* {
+    handle /ingest/* {
         reverse_proxy ingest:8000
     }
 
-    handle_path /analytics/* {
+    handle /analytics/* {
         reverse_proxy analytics:8000
     }
 
+    # /admin/* routes to auth until W6 web service is built; see D-series tech debt
     handle /admin/* {
-        reverse_proxy web:8000
+        reverse_proxy auth:8000
     }
 
     handle {
