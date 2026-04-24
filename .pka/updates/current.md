@@ -4,6 +4,20 @@ Rolling session log. Append at session end per pka-workspace-updates convention.
 
 ---
 
+## 2026-04-24 06:17 — v0.4.2-e2e-smoke-gate  [batch]
+
+**Type:** release
+
+v0.4.2 shipped. Core fix: ingest route was registered at `/upload` in v0.4.1 so every gateway-routed upload 404'd — moved to `/ingest/upload` and added three tiers of guard to make sure this class of bug can't sneak back in. (1) `tests/test_route_prefix_convention.py` walks auth/ingest/analytics/web at import time and asserts every `APIRoute` either starts with `/<svc>/` or is `/healthz`/`/metrics` (auth gets `/admin/` as a carve-out until W6); runs in `test-common` on every push. (2) `ci/check-compose-paths.sh` got a new literal-source grep for `"/ingest/upload"` so lint fails before CI even spins up compose. (3) new `ci/smoke_e2e.sh` drives the full happy path through the TLS gateway — admin login (env-var bootstrap) → conditional password-change → admin create user → user login → mint agent reg code → agent register → heartbeat → `POST /ingest/upload` → 201; wired into `compose-smoke` after the healthz assertions.
+
+Getting that smoke actually green took several follow-up commits that are worth remembering: the compose stack does not run alembic on startup (deliberate), so the compose-smoke job now installs uv + runs root/auth/ingest alembic heads against the published Postgres port, then generates an RS256 keypair on the `auth_secrets` volume via `python -m auth_service.keygen`, then restarts auth so the lifespan re-runs `bootstrap_admin` against the now-populated DB with the `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_*` env vars. Two routing bugs also surfaced: `ci/Caddyfile.ci` was still using `handle_path` (strips prefix, mirrors the pre-fac34b2 production bug) — flipped to `handle` + temp-routed `/admin/*` to auth to match prod. That flip exposed a latent issue — services registered `/healthz` bare, so `/auth/healthz` through the gateway (which preserves path) 404'd. Added `/<svc>/healthz` aliases on auth/ingest/analytics so both direct container healthchecks (`localhost:8000/healthz`) and gateway-routed probes (`/<svc>/healthz`) work; route convention test covers both.
+
+CI green on https://github.com/sentania-labs/deep-analysis-server/actions/runs/24875229512 (all 11 jobs). Tag pushed → Release workflow green on https://github.com/sentania-labs/deep-analysis-server/actions/runs/24875285141; all five GHCR images (auth/ingest/parser/analytics/web) confirmed present at `:v0.4.2` via OCI manifest pull, and GitHub Release entry live at https://github.com/sentania-labs/deep-analysis-server/releases/tag/v0.4.2. Docs follow-up added post-v0.4.2 PR-discipline to README + CLAUDE (main protected by compose-smoke gate; feature-branch + PR for non-trivial work; direct pushes to main reserved for urgent fixes).
+
+Heads-up / D-series carry-forward: the production `gateway/Caddyfile` has the same healthz-through-gateway situation, but with today's `/<svc>/healthz` aliases it's now self-consistent; prod probes will work without further Caddy changes. The `0.4.0` / `0.4.1` / `0.4.2` tags still only publish the `v`-prefixed GHCR tag (release.yml doesn't strip the `v`) — still deferred debt, not blocking.
+
+---
+
 ## 2026-04-23 19:23 — w2e-admin-bootstrap  [batch]
 
 **Type:** build
