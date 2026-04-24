@@ -141,10 +141,20 @@ Mount the files into the containers via Docker Compose secrets or a
 read-only bind:
 
 - `auth` container: both keys, with
-  `DA_JWT_PRIVATE_KEY_PATH=/run/secrets/jwt_private.pem` and
-  `DA_JWT_PUBLIC_KEY_PATH=/run/secrets/jwt_public.pem`.
+  `DA_JWT_PRIVATE_KEY_PATH=/data/secrets/jwt_private.pem` and
+  `DA_JWT_PUBLIC_KEY_PATH=/data/secrets/jwt_public.pem`. These land on
+  the `auth_secrets` named volume (see "Volumes" above) — either
+  `docker compose cp` the keypair into the volume, or mount a host
+  directory over `/data/secrets` via an override.
 - `ingest`, `parser`, `analytics`, `web`: public key only, mounted at
-  the path named by `DA_JWT_PUBLIC_KEY_PATH`.
+  the path named by `DA_JWT_PUBLIC_KEY_PATH` (default
+  `/data/secrets/jwt_public.pem`).
+
+> **Note on paths:** do not use `/run/secrets/...` — that is Docker
+> Compose's *secrets* convention and requires a top-level `secrets:`
+> block, which this stack does not use. The committed compose stack
+> mounts a named volume at `/data/secrets` instead. Align any `.env`
+> override to `/data/secrets/...`.
 
 See `docs/admin-bootstrap.md` for the rotation procedure.
 

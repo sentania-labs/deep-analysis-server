@@ -78,7 +78,11 @@ services:
       DA_SERVICE_NAME: auth
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      # JWT keys live on the `auth_secrets` named volume mounted at /data/secrets.
+      # Do NOT use /run/secrets/* — that's Docker secrets syntax and requires a
+      # top-level `secrets:` block, which this stack does not use.
+      DA_JWT_PRIVATE_KEY_PATH: ${DA_JWT_PRIVATE_KEY_PATH:-/data/secrets/jwt_private.pem}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL:-}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD:-}
@@ -107,7 +111,7 @@ services:
       DA_SERVICE_NAME: ingest
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -132,7 +136,7 @@ services:
       DA_SERVICE_NAME: parser
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -157,7 +161,7 @@ services:
       DA_SERVICE_NAME: analytics
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -183,7 +187,7 @@ services:
       DA_SERVICE_NAME: web
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/run/secrets/jwt_public.pem}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
