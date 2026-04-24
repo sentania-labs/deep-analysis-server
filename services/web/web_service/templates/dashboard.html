@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Dashboard</h1>
+    {% if user.email %}
+        <p>Welcome, {{ user.email }}. Profile and agents coming soon.</p>
+    {% else %}
+        <p>Welcome, user #{{ user.user_id }}. Profile and agents coming soon.</p>
+    {% endif %}
+</section>
+{% endblock %}

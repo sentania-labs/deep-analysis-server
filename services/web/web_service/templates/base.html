@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Deep Analysis{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="site-header">
+        <div class="site-header-inner">
+            <a class="site-logo" href="/dashboard">Deep Analysis</a>
+            <nav class="site-nav">
+                {% if user %}
+                    {% if user.email %}
+                        <span class="nav-user">{{ user.email }}</span>
+                    {% else %}
+                        <span class="nav-user">user #{{ user.user_id }}</span>
+                    {% endif %}
+                    <form class="nav-logout" method="post" action="/logout">
+                        <button type="submit" class="linklike">Log out</button>
+                    </form>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+
+    <main class="site-main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <span>Deep Analysis &middot; self-hosted match analytics</span>
+    </footer>
+</body>
+</html>

@@ -52,6 +52,8 @@ ignore = []
 "services/auth/auth_service/admin.py" = ["B008"]
 "services/ingest/ingest_service/main.py" = ["B008"]
 "services/ingest/ingest_service/deps.py" = ["B008"]
+"services/web/web_service/main.py" = ["B008"]
+"services/web/web_service/deps.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
