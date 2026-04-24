@@ -85,6 +85,10 @@ Optional Loki + Grafana + Prometheus stack:
 docker compose --profile observability up -d
 ```
 
+## Contributing
+
+Post-v0.4.2 the `main` branch is protected by an end-to-end compose-smoke gate: every push must go through a feature branch + PR, CI builds the full stack, runs `ci/smoke_e2e.sh` (auth + ingest happy path via the gateway), and only merges when green. Direct pushes to `main` are reserved for urgent fixes with Scott's sign-off.
+
 ## License
 
 GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).

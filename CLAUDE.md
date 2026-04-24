@@ -71,6 +71,7 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 - **Terse conventions.** Prefer explicit over magic. No clever metaclass tricks.
 - **Tests per service.** Each service has its own `tests/` directory. Integration tests use a real Postgres + Redis (not mocks).
 - **Self-review protocol.** For non-trivial changes, spawn a subagent to review before committing. Catch your own bugs.
+- **Post-v0.4.2 PR discipline.** `main` is protected by the compose-smoke E2E gate (full stack + `ci/smoke_e2e.sh`). Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are for urgent fixes only and still need CI green on the follow-up run.
 
 ## Directory layout
 
