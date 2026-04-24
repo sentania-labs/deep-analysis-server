@@ -180,17 +180,18 @@ jobs:
           }
 
           echo "--- Route prefix smoke ---"
-          # Empty body → 422 (validation fires, handler reached)
+          # Empty body → 422 (validation fires, handler reached, auth routes work)
           check "POST /auth/login empty body → 422" 422 \
             -X POST "$BASE/auth/login" -H "Content-Type: application/json" -d '{}'
 
-          # Fake JWT → 401 (auth gate fires)
-          check "GET /admin/users fake JWT → 401" 401 \
-            "$BASE/admin/users" -H "Authorization: Bearer fake"
+          # No auth header → 401 (auth gate fires before JWT verification)
+          check "GET /admin/users no auth → 401" 401 \
+            "$BASE/admin/users"
 
-          # Fake JWT → 401 (ingest route wired + auth gate fires — THE v0.4.2 FIX)
-          check "POST /ingest/upload fake JWT → 401" 401 \
-            -X POST "$BASE/ingest/upload" -H "Authorization: Bearer fake" \
+          # No auth header → 401 (ingest route wired + auth gate fires — THE v0.4.2 FIX)
+          # Before v0.4.2 this returned 404 because /ingest/upload didn't exist.
+          check "POST /ingest/upload no auth → 401" 401 \
+            -X POST "$BASE/ingest/upload" \
             -F "file=@/dev/null;filename=test.dat"
 
           echo ""
