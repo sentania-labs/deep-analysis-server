@@ -24,37 +24,110 @@ other services with the new public key.
 
 ## Initial admin account
 
-> **W2e STUB** — the first-boot admin bootstrap flow is implemented in
-> W2e. The shape below is the plan; do not expect it to be live until
-> that slice lands.
+On first boot, the `auth` service checks whether any enabled user holds
+the `admin` role. Bootstrap is idempotent — on subsequent boots (or
+after a compose restart) the check finds an existing admin and exits
+without touching state.
 
-On first boot, the `auth` service checks whether any user holds the `admin` role.
+### Auto-generate path (default)
 
-If **no admin exists**:
+If **no enabled admin exists** and no bootstrap env vars are set:
 
-1. Generate a 24-character random password (cryptographically strong).
-2. Create `admin@local` with the password hashed via argon2id and `must_change_password=true`.
-3. Write the plaintext password to `/data/secrets/initial_admin.txt` (file mode `0600`, on the `auth_secrets` named volume).
-4. Emit a `WARN` log line announcing the bootstrap and where to read the password.
+1. Generate a 24-character random password via
+   `secrets.token_urlsafe(18)`.
+2. Create `admin@local` with the password hashed via argon2id and
+   `must_change_password=true`.
+3. Write the plaintext password to `/data/secrets/initial_admin.txt`
+   (file mode `0600`, directory mode `0700`, on the `auth_secrets`
+   named volume).
+4. Emit a `WARN` log line:
+   `INITIAL ADMIN PASSWORD written to /data/secrets/initial_admin.txt — rotate on first login`.
 
-On first login with `admin@local`, the user is forced through a password-change flow. The server hands out a **short-lived password-change token**, not a session JWT — it can only be used to set a new password. Once the change succeeds, `/data/secrets/initial_admin.txt` is deleted.
+### First login + forced password change
 
-### Environment override
+1. `POST /auth/login` with `admin@local` + the retrieved password.
+2. The response carries `must_change_password: true`, `expires_in: 300`,
+   and a JWT whose `scope` claim is `password-change-only`. That token
+   is usable for **one** endpoint:
+3. `POST /auth/password/change` with
+   `{"current_password": "...", "new_password": "..."}` (body), bearer
+   token in the `Authorization` header.
+4. On success (204):
+   - Password is re-hashed with argon2id.
+   - `must_change_password` is cleared.
+   - All existing sessions for the user are revoked (including the
+     password-change session itself).
+   - If the user is `admin@local` and `/data/secrets/initial_admin.txt`
+     exists, it is deleted.
+5. The client must then `POST /auth/login` again with the new password
+   to obtain a normal full-scope access token.
 
-For unattended provisioning, set both:
+Any attempt to call a normal endpoint (e.g. `GET /auth/me`, any
+`/admin/*` route) with a password-change-only token returns
+`403 {"error": "password_change_required"}`.
+
+### Password policy
+
+Stub policy: `len(new_password) >= 12`. Weaker inputs are rejected with
+`400 {"error": "weak_password"}`. Full policy TBD.
+
+### Environment override (scripted installs)
+
+For unattended provisioning set **both**:
 
 - `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL`
 - `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD`
 
-The bootstrap uses these instead of generating a random password. Neither value is ever logged.
+When both are present at first boot, the admin account is created with
+those credentials, `must_change_password=false`, and **no plaintext
+file is written**. Neither value is ever logged.
 
-### Retrieving the initial password
+### Retrieving the initial password (auto-generate path)
 
 ```bash
 docker compose exec auth cat /data/secrets/initial_admin.txt
 ```
 
-If the file is gone, either the password has already been changed (good — use the new credential) or the `auth_secrets` volume was recreated.
+If the file is absent, either the password has already been changed
+(good — use the new credential) or the `auth_secrets` volume was
+recreated (in which case: admin already exists in Postgres, so
+bootstrap will not re-run; reset via another admin or by rolling the
+Postgres volume).
+
+### Rotating / resetting later
+
+Any admin can reset any user's password via
+
+```
+POST /admin/users/{id}/reset-password
+```
+
+The response body carries a fresh 24-char temporary password and
+`must_change_password` is set back to `true` on the target user — they
+are forced through the same password-change flow on next login.
+
+### Auth JWT flow (summary)
+
+```
+  ┌──────────┐   login (must_change=true)   ┌───────────┐
+  │ client   │ ───────────────────────────▶│  auth     │
+  │          │ ◀───────────────────────────│           │
+  └──────────┘   JWT scope=password-change  └───────────┘
+        │       (5-min TTL)                      │
+        │                                        │
+        │  POST /auth/password/change            │
+        │   Bearer <scoped JWT>                  │
+        ├───────────────────────────────────────▶│
+        │  204 (sessions revoked)                │
+        │◀───────────────────────────────────────┤
+        │                                        │
+        │  POST /auth/login (new password)       │
+        ├───────────────────────────────────────▶│
+        │  JWT (no scope, 15-min TTL)            │
+        │◀───────────────────────────────────────┤
+```
+
+A rendered diagram lives under `docs/diagrams/` (stub — to be added).
 
 ## Generating a registration code
 

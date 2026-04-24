@@ -17,6 +17,8 @@ from auth_service.registration import hash_api_token
 from auth_service.settings import get_settings
 from common.jwt_verify import InvalidTokenError, JWTVerifier
 
+PASSWORD_CHANGE_SCOPE = "password-change-only"
+
 
 @dataclass
 class AuthenticatedUser:
@@ -25,6 +27,7 @@ class AuthenticatedUser:
     role: str
     session_id: uuid.UUID
     must_change_password: bool
+    scope: str | None = None
 
 
 _verifier: JWTVerifier | None = None
@@ -50,9 +53,9 @@ def _unauthorized() -> HTTPException:
     )
 
 
-async def get_current_user(
+async def _resolve_current_user(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession,
 ) -> AuthenticatedUser:
     auth = request.headers.get("authorization") or ""
     if not auth.lower().startswith("bearer "):
@@ -90,13 +93,51 @@ async def get_current_user(
     if user.id != user_id or user.disabled:
         raise _unauthorized()
 
+    raw_scope = claims.get("scope")
+    scope = raw_scope if isinstance(raw_scope, str) else None
+
     return AuthenticatedUser(
         user_id=user.id,
         email=user.email,
         role=user.role,
         session_id=session_row.id,
         must_change_password=user.must_change_password,
+        scope=scope,
     )
+
+
+def _password_change_required() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": "password_change_required"},
+    )
+
+
+async def get_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+) -> AuthenticatedUser:
+    """Resolve current user; reject password-change-only tokens.
+
+    Full-scope dep used by endpoints that require a normal access
+    token. Endpoints that accept password-change-only tokens must
+    instead depend on :func:`get_current_user_any_scope`.
+    """
+    user = await _resolve_current_user(request, db)
+    if user.scope == PASSWORD_CHANGE_SCOPE:
+        raise _password_change_required()
+    return user
+
+
+async def get_current_user_any_scope(
+    request: Request,
+    db: AsyncSession = Depends(get_session),
+) -> AuthenticatedUser:
+    """Resolve current user allowing password-change-only scope.
+
+    Only the password-change endpoint should use this.
+    """
+    return await _resolve_current_user(request, db)
 
 
 async def require_admin(

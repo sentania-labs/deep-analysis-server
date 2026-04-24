@@ -48,6 +48,9 @@ Named volumes (managed by Docker):
 
 - `postgres_data` — Postgres data directory.
 - `caddy_data` — Caddy's internal CA, issued certs, and OCSP state.
+- `auth_secrets` — mounted into the `auth` container at `/data/secrets`.
+  Holds `initial_admin.txt` (mode `0600`) when the auto-generate
+  bootstrap path runs. See "First run" below.
 
 Inspect: `docker volume ls | grep deep-analysis`. Inspect mount path: `docker volume inspect <name>`.
 
@@ -95,6 +98,43 @@ URL is set via `DA_REDIS_URL` (default `redis://redis:6379/0` in
 compose). Persistence is not required — registration codes are
 deliberately ephemeral; if Redis is flushed the user just mints a
 fresh code.
+
+## First run
+
+The first time the `auth` service starts against an empty database, it
+creates an initial admin account. Two paths:
+
+**Auto-generate (default).** If neither
+`DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL` nor
+`DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD` is set, the service generates
+a random 24-char password, creates `admin@local` with
+`must_change_password=true`, and writes the plaintext password to
+`/data/secrets/initial_admin.txt` on the `auth_secrets` volume. Grab
+it via logs:
+
+```bash
+docker compose logs auth | grep "INITIAL ADMIN PASSWORD"
+```
+
+or directly from the file:
+
+```bash
+docker compose exec auth cat /data/secrets/initial_admin.txt
+```
+
+On first login with that credential, the client is forced through the
+password-change flow. The file is deleted automatically once the
+password has been rotated. Full flow lives in
+`docs/admin-bootstrap.md`.
+
+**Scripted (unattended).** Set both
+`DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL` and
+`DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD` in `.env`. The service uses
+those credentials, sets `must_change_password=false`, and writes no
+plaintext file. Neither value is ever logged.
+
+Bootstrap is idempotent: if any enabled admin already exists it is a
+no-op.
 
 ## First boot — migrations
 

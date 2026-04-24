@@ -26,17 +26,27 @@ class JWTIssuer:
         self._audience = audience
         self._access_ttl = access_ttl_seconds
 
-    def issue_access_token(self, user_id: int, role: str, session_id: uuid.UUID) -> str:
+    def issue_access_token(
+        self,
+        user_id: int,
+        role: str,
+        session_id: uuid.UUID,
+        scope: str | None = None,
+        override_ttl_seconds: int | None = None,
+    ) -> str:
         now = datetime.now(UTC)
-        claims = {
+        ttl = override_ttl_seconds if override_ttl_seconds is not None else self._access_ttl
+        claims: dict[str, object] = {
             "sub": str(user_id),
             "role": role,
             "sid": str(session_id),
             "iat": int(now.timestamp()),
-            "exp": int((now + timedelta(seconds=self._access_ttl)).timestamp()),
+            "exp": int((now + timedelta(seconds=ttl)).timestamp()),
             "iss": self._issuer,
             "aud": self._audience,
         }
+        if scope is not None:
+            claims["scope"] = scope
         return jwt.encode(claims, self._private_key, algorithm="RS256")
 
 
@@ -56,8 +66,16 @@ def get_issuer() -> JWTIssuer:
     return _issuer
 
 
-def issue_access_token(user_id: int, role: str, session_id: uuid.UUID) -> str:
-    return get_issuer().issue_access_token(user_id, role, session_id)
+def issue_access_token(
+    user_id: int,
+    role: str,
+    session_id: uuid.UUID,
+    scope: str | None = None,
+    override_ttl_seconds: int | None = None,
+) -> str:
+    return get_issuer().issue_access_token(
+        user_id, role, session_id, scope=scope, override_ttl_seconds=override_ttl_seconds
+    )
 
 
 def issue_refresh_token() -> str:

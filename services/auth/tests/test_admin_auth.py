@@ -74,6 +74,26 @@ async def test_expired_admin_token_returns_401(client: Any, db_session: AsyncSes
 
 
 @pytest.mark.asyncio
+async def test_password_change_scoped_token_returns_403(
+    client: Any, db_session: AsyncSession
+) -> None:
+    u = User(
+        email="mustchange@example.com",
+        password_hash=hash_password("pw"),
+        role="admin",
+        must_change_password=True,
+    )
+    db_session.add(u)
+    await db_session.commit()
+
+    r = await client.post("/auth/login", json={"email": "mustchange@example.com", "password": "pw"})
+    token = r.json()["access_token"]
+    r2 = await client.get("/admin/users", headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 403
+    assert r2.json() == {"detail": {"error": "password_change_required"}}
+
+
+@pytest.mark.asyncio
 async def test_malformed_auth_header_returns_401(client: Any) -> None:
     r = await client.get("/admin/users", headers={"Authorization": "NotBearer x"})
     assert r.status_code == 401

@@ -25,6 +25,11 @@ class TokenResponse(BaseModel):
     must_change_password: bool
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
 class MeResponse(BaseModel):
     user_id: int
     email: str

@@ -1,3 +1,6 @@
+import contextlib
+import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -6,12 +9,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service import models as _models  # noqa: F401 — ensure Base.metadata loaded
-from auth_service.db import get_session
+from auth_service.bootstrap import bootstrap_admin
+from auth_service.db import get_session, get_sessionmaker
 from auth_service.deps import (
+    PASSWORD_CHANGE_SCOPE,
     AuthenticatedAgent,
     AuthenticatedUser,
     get_current_agent,
     get_current_user,
+    get_current_user_any_scope,
 )
 from auth_service.jwt_issue import (
     hash_refresh_token,
@@ -20,7 +26,7 @@ from auth_service.jwt_issue import (
 )
 from auth_service.models import AgentRegistration, User
 from auth_service.models import Session as SessionRow
-from auth_service.passwords import verify_password
+from auth_service.passwords import hash_password, verify_password
 from auth_service.registration import (
     consume_registration_code,
     generate_api_token,
@@ -36,6 +42,7 @@ from auth_service.schemas import (
     AgentRegistrationCodeResponse,
     LoginRequest,
     MeResponse,
+    PasswordChangeRequest,
     RefreshRequest,
     TokenResponse,
 )
@@ -65,7 +72,21 @@ def reset_redis() -> None:
     _redis_client = None
 
 
-app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
+_log = logging.getLogger("auth.main")
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    try:
+        sm = get_sessionmaker()
+        async with sm() as session:
+            await bootstrap_admin(session, get_settings())
+    except Exception as exc:  # noqa: BLE001 — don't crash startup on bootstrap issues
+        _log.exception("admin bootstrap failed: %s", exc)
+    yield
+
+
+app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 
 from auth_service.admin import router as _admin_router  # noqa: E402
@@ -135,11 +156,23 @@ async def login(
     await db.commit()
     await db.refresh(session_row)
 
-    access = issue_access_token(user.id, user.role, session_row.id)
+    if user.must_change_password:
+        access = issue_access_token(
+            user.id,
+            user.role,
+            session_row.id,
+            scope=PASSWORD_CHANGE_SCOPE,
+            override_ttl_seconds=settings.password_change_token_ttl_seconds,
+        )
+        expires_in = settings.password_change_token_ttl_seconds
+    else:
+        access = issue_access_token(user.id, user.role, session_row.id)
+        expires_in = settings.access_token_ttl_seconds
+
     return TokenResponse(
         access_token=access,
         refresh_token=refresh_token,
-        expires_in=settings.access_token_ttl_seconds,
+        expires_in=expires_in,
         must_change_password=user.must_change_password,
     )
 
@@ -235,6 +268,62 @@ async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeResponse:
         role=user.role,
         must_change_password=user.must_change_password,
     )
+
+
+# TODO(policy): minimum-length of 12 is a stub; real password policy TBD.
+_MIN_PASSWORD_LEN = 12
+
+
+@app.post("/auth/password/change", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    body: PasswordChangeRequest,
+    caller: AuthenticatedUser = Depends(get_current_user_any_scope),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    if len(body.new_password) < _MIN_PASSWORD_LEN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "weak_password"},
+        )
+
+    user = (await db.execute(select(User).where(User.id == caller.user_id))).scalar_one_or_none()
+    if user is None or user.disabled:
+        raise _INVALID_CREDENTIALS
+    if not verify_password(body.current_password, user.password_hash):
+        raise _INVALID_CREDENTIALS
+
+    user.password_hash = hash_password(body.new_password)
+    user.must_change_password = False
+    user.updated_at = datetime.now(UTC)
+
+    now = datetime.now(UTC)
+    active_sessions = (
+        (
+            await db.execute(
+                select(SessionRow).where(
+                    SessionRow.user_id == user.id,
+                    SessionRow.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for s in active_sessions:
+        s.revoked_at = now
+
+    await db.commit()
+
+    settings = get_settings()
+    if user.email == "admin@local":
+        secret_path = settings.initial_admin_secret_path
+        try:
+            if secret_path.exists():
+                secret_path.unlink()
+        except OSError:  # noqa: BLE001 — best-effort cleanup
+            pass
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post(
