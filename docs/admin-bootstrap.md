@@ -77,3 +77,92 @@ atomically — a code can only be used once. **No audit trail** is
 kept for minted codes (Option A: keeps v0.4.0 simple with no
 extra table or migration). If the code expires or is mis-typed,
 re-mint a new one. Full protocol in `docs/agent-protocol.md`.
+
+## Admin operations
+
+Use these endpoints to bootstrap the first user, mint registration
+codes, revoke compromised agents, and reset forgotten passwords. All
+live under `/admin/*` and require a JWT whose `role` claim is
+`admin` — non-admin callers get `403 forbidden`.
+
+Placeholder: `${ADMIN_JWT}` below is the access token from a
+`POST /auth/login` call by an admin user.
+
+### Users
+
+List users (paginated, max `limit=200`):
+
+```bash
+curl -k https://deepanalysis.local/admin/users?limit=50&offset=0 \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+Create a user:
+
+```bash
+curl -k -X POST https://deepanalysis.local/admin/users \
+  -H "Authorization: Bearer ${ADMIN_JWT}" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"initialpw","role":"user","must_change_password":true}'
+```
+
+Patch a user (at least one field; cannot change email). Guards:
+cannot disable yourself (`400 cannot_disable_self`), cannot demote
+the last active admin (`400 cannot_demote_last_admin`):
+
+```bash
+curl -k -X PATCH https://deepanalysis.local/admin/users/42 \
+  -H "Authorization: Bearer ${ADMIN_JWT}" \
+  -H "Content-Type: application/json" \
+  -d '{"role":"admin","disabled":false,"must_change_password":true}'
+```
+
+Delete a user (hard delete; sessions and agent registrations
+cascade). Guards: cannot delete yourself, cannot delete the last
+active admin:
+
+```bash
+curl -k -X DELETE https://deepanalysis.local/admin/users/42 \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+Reset a user's password. Returns a fresh 24-char temporary
+password and sets `must_change_password=true`. The plaintext is
+shown **once** — capture it:
+
+```bash
+curl -k -X POST https://deepanalysis.local/admin/users/42/reset-password \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+Revoke all active sessions for a user (forces them to re-login on
+every active device). Returns `{revoked_count: N}`:
+
+```bash
+curl -k -X POST https://deepanalysis.local/admin/users/42/revoke-sessions \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+### Agents
+
+List agents across all users (paginated, joined with user email):
+
+```bash
+curl -k https://deepanalysis.local/admin/agents?limit=50&offset=0 \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+Revoke a compromised agent (idempotent — always `204`):
+
+```bash
+curl -k -X POST https://deepanalysis.local/admin/agents/<agent-uuid>/revoke \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```
+
+Bulk-revoke stale agents (default `stale_days=90` — anything whose
+`last_seen_at` is older than the cutoff gets revoked):
+
+```bash
+curl -k -X POST "https://deepanalysis.local/admin/agents/cleanup-stale?stale_days=90" \
+  -H "Authorization: Bearer ${ADMIN_JWT}"
+```

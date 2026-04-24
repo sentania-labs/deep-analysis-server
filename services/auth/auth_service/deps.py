@@ -99,6 +99,22 @@ async def get_current_user(
     )
 
 
+async def require_admin(
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Gate: caller must be authenticated AND have role=admin.
+
+    ``get_current_user`` raises 401 for unauthenticated callers; this
+    wrapper adds a 403 for authenticated-but-not-admin.
+    """
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "forbidden"},
+        )
+    return user
+
+
 @dataclass
 class AuthenticatedAgent:
     agent_id: uuid.UUID

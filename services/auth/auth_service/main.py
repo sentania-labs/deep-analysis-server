@@ -68,6 +68,11 @@ def reset_redis() -> None:
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
 mount_metrics(app, SERVICE_NAME)
 
+from auth_service.admin import router as _admin_router  # noqa: E402
+
+# TODO(W7): per-admin-IP rate limit on mutation endpoints — deferred to gateway phase.
+app.include_router(_admin_router)
+
 
 _INVALID_CREDENTIALS = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,

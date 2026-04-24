@@ -182,3 +182,7 @@ jobs:
         run: uv run render.py
       - name: Check for drift
         run: git diff --exit-code 'docs/diagrams/*.png'
+
+# TODO(W5): openapi-drift CI job — generate from FastAPI at CI time, diff against
+# committed openapi/auth.yaml; deferred to W5 where analytics OpenAPI is the
+# primary AI-seam artifact.

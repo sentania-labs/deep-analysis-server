@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -56,3 +57,66 @@ class AgentHeartbeatResponse(BaseModel):
     status: str
     registered_at: datetime
     revoked: bool
+
+
+class UserView(BaseModel):
+    id: int
+    email: str
+    role: str
+    disabled: bool
+    must_change_password: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserListView(BaseModel):
+    users: list[UserView]
+    total: int
+
+
+class CreateUserRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1)
+    role: Literal["user", "admin"] = "user"
+    must_change_password: bool = True
+
+
+class UpdateUserRequest(BaseModel):
+    role: Literal["user", "admin"] | None = None
+    disabled: bool | None = None
+    must_change_password: bool | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> UpdateUserRequest:
+        if self.role is None and self.disabled is None and self.must_change_password is None:
+            raise ValueError("at_least_one_field_required")
+        return self
+
+
+class ResetPasswordResponse(BaseModel):
+    temporary_password: str
+
+
+class AgentView(BaseModel):
+    agent_id: uuid.UUID
+    user_id: int
+    user_email: str
+    machine_name: str
+    client_version: str | None
+    created_at: datetime
+    last_seen_at: datetime | None
+    revoked_at: datetime | None
+
+
+class AgentListView(BaseModel):
+    agents: list[AgentView]
+    total: int
+
+
+class StaleCleanupResponse(BaseModel):
+    revoked_count: int
+    cutoff_date: str
+
+
+class RevokeSessionsResponse(BaseModel):
+    revoked_count: int

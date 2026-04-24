@@ -105,3 +105,22 @@ uv run alembic upgrade head
 ```
 
 <!-- TODO: consider migration-on-start sidecar if this becomes painful -->
+
+## Admin lockout protection
+
+The admin endpoints under `/admin/*` (see
+`docs/admin-bootstrap.md`) intentionally refuse operations that
+would leave the system with no way to recover admin access:
+
+- An admin cannot disable their own account
+  (`400 cannot_disable_self`).
+- An admin cannot delete their own account
+  (`400 cannot_delete_self`).
+- An admin cannot demote the last active admin to `user` role
+  (`400 cannot_demote_last_admin`).
+- An admin cannot delete the last active admin
+  (`400 cannot_delete_last_admin`).
+
+If you hit one of these errors the fix is to first create or
+promote a second admin, then retry. There is no super-admin
+override; the invariant is enforced by the auth service itself.
