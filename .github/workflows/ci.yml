@@ -232,8 +232,8 @@ jobs:
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
-      - name: docker compose up
-        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
+      - name: Start postgres only (pre-migration)
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build postgres
       - name: Wait for postgres
         run: |
           for i in $(seq 1 30); do
@@ -252,6 +252,8 @@ jobs:
         run: uv run alembic -c services/auth/alembic.ini upgrade head
       - name: alembic upgrade head (ingest)
         run: uv run alembic -c services/ingest/alembic.ini upgrade head
+      - name: docker compose up (full stack)
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
       - name: Wait for gateway + auth bootstrap
         run: |
           for i in $(seq 1 60); do
