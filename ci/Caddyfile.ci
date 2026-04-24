@@ -18,20 +18,24 @@ deepanalysis.local {
         respond "ok" 200
     }
 
-    handle_path /auth/* {
+    # Use `handle` (preserve path) not `handle_path` (strip prefix) — backends
+    # register full paths like /auth/login, /ingest/upload. See commit fac34b2
+    # for the production Caddyfile fix this mirrors.
+    handle /auth/* {
         reverse_proxy auth:8000
     }
 
-    handle_path /ingest/* {
+    handle /ingest/* {
         reverse_proxy ingest:8000
     }
 
-    handle_path /analytics/* {
+    handle /analytics/* {
         reverse_proxy analytics:8000
     }
 
+    # /admin/* temp-routes to auth until W6 splits the admin surface.
     handle /admin/* {
-        reverse_proxy web:8000
+        reverse_proxy auth:8000
     }
 
     handle {

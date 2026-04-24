@@ -178,6 +178,10 @@ jobs:
           uv run alembic upgrade head
           uv run alembic -c services/auth/alembic.ini upgrade head
           uv run alembic -c services/ingest/alembic.ini upgrade head
+      - name: Generate JWT keypair on auth_secrets volume
+        run: |
+          docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml exec -T auth \
+              python -m auth_service.keygen --out /data/secrets/
       - name: Restart auth so bootstrap runs against migrated DB
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml restart auth
       - name: Wait for gateway
