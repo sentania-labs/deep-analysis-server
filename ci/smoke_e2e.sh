@@ -102,9 +102,28 @@ fi
 
 if [ "$must_change" = "False" ] || [ "$must_change" = "false" ]; then
     check "Admin login must_change_password=false (env-var bootstrap)" "ok" "ok"
+elif [ "$must_change" = "True" ] || [ "$must_change" = "true" ]; then
+    # Task spec: "change password if required". Rotate and re-login
+    # for a full-scope token so the subsequent admin calls succeed.
+    echo "  INFO: must_change_password=true — rotating admin password"
+    rotated_password="rotated-${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
+    pw_status=$(http_status -X POST "$BASE_URL/auth/password/change" \
+        -H "Authorization: Bearer $admin_token" \
+        -H "Content-Type: application/json" \
+        -d "{\"current_password\": \"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\", \"new_password\": \"${rotated_password}\"}")
+    check "POST /auth/password/change → 204" "204" "$pw_status"
+    DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD="$rotated_password"
+    login_body=$(http_body -X POST "$BASE_URL/auth/login" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\": \"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\", \"password\": \"${rotated_password}\"}")
+    admin_token=$(echo "$login_body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))" 2>/dev/null || echo "")
+    if [ -n "$admin_token" ]; then
+        check "Admin re-login after rotation (access_token present)" "ok" "ok"
+    else
+        check "Admin re-login after rotation (access_token present)" "ok" "FAILED: $login_body"
+    fi
 else
-    echo "  WARN: must_change_password=$must_change — password change required before proceeding" >&2
-    check "Admin login must_change_password=false (env-var bootstrap)" "ok" "FAILED: must_change=$must_change"
+    check "Admin login must_change_password resolved" "ok" "FAILED: must_change=$must_change"
 fi
 
 # --------------------------------------------------------------------------
