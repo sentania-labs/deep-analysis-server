@@ -232,6 +232,12 @@ jobs:
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
+      - name: Generate JWT keypair for CI
+        run: |
+          mkdir -p /tmp/ci-jwt-keys
+          uv run python -m auth_service.keygen --out /tmp/ci-jwt-keys
+          chmod 644 /tmp/ci-jwt-keys/jwt_public.pem
+          chmod 600 /tmp/ci-jwt-keys/jwt_private.pem
       - name: Start postgres only (pre-migration)
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build postgres
       - name: Wait for postgres
