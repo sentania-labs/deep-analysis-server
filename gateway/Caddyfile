@@ -1,8 +1,13 @@
-{
-    # tls internal issues a locally-trusted self-signed cert for deepanalysis.local.
-    # Add this hostname to /etc/hosts: 127.0.0.1 deepanalysis.local
-    # For host-machine curl: curl -k https://deepanalysis.local/auth/healthz
-}
+# gateway/Caddyfile — production config.
+#
+# Env vars an operator must set (see .env.example):
+#   GATEWAY_DOMAIN             Public hostname Caddy serves (e.g. deepanalysis.example.com).
+#                              Must have a public DNS A/CNAME record pointing at this host
+#                              for ACME certificate issuance to succeed.
+#   DEEP_ANALYSIS_ACME_EMAIL   Contact email Let's Encrypt uses for ACME registration.
+#
+# For local-only / no-DNS testing, override via docker-compose.override.yml to mount
+# a Caddyfile with `tls internal` instead. See docs/deploy.md.
 
 :80 {
     handle /health {
@@ -13,8 +18,8 @@
     }
 }
 
-deepanalysis.local {
-    tls internal
+{$GATEWAY_DOMAIN} {
+    tls {$DEEP_ANALYSIS_ACME_EMAIL}
 
     handle /health {
         respond "ok" 200

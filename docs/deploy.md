@@ -6,21 +6,19 @@ Deployment and environment guide for the Deep Analysis server stack.
 
 - Docker Engine 24+ with the Compose v2 plugin
 - [uv](https://github.com/astral-sh/uv) for running Alembic migrations on the host
-- Hosts-file entry for local dev:
-  ```
-  127.0.0.1   deepanalysis.local
-  ```
+- DNS A or CNAME record for your chosen domain must resolve to this host. ACME certificate issuance requires public DNS.
 
-## Quickstart (dev)
+## Quickstart
 
 ```bash
 cp .env.example .env
-# Edit .env — set POSTGRES_PASSWORD and any other credentials
+# Edit .env — set POSTGRES_PASSWORD, GATEWAY_DOMAIN, DEEP_ANALYSIS_ACME_EMAIL,
+# and any other credentials
 
 docker compose up -d
 
-# Verify the gateway is up
-curl -k https://deepanalysis.local/auth/healthz
+# Verify the gateway is up (replace with your GATEWAY_DOMAIN)
+curl https://deepanalysis.sentania.net/auth/healthz
 ```
 
 ## Environment variables
@@ -35,12 +33,74 @@ Source of truth is `.env.example`. Summary:
 | `DA_REDIS_URL` | Redis connection URL (event bus + cache). |
 | `DA_JWT_PUBLIC_KEY_PATH` | Path (inside each service container) to the JWT verification public key. |
 | `DA_LOG_LEVEL` | Python logging level (`DEBUG`, `INFO`, `WARN`, `ERROR`). |
-| `GATEWAY_DOMAIN` | Public hostname Caddy serves; `deepanalysis.local` in dev. |
+| `GATEWAY_DOMAIN` | Public hostname Caddy serves and obtains an ACME cert for. Must resolve publicly. |
+| `DEEP_ANALYSIS_ACME_EMAIL` | Let's Encrypt contact email for ACME certificate issuance. |
 
 ## TLS modes
 
-- **Local dev:** Caddy uses `tls internal` — self-signed certs are generated automatically. Browsers will warn; `curl -k` bypasses verification.
-- **Production:** a real certificate is supplied via the fleet Caddy in front of the stack. The stack-internal Caddy can be pointed at a managed cert or fronted by the fleet proxy; either way the app services don't terminate TLS.
+The committed `gateway/Caddyfile` uses ACME (Let's Encrypt) driven by the
+`GATEWAY_DOMAIN` and `DEEP_ANALYSIS_ACME_EMAIL` env vars. No separate dev
+Caddyfile is shipped — one config, one code path.
+
+If an operator wants to skip real TLS (e.g. local-only testing with no public
+DNS), override the gateway service via `docker-compose.override.yml` to mount
+a local Caddyfile with `tls internal`:
+
+```yaml
+# docker-compose.override.yml — local/no-DNS testing
+services:
+  gateway:
+    volumes:
+      - ./gateway/Caddyfile.local:/etc/caddy/Caddyfile:ro
+```
+
+With a `gateway/Caddyfile.local` such as:
+
+```
+deepanalysis.local {
+    tls internal
+    handle /health { respond "ok" 200 }
+    handle_path /auth/*      { reverse_proxy auth:8000 }
+    handle_path /ingest/*    { reverse_proxy ingest:8000 }
+    handle_path /analytics/* { reverse_proxy analytics:8000 }
+    handle                   { reverse_proxy web:8000 }
+}
+```
+
+Add `127.0.0.1 deepanalysis.local` to your hosts file and use `curl -k` to
+bypass the self-signed cert warning.
+
+## Behind a reverse proxy (fleet-caddy, Traefik, nginx)
+
+When the stack sits behind an upstream edge proxy (for example, a shared
+fleet Caddy or a Traefik frontdoor), the gateway still terminates its own TLS
+via ACME. Configure the upstream for **L4 SNI pass-through to port 443** of
+this host or container — do not re-terminate TLS at the edge, or Caddy's ACME
+challenge will fail and the service cert chain will not match what clients
+see.
+
+Typical override: swap `ports:` for `expose:` and attach the gateway to a
+shared external Docker network owned by the fleet proxy.
+
+```yaml
+# docker-compose.override.yml — behind a reverse proxy
+services:
+  gateway:
+    ports: !reset []
+    expose:
+      - "80"
+      - "443"
+    networks:
+      - default
+      - proxy
+networks:
+  proxy:
+    external: true
+    name: fleet-caddy
+```
+
+This is an illustrative sketch — adjust the network name to match your fleet
+proxy's actual Docker network.
 
 ## Volumes
 

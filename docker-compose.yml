@@ -43,6 +43,9 @@ services:
   gateway:
     image: caddy:2-alpine
     restart: unless-stopped
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN}
+      DEEP_ANALYSIS_ACME_EMAIL: ${DEEP_ANALYSIS_ACME_EMAIL}
     volumes:
       - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

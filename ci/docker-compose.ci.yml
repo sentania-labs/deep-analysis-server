@@ -1,0 +1,9 @@
+# ci/docker-compose.ci.yml — CI override for compose-smoke
+# Switches the gateway from ACME (needs public DNS) to tls internal for CI.
+services:
+  gateway:
+    environment:
+      GATEWAY_DOMAIN: deepanalysis.local
+      DEEP_ANALYSIS_ACME_EMAIL: ""  # not used with tls internal
+    volumes:
+      - ./ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro

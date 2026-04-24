@@ -1,0 +1,40 @@
+{
+    # CI-only: tls internal avoids ACME DNS dependency.
+}
+
+:80 {
+    handle /health {
+        respond "ok" 200
+    }
+    handle {
+        redir https://{host}{uri} 301
+    }
+}
+
+deepanalysis.local {
+    tls internal
+
+    handle /health {
+        respond "ok" 200
+    }
+
+    handle_path /auth/* {
+        reverse_proxy auth:8000
+    }
+
+    handle_path /ingest/* {
+        reverse_proxy ingest:8000
+    }
+
+    handle_path /analytics/* {
+        reverse_proxy analytics:8000
+    }
+
+    handle /admin/* {
+        reverse_proxy web:8000
+    }
+
+    handle {
+        reverse_proxy web:8000
+    }
+}
