@@ -97,10 +97,14 @@ jobs:
         run: uv run alembic upgrade head
       - name: alembic upgrade head (auth)
         run: uv run alembic -c services/auth/alembic.ini upgrade head
+      - name: alembic upgrade head (ingest)
+        run: uv run alembic -c services/ingest/alembic.ini upgrade head
       - name: pytest tests/integration
         run: uv run pytest tests/integration/
       - name: pytest services/auth/tests
         run: uv run pytest services/auth/tests/
+      - name: pytest services/ingest/tests
+        run: uv run pytest services/ingest/tests/
 
   docker-build:
     name: docker-build (${{ matrix.service }})

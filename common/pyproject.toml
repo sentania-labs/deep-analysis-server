@@ -26,3 +26,5 @@ bypass-selection = true
 "jwt_verify.py" = "common/jwt_verify.py"
 "redis_client.py" = "common/redis_client.py"
 "settings.py" = "common/settings.py"
+"agent_auth.py" = "common/agent_auth.py"
+"token_utils.py" = "common/token_utils.py"

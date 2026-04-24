@@ -16,12 +16,18 @@ INSIGHT_REQUESTED = "insight.requested"  # reserved for web/AI (W6)
 
 
 class FileIngestedPayload(TypedDict, total=False):
-    """Published by `ingest` when a new upload lands. Producer: W3."""
+    """Published by `ingest` when a new upload lands. Producer: W3.
+
+    ``content_type`` is reserved for future upload kinds (decklists);
+    v0.4.0 always writes ``"match-log"``. ``agent_registration_id`` is
+    the UUID of the registered agent that performed the upload.
+    """
 
     sha256: str
-    user_id: str
-    filename: str
-    received_at: str  # ISO-8601 UTC
+    user_id: int
+    agent_registration_id: str  # UUID as str
+    uploaded_at: str  # ISO-8601 UTC
+    content_type: str  # "match-log" | "decklist" | "unknown"
 
 
 class MatchParsedPayload(TypedDict, total=False):

@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from auth_service.db import get_session
 from auth_service.models import AgentRegistration, User
 from auth_service.models import Session as SessionRow
-from auth_service.registration import hash_api_token
 from auth_service.settings import get_settings
+from common.agent_auth import AuthenticatedAgent
 from common.jwt_verify import InvalidTokenError, JWTVerifier
+from common.token_utils import hash_api_token
 
 PASSWORD_CHANGE_SCOPE = "password-change-only"
 
@@ -154,14 +155,6 @@ async def require_admin(
             detail={"error": "forbidden"},
         )
     return user
-
-
-@dataclass
-class AuthenticatedAgent:
-    agent_id: uuid.UUID
-    user_id: int
-    machine_name: str
-    client_version: str | None
 
 
 async def get_current_agent(

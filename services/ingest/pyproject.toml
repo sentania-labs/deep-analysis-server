@@ -11,6 +11,15 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "structlog>=24.2",
     "prometheus-client>=0.20",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "asyncpg>=0.29",
+    "pyjwt[crypto]>=2.8",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "redis>=5.0",
+    "python-multipart>=0.0.9",
 ]
 
 [tool.hatch.build.targets.wheel]

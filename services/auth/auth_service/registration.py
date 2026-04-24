@@ -8,10 +8,11 @@ than a registration_codes table for v0.4.0.
 
 from __future__ import annotations
 
-import hashlib
 import secrets
 
 from redis.asyncio import Redis
+
+from common.token_utils import hash_api_token as _shared_hash_api_token
 
 # XXXX-XXXX, base32-ish without confusable chars (0/O, 1/I/L).
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -57,5 +58,11 @@ def generate_api_token() -> str:
 
 
 def hash_api_token(token: str) -> str:
-    """SHA-256 hex; same shape as hash_refresh_token."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+    """SHA-256 hex; same shape as hash_refresh_token.
+
+    Thin re-export of :func:`common.token_utils.hash_api_token` — kept
+    here so existing ``auth_service.registration`` import sites don't
+    need to change. The ingest service imports the common helper
+    directly.
+    """
+    return _shared_hash_api_token(token)

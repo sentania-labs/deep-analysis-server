@@ -50,16 +50,21 @@ ignore = []
 "services/auth/auth_service/main.py" = ["B008"]
 "services/auth/auth_service/deps.py" = ["B008"]
 "services/auth/auth_service/admin.py" = ["B008"]
+"services/ingest/ingest_service/main.py" = ["B008"]
+"services/ingest/ingest_service/deps.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
 check_untyped_defs = true
 warn_unused_ignores = true
 ignore_missing_imports = true
+explicit_package_bases = true
+exclude = ["services/[a-z]+/alembic/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--import-mode=importlib"
 
 [tool.uv.workspace]
 members = [
