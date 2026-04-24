@@ -73,7 +73,7 @@ def _bad_request(code: str) -> HTTPException:
 
 
 @app.post(
-    "/upload",
+    "/ingest/upload",
     response_model=UploadResponse,
     status_code=status.HTTP_201_CREATED,
 )

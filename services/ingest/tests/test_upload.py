@@ -19,13 +19,13 @@ def _auth_header(api_token: str) -> dict[str, str]:
 
 
 async def test_upload_requires_bearer(client: AsyncClient) -> None:
-    r = await client.post("/upload", files={"file": ("x.dat", b"data")})
+    r = await client.post("/ingest/upload", files={"file": ("x.dat", b"data")})
     assert r.status_code == 401
 
 
 async def test_upload_rejects_bad_token(client: AsyncClient) -> None:
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("x.dat", b"data")},
         headers=_auth_header("not-a-real-token"),
     )
@@ -40,7 +40,7 @@ async def test_upload_happy_path(
     body = b"match log content example"
     sha = hashlib.sha256(body).hexdigest()
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("match.dat", body)},
         data={"original_filename": "match.dat", "content_type": "match-log"},
         headers=_auth_header(seed_agent["api_token"]),
@@ -75,7 +75,7 @@ async def test_upload_oversize_returns_413(client: AsyncClient, seed_agent: dict
     # DA_INGEST_MAX_FILE_BYTES=1024 in conftest.
     body = b"A" * 2048
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("big.dat", body)},
         headers=_auth_header(seed_agent["api_token"]),
     )
@@ -90,7 +90,7 @@ async def test_upload_missing_file_returns_400(
     # error. We accept either shape — both are unambiguously 4xx and
     # both indicate the client failed to supply a file.
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         headers={
             **_auth_header(seed_agent["api_token"]),
             "content-type": "application/json",
@@ -133,7 +133,7 @@ async def test_upload_dedup_records_attribution_and_skips_event(
     await asyncio.sleep(0.05)
 
     r1 = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("a.dat", body)},
         headers=_auth_header(seed_agent["api_token"]),
     )
@@ -141,7 +141,7 @@ async def test_upload_dedup_records_attribution_and_skips_event(
     assert r1.json()["deduped"] is False
 
     r2 = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("b.dat", body)},
         headers=_auth_header(seed_agent["api_token"]),
     )
@@ -181,7 +181,7 @@ async def test_upload_accepts_known_content_types(
 ) -> None:
     body = f"body-{content_type}".encode()
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("x", body)},
         data={"content_type": content_type},
         headers=_auth_header(seed_agent["api_token"]),
@@ -193,7 +193,7 @@ async def test_upload_rejects_unknown_content_type_value(
     client: AsyncClient, seed_agent: dict[str, Any]
 ) -> None:
     r = await client.post(
-        "/upload",
+        "/ingest/upload",
         files={"file": ("x", b"x")},
         data={"content_type": "not-a-valid-type"},
         headers=_auth_header(seed_agent["api_token"]),

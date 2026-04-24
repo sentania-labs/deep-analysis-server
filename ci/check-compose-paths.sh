@@ -50,6 +50,17 @@ if ! awk '
     fail=1
 fi
 
+echo "--> Checking ingest service registers /ingest/upload..."
+# v0.4.1 shipped with @app.post("/upload") on the ingest service, which the
+# gateway can never route because /upload is under no service namespace.
+# Guard the literal route string in the source so a regression fails lint
+# before CI even spins up compose.
+if ! grep -q '"/ingest/upload"' services/ingest/ingest_service/main.py; then
+    echo "FAIL: services/ingest/ingest_service/main.py does not register '/ingest/upload'." >&2
+    echo "      Ingest routes must sit under /ingest/* so the gateway can route them." >&2
+    fail=1
+fi
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     echo "--> Rendering docker compose config and re-checking..."
     tmp_env=$(mktemp)

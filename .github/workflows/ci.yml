@@ -51,6 +51,8 @@ jobs:
         run: uv sync --all-packages --dev
       - name: pytest tests/common
         run: uv run pytest tests/common/
+      - name: pytest tests/test_route_prefix_convention.py
+        run: uv run pytest tests/test_route_prefix_convention.py
 
   test-integration:
     name: test-integration
@@ -142,6 +144,9 @@ jobs:
           cp .env.example .env
           echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
           echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
+          # Bootstrap admin via env-var path so must_change_password=false (CI-safe).
+          echo 'DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=admin@ci.local' >> .env
+          echo 'DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=CIadminBoot2024!' >> .env
       - name: docker compose up
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
       - name: Wait for gateway
@@ -165,6 +170,11 @@ jobs:
         run: curl -fsk https://deepanalysis.local/analytics/healthz
       - name: Assert /healthz (web)
         run: curl -fsk https://deepanalysis.local/healthz
+      - name: E2E smoke — auth gates + happy path
+        env:
+          DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: admin@ci.local
+          DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: CIadminBoot2024!
+        run: bash ci/smoke_e2e.sh https://deepanalysis.local
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --tail=200

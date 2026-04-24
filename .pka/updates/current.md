@@ -111,3 +111,43 @@ New service-scoped Alembic head under `services/ingest/alembic/` creates `ingest
 Lint/typecheck housekeeping: tightened `tool.mypy` with `explicit_package_bases=true` and excluded `services/*/alembic/` (two env.py modules collide otherwise); pytest `--import-mode=importlib` so auth/tests and ingest/tests don't clash on duplicate basenames (`test_models.py`); replaced the empty `tests/__init__.py` files with importlib-mode collection; `ContentType` → `StrEnum` (UP042); `contextlib.suppress` in storage cleanup (SIM105). CI workflow gained ingest alembic head + `pytest services/ingest/tests/` steps.
 
 Docker build: `deep-analysis-ingest` image builds cleanly from the committed Dockerfile.
+
+---
+
+## 2026-04-23 22:35 — v0.4.0-tag-move-and-release  [batch]
+
+**Type:** release
+
+Moved the `v0.4.0` tag from `3c662c3` (Caddyfile-flip, push:false era) to `ab439c3` (push:true enable). Force-deleted remote tag, recreated locally, pushed; the prior Release run was a no-op so nothing was clobbered. Tag push triggered Release workflow run [24870809213](https://github.com/sentania-labs/deep-analysis-server/actions/runs/24870809213) — all 5 publish jobs (auth/ingest/parser/analytics/web) green in ~45 s each. GHCR verification: all 5 images present at `:v0.4.0` and `:latest`; **`:0.4.0` (no leading v) is MISSING for all 5** — confirmed tech-debt: `release.yml` does not strip the leading `v` from `github.ref_name`. Not fixed this session, deferred as a D-series item. Package visibility: all 5 packages are PUBLIC (anonymous bearer-token manifest pull returns 200 for each); toolkit deploy will pull without auth. No deviations otherwise; no code changes in-repo.
+
+---
+
+## 2026-04-24 03:25 — gateway-caddyfile-prod-flip  [batch]
+
+**Type:** config
+
+Flipped `gateway/Caddyfile` from local-dev (`tls internal` + `deepanalysis.local`) to production ACME config driven by `GATEWAY_DOMAIN` and `DEEP_ANALYSIS_ACME_EMAIL` env vars. Committed `3c662c3` on main; CI run https://github.com/sentania-labs/deep-analysis-server/actions/runs/24870555217 — all 11 jobs green including `compose-smoke`. Caddyfile uses `{$VAR}` parse-time substitution (not `{env.VAR}`, which is runtime-only and fails in site-address / `tls` argument positions — caught by `caddy validate` before push). Config-only change; nothing under `services/` touched. `.env.example` gained a `Caddy / ACME` section with sentania.net defaults and an `ops@example.com` placeholder; `docker-compose.yml` gateway `environment:` now passes the two new vars. `docs/deploy.md` rewrote the "TLS modes" section (no more fleet-Caddy talk) and added a new "Behind a reverse proxy" section with a `ports: !reset []` / `expose:` + external network override sketch for fleet-caddy/Traefik topologies. Prerequisites gained a public-DNS bullet. New `ci/docker-compose.ci.yml` + `ci/Caddyfile.ci` overlay pins `GATEWAY_DOMAIN=deepanalysis.local` and swaps in a `tls internal` Caddyfile for CI's compose-smoke job (runners have no public DNS, so ACME would hang); `.github/workflows/ci.yml` compose-smoke now runs `docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up/down` and seeds the CI env vars into `.env`. Verified merge behavior via `docker compose config` — base Caddyfile bind-mount is replaced at `/etc/caddy/Caddyfile` by the CI bind, `caddy_data` named volume preserved. Self-review via `superpowers:code-reviewer` caught one minor nit (Quickstart heading still said "(dev)"), fixed before commit. Follow-up worth tracking: `docs/admin-bootstrap.md` still has ~10 `https://deepanalysis.local -k` curl examples that are now inconsistent with the ACME-by-default posture — not blocking, out of this scope.
+
+## 2026-04-23 22:54 — gh-release-workflow  [batch]
+
+**Type:** status
+
+Added `create-release` job to `.github/workflows/release.yml` (softprops/action-gh-release@v2, `needs: publish`, job-level `contents: write`). YAML validated, committed as 9dac5ca, pushed to main. Backfilled v0.4.0 GitHub Release entry via `gh release create` with GHCR pull coordinates in body; `gh release list` confirms v0.4.0 marked Latest. No blockers.
+
+## 2026-04-24 04:40 — gateway-routing-fix  [batch]
+
+**Type:** status
+
+Fixed gateway routing bug: Caddyfile used `handle_path` for /auth, /ingest, /analytics which stripped the prefix before proxying, breaking every real endpoint (backends register full paths). Swapped to `handle`. Also re-pointed /admin/* from web:8000 stub to auth:8000 until W6 is built. Commit fac34b2 pushed direct to main, CI run 24872476867 green. Hot-reloaded on docker.int (had to checkout main from detached HEAD first). Probes confirm routing works: GET /auth/login → 405, POST /auth/login → 422 (real handler), GET /admin/users → 401. D-series debt flagged: compose-smoke only hits /healthz, which is why the routing regression wasn't caught in CI — recommend extending smoke to probe /auth/login + /admin/users. Completion note at team/completions/2026-04-24-0439-riker-deep-analysis-server-gateway-routing-fix.md.
+
+## 2026-04-24 04:48 — pwchange-500-prod-fix  [batch]
+
+**Type:** status
+
+Production `POST /auth/password/change` 500 on docker.int fixed — root cause was `.env` drift, not code. `/srv/deep-analysis-server/.env` had `DA_JWT_PUBLIC_KEY_PATH=/data/secrets/jwt_public.pem` (and matching private-key path) but `docker-compose.override.yml` bind-mounts both keys to `/run/secrets/`. Login worked because the override explicitly sets `DA_JWT_PRIVATE_KEY_PATH=/run/secrets/jwt_private.pem` in the auth env block, overriding `.env`; the public-key var was only defaulted in the base compose (`:-/run/secrets/...`) so `.env`'s wrong value won inside the container. `JWTVerifier.__init__` eagerly opens the file in `common/jwt_verify.py:17` → `FileNotFoundError: '/data/secrets/jwt_public.pem'` → 500 from every JWT-verification path (password-change surfaced first; `/auth/me`, `/admin/*`, and ingest/parser/analytics/web were all latently broken — same env var wrong across all five app containers). `.env.example` and `docs/deploy.md` in the repo were already correct; only prod had drifted. Patched the prod `.env` to `/run/secrets/*.pem` + refreshed the misleading comment, backup at `.env.bak.2026-04-24-pwchange-fix`, `docker compose up -d` recreated all five app containers, all healthy. Four-step E2E verification against `https://deepanalysis.sentania.net` green: login→scoped token (200), password-change (204, was 500), login→unscoped token (200), admin-create-user (201). Used `testPass1234!` for new admin pw instead of the prompt's `test1234!` (9 chars — below server's 12-char min; server now returns 400 weak_password instead of 500, which is itself proof the root cause is gone). **New prod admin password is `testPass1234!` — Scott should rotate.** Side effect: `testuser@local` (id=2) created in prod auth.users from step 4 — deletable via `DELETE /admin/users/2`. No repo code changed, no CI run, no commit. D-series debt flagged (second instance this session): `compose-smoke` only hits `/healthz`, so JWT-verify path mismatches slip through; also no compose-config linter cross-checks `DA_JWT_*_KEY_PATH` env vars against declared mounts. Unit `test_password_change.py` passed because its conftest sets `DA_JWT_PUBLIC_KEY_PATH` to a valid file — test/prod config divergence is the gap. Completion note at `team/completions/2026-04-24-0448-riker-deep-analysis-server-pwchange-500-fix.md`.
+
+## 2026-04-24 05:37 — v0.4.1 JWT key path drift fix  [batch]
+
+**Type:** status
+
+Cut v0.4.1. Root cause of the v0.4.0 operator-deploy crash: `auth` service in `docker-compose.yml` was missing `DA_JWT_PRIVATE_KEY_PATH` (required pydantic field, no default), and every service's `DA_JWT_PUBLIC_KEY_PATH` default was `/run/secrets/jwt_public.pem` — Docker Compose *secrets* syntax that requires a top-level `secrets:` block this stack does not use. The actual mount is the `auth_secrets` named volume at `/data/secrets`; operator's `.env` override to `/run/secrets/...` had the same underlying problem. Aligned compose + `.env.example` + `docs/deploy.md` to `/data/secrets/...`; added `ci/check-compose-paths.sh` drift guard (greps for forbidden paths, asserts auth has the private key var, renders compose config when docker is available) wired into the lint job. Version bumped 0.4.0.dev0 → 0.4.1. Auth + ingest tests green. CI green on main, v0.4.1 tagged, release workflow published all five GHCR images and created GitHub Release at https://github.com/sentania-labs/deep-analysis-server/releases/tag/v0.4.1.
