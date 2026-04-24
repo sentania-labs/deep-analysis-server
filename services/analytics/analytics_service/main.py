@@ -10,5 +10,6 @@ mount_metrics(app, SERVICE_NAME)
 
 
 @app.get("/healthz")
+@app.get("/analytics/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME}

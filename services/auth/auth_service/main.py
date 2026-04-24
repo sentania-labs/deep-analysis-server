@@ -122,6 +122,7 @@ def _client_ip(request: Request) -> str | None:
 
 
 @app.get("/healthz")
+@app.get("/auth/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME}
 

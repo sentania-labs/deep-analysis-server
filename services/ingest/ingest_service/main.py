@@ -54,6 +54,7 @@ def reset_publisher() -> None:
 
 
 @app.get("/healthz")
+@app.get("/ingest/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME}
 
