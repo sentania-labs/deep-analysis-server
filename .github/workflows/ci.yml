@@ -215,8 +215,13 @@ jobs:
     env:
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: admin@ci.local
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: CISmokeAdminPass2026!
+      DATABASE_URL: postgresql+psycopg://da:changeme@localhost:5432/deep_analysis
     steps:
       - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --all-packages --dev
       - name: Map deepanalysis.local to loopback
         run: echo "127.0.0.1 deepanalysis.local" | sudo tee -a /etc/hosts
       - name: Seed .env for compose (with bootstrap admin)
@@ -229,6 +234,24 @@ jobs:
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
       - name: docker compose up
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
+      - name: Wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U da -d deep_analysis > /dev/null 2>&1; then
+              echo "postgres healthy after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres never became healthy"
+          docker compose ps
+          exit 1
+      - name: alembic upgrade head (root)
+        run: uv run alembic upgrade head
+      - name: alembic upgrade head (auth)
+        run: uv run alembic -c services/auth/alembic.ini upgrade head
+      - name: alembic upgrade head (ingest)
+        run: uv run alembic -c services/ingest/alembic.ini upgrade head
       - name: Wait for gateway + auth bootstrap
         run: |
           for i in $(seq 1 60); do
