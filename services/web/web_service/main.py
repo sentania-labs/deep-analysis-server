@@ -201,12 +201,19 @@ async def password_submit(
     if not new_password:
         return _render_error("New password is required.")
 
-    ok, err = await auth_client.change_password(
-        settings.auth_service_url,
-        user.token,
-        current_password,
-        new_password,
-    )
+    try:
+        ok, err = await auth_client.change_password(
+            settings.auth_service_url,
+            user.token,
+            current_password,
+            new_password,
+        )
+    except auth_client.AuthClientError:
+        _log.exception("auth service change_password call failed")
+        return _render_error(
+            "Authentication service unavailable. Please try again.",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     if not ok:
         if err == "weak_password":
             return _render_error("New password does not meet policy requirements.")

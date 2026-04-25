@@ -30,11 +30,14 @@ class InvalidCredentials(Exception):
 
 
 async def login(base_url: str, email: str, password: str) -> LoginResult:
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{base_url}/auth/login",
-            json={"email": email, "password": password},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/auth/login",
+                json={"email": email, "password": password},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /login transport error: {exc}") from exc
     if resp.status_code == 401:
         raise InvalidCredentials()
     if resp.status_code >= 400:
@@ -60,12 +63,15 @@ async def change_password(
     (False, <error-code-from-auth>) so the caller can render an inline
     message.
     """
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            f"{base_url}/auth/password/change",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"current_password": current_password, "new_password": new_password},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/auth/password/change",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"current_password": current_password, "new_password": new_password},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /password/change transport error: {exc}") from exc
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (400, 401):

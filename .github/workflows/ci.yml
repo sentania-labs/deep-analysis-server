@@ -109,6 +109,8 @@ jobs:
         run: uv run pytest services/auth/tests/
       - name: pytest services/ingest/tests
         run: uv run pytest services/ingest/tests/
+      - name: pytest services/web/tests
+        run: uv run pytest services/web/tests/
 
   docker-build:
     name: docker-build (${{ matrix.service }})
