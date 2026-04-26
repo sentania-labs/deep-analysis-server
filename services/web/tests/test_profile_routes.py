@@ -469,6 +469,40 @@ async def test_post_revoke_my_agent_503_when_auth_unreachable(
     assert r.status_code == 503
 
 
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_malformed_id_422_never_reaches_auth_client(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed agent_id should 422 at the FastAPI route boundary.
+
+    Regression: with `agent_id: str` it forwarded to auth, which 422'd,
+    which `revoke_my_agent` then mapped to AuthClientError → 503. Typing
+    the path param as uuid.UUID makes FastAPI reject the URL itself.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    called = False
+
+    async def fake_revoke(*_a: Any, **_kw: Any) -> tuple[bool, str | None]:
+        nonlocal called
+        called = True
+        return True, None
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", fake_revoke)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/agents/not-a-uuid/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 422
+    assert called is False
+
+
 # ---------------------------------------------------------------------------
 # AuthForbidden handling — auth's authoritative session check rejected the
 # call even though the JWT locally validated. Self-service routes redirect

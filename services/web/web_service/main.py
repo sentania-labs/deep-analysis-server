@@ -9,6 +9,7 @@ independent and coexist in the compose stack.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -382,12 +383,17 @@ async def profile_agents(
 
 @app.post("/profile/agents/{agent_id}/revoke")
 async def profile_agents_revoke(
-    agent_id: str,
+    # Typed UUID rejects malformed IDs at the route boundary with 422,
+    # so they never round-trip to auth and surface as a misclassified
+    # 503 from the AuthClientError → outage path.
+    agent_id: uuid.UUID,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
     try:
-        ok, err = await auth_client.revoke_my_agent(settings.auth_service_url, user.token, agent_id)
+        ok, err = await auth_client.revoke_my_agent(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
     except auth_client.AuthForbidden:
         _log.info("profile.agents.revoke.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
