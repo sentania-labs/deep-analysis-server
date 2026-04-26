@@ -157,6 +157,25 @@ async def require_admin(
     return user
 
 
+async def require_user_role(
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Gate: caller must be authenticated AND NOT be an admin.
+
+    Self-service mutation routes (PATCH /auth/me, POST
+    /auth/me/agents/{id}/revoke, POST /auth/agent/registration-code)
+    are off-limits to admins under the W3.6 hard role split. Read
+    routes (GET /auth/me, GET /auth/me/agents) are still allowed —
+    admin needs them for the admin panel and self-introspection.
+    """
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "admin_self_service_disabled"},
+        )
+    return user
+
+
 async def get_current_agent(
     request: Request,
     db: AsyncSession = Depends(get_session),

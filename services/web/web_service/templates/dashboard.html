@@ -11,8 +11,10 @@
         <p>Welcome, user #{{ user.user_id }}.</p>
     {% endif %}
     <ul class="dashboard-actions">
+        {% if user.role != "admin" %}
         <li><a href="/profile">Profile</a></li>
         <li><a href="/profile/agents">My agents</a></li>
+        {% endif %}
         <li><a href="/settings/password">Change password</a></li>
         {% if user.role == "admin" %}
         <li><a href="/admin/users">Admin: users</a></li>

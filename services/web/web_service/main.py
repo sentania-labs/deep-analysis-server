@@ -27,6 +27,7 @@ from web_service.deps import (
     browser_auth_redirect_handler,
     get_current_browser_user,
     get_current_browser_user_any_scope,
+    get_verifier,
 )
 from web_service.settings import WebSettings, get_settings
 
@@ -55,6 +56,9 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME}
 
 
+_ADMIN_LANDING_PATH = "/admin/users"
+
+
 def _safe_next(next_value: str | None) -> str:
     """Only allow internal absolute paths as post-login destinations.
 
@@ -75,6 +79,22 @@ def _safe_next(next_value: str | None) -> str:
     if "\\" in next_value:
         return "/dashboard"
     return next_value
+
+
+def _role_from_token(token: str) -> str | None:
+    """Decode a freshly-issued access token's role claim.
+
+    Used by /login to land admins on /admin/users instead of
+    /dashboard. Returns None if the token can't be verified — the
+    caller falls back to the standard /dashboard target so a transient
+    verifier glitch never strands a user mid-login.
+    """
+    try:
+        claims = get_verifier().verify(token)
+    except Exception:  # noqa: BLE001 — verification problems mean "unknown role"
+        return None
+    role = claims.get("role")
+    return str(role) if role else None
 
 
 def _set_session_cookie(response: Response, token: str, ttl_seconds: int) -> None:
@@ -146,7 +166,17 @@ async def login_submit(
     if result.must_change_password:
         redirect = RedirectResponse(url="/settings/password", status_code=status.HTTP_303_SEE_OTHER)
     else:
-        redirect = RedirectResponse(url=_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
+        # Admins land on the admin panel by default — self-service
+        # routes are off-limits to them under the W3.6 hard split. A
+        # caller-supplied ?next= still wins so an admin who clicked a
+        # deep link before logging in can finish the navigation.
+        if next:
+            target = _safe_next(next)
+        elif _role_from_token(result.access_token) == "admin":
+            target = _ADMIN_LANDING_PATH
+        else:
+            target = "/dashboard"
+        redirect = RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
 
     _set_session_cookie(redirect, result.access_token, result.expires_in)
     return redirect
@@ -156,7 +186,9 @@ async def login_submit(
 async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
-) -> HTMLResponse:
+) -> Response:
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -242,12 +274,27 @@ async def password_submit(
     return redirect
 
 
+def _bounce_admin_to_panel(user: BrowserUser) -> Response | None:
+    """Redirect admins away from self-service routes.
+
+    Admins under W3.6 hard role separation have no self-service
+    surface — every /profile* route bounces them straight to the
+    admin panel landing.
+    """
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+    return None
+
+
 @app.get("/profile", response_class=HTMLResponse)
 async def profile(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
     try:
         me = await auth_client.get_me(settings.auth_service_url, user.token)
     except auth_client.AuthForbidden:
@@ -269,6 +316,9 @@ async def profile_edit_form(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
     try:
         me = await auth_client.get_me(settings.auth_service_url, user.token)
     except auth_client.AuthForbidden:
@@ -291,6 +341,9 @@ async def profile_edit_submit(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
     submitted = email.strip()
 
     def _render_error(message: str, code: int) -> Response:
@@ -364,6 +417,9 @@ async def profile_agents(
         Query(ge=1, le=_PROFILE_AGENTS_MAX_PER_PAGE),
     ] = _PROFILE_AGENTS_DEFAULT_PER_PAGE,
 ) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
     offset = (page - 1) * per_page
     try:
         agents, total = await auth_client.list_my_agents(
@@ -397,6 +453,9 @@ async def profile_agents_revoke(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
     try:
         ok, err = await auth_client.revoke_my_agent(
             settings.auth_service_url, user.token, str(agent_id)

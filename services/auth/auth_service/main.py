@@ -19,6 +19,7 @@ from auth_service.deps import (
     get_current_agent,
     get_current_user,
     get_current_user_any_scope,
+    require_user_role,
 )
 from auth_service.jwt_issue import (
     hash_refresh_token,
@@ -283,7 +284,7 @@ _ME_AGENTS_MAX_LIMIT = 200
 @app.patch("/auth/me", response_model=UpdateMeResponse)
 async def update_me(
     body: UpdateMeRequest,
-    caller: AuthenticatedUser = Depends(get_current_user),
+    caller: AuthenticatedUser = Depends(require_user_role),
     db: AsyncSession = Depends(get_session),
 ) -> UpdateMeResponse:
     new_email = body.email.strip().lower()
@@ -389,7 +390,7 @@ async def list_my_agents(
 @app.post("/auth/me/agents/{agent_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_my_agent(
     agent_id: uuid.UUID,
-    caller: AuthenticatedUser = Depends(get_current_user),
+    caller: AuthenticatedUser = Depends(require_user_role),
     db: AsyncSession = Depends(get_session),
 ) -> Response:
     agent = (
@@ -473,7 +474,7 @@ async def change_password(
     status_code=status.HTTP_201_CREATED,
 )
 async def mint_registration_code(
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_user_role),
     redis: Redis = Depends(get_redis),
 ) -> AgentRegistrationCodeResponse:
     # Rate limiting deferred to gateway W7.
