@@ -5,6 +5,34 @@ project follows [Semantic Versioning](https://semver.org/) loosely while
 in pre-1.0; expect minor versions to introduce breaking changes until the
 API surface stabilizes.
 
+## Unreleased
+
+### Added
+
+- **W3.5-B: self-service dashboard.** `/profile` (view email + role),
+  `/profile/edit` (change email — handles `email_taken` / `invalid_email`),
+  and `/profile/agents` (list user-owned agent registrations + revoke). All
+  routes flow through the gateway and reuse the existing browser-session
+  cookie. Auth service gains `GET /auth/me`, `PATCH /auth/me`,
+  `GET /auth/me/agents`, and `POST /auth/me/agents/{id}/revoke`.
+- **W3.5-C: admin panel.** `GET /admin/users` (list), `POST /admin/users/{id}/delete`,
+  and `POST /admin/users/{id}/reset-password` on the `web` service —
+  admin-gated browser surface for the auth service's existing JSON
+  `/admin/*` API. Self-delete is short-circuited at the web layer
+  (auth still enforces it as the source of truth). Reset-password
+  renders the temporary credential inline once for the admin to hand
+  off out-of-band.
+- **Gateway: `/admin/*` now serves the web admin UI.** Browser
+  requests to `https://${DOMAIN}/admin/*` reach the web service;
+  the auth JSON `/admin/*` API remains reachable on the internal
+  compose network for service-to-service calls and direct ops
+  access via `docker compose exec auth curl ...`.
+- **`smoke-ui` admin coverage.** `ci/smoke_ui.sh` now seeds
+  `testuser@local` via the internal auth admin API, exercises the
+  reset-password and delete flows through the web admin UI, and
+  asserts the row is gone after delete. Self-delete is verified to
+  return 400 inline.
+
 ## v0.4.3 — 2026-04-26
 
 ### Added

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Users · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Users</h1>
+    <p><a href="/dashboard">&larr; Back to dashboard</a></p>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if result %}
+    <div class="alert alert-info" role="status">
+        <p>
+            Temporary password for user
+            #{{ result.user_id }} (give this to them out-of-band; they
+            will be required to change it on next login):
+        </p>
+        <p><code class="temp-password">{{ result.temporary_password }}</code></p>
+    </div>
+    {% endif %}
+
+    {% if not users %}
+        <p>No users found.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Must change pw</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ u.id }}</td>
+                    <td>{{ u.email }}</td>
+                    <td>{{ u.role }}</td>
+                    <td>
+                        {% if u.disabled %}disabled{% else %}active{% endif %}
+                    </td>
+                    <td>
+                        {% if u.must_change_password %}yes{% else %}no{% endif %}
+                    </td>
+                    <td>{{ u.created_at.strftime("%Y-%m-%d") if u.created_at else "—" }}</td>
+                    <td>
+                        {% if u.id != user.user_id %}
+                        <form method="post"
+                              action="/admin/users/{{ u.id }}/reset-password"
+                              class="inline-form">
+                            <button type="submit" class="btn">Reset password</button>
+                        </form>
+                        <form method="post"
+                              action="/admin/users/{{ u.id }}/delete"
+                              class="inline-form"
+                              onsubmit="return confirm('Delete user {{ u.email }}? Their agents and sessions will be removed. This cannot be undone.');">
+                            <button type="submit" class="btn btn-danger">Delete</button>
+                        </form>
+                        {% else %}
+                            <span class="muted">(you)</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted">{{ total }} user{{ "" if total == 1 else "s" }} total.</p>
+    {% endif %}
+</section>
+{% endblock %}

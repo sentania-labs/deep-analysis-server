@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -376,6 +376,211 @@ def _service_unavailable(request: Request, user: BrowserUser) -> Response:
             "error": "Authentication service unavailable. Please try again.",
         },
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin panel — W3.5-C
+# ---------------------------------------------------------------------------
+
+
+def _require_admin_or_403(request: Request, user: BrowserUser) -> Response | None:
+    """Return a 403 response if `user` is not an admin, else None.
+
+    Admin gating is enforced both here (cheap rejection for the common
+    case) and at the auth service (authoritative). The double-check
+    means a stale role claim or a rogue local edit can't slip through.
+    """
+    if user.role != "admin":
+        return templates.TemplateResponse(
+            request,
+            "admin_forbidden.html",
+            {"user": user},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/users call failed")
+        return templates.TemplateResponse(
+            request,
+            "admin_users.html",
+            {
+                "user": user,
+                "users": [],
+                "total": 0,
+                "error": "Authentication service unavailable. Please try again.",
+                "result": None,
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "user": user,
+            "users": users,
+            "total": total,
+            "error": None,
+            "result": None,
+        },
+    )
+
+
+def _render_admin_users_sync(
+    request: Request,
+    user: BrowserUser,
+    users: list[Any],
+    total: int,
+    *,
+    error: str | None,
+    result: dict[str, Any] | None,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "user": user,
+            "users": users,
+            "total": total,
+            "error": error,
+            "result": result,
+        },
+        status_code=status_code,
+    )
+
+
+@app.post("/admin/users/{user_id}/delete")
+async def admin_user_delete(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    if user_id == user.user_id:
+        # Auth would also reject this, but short-circuit so we don't
+        # waste a round trip — and so the inline error renders against
+        # whatever list state the page already has.
+        try:
+            users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
+        except auth_client.AuthClientError:
+            users, total = [], 0
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            error="You cannot delete yourself.",
+            result=None,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        ok, err = await auth_client.admin_delete_user(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthClientError:
+        _log.exception("auth DELETE /admin/users call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
+
+    # Fetch the list again so the inline error has context.
+    try:
+        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        users, total = [], 0
+
+    if err == "cannot_delete_self":
+        message = "You cannot delete yourself."
+        code = status.HTTP_400_BAD_REQUEST
+    elif err == "cannot_delete_last_admin":
+        message = "Cannot delete the last admin account."
+        code = status.HTTP_400_BAD_REQUEST
+    elif err == "user_not_found":
+        message = "That user no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not delete user."
+        code = status.HTTP_400_BAD_REQUEST
+
+    return _render_admin_users_sync(
+        request, user, users, total, error=message, result=None, status_code=code
+    )
+
+
+@app.post("/admin/users/{user_id}/reset-password")
+async def admin_user_reset_password(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        temp, err = await auth_client.admin_reset_password(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/users reset-password call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        users, total = [], 0
+
+    if temp is not None:
+        result = {"user_id": user_id, "temporary_password": temp}
+        return _render_admin_users_sync(
+            request, user, users, total, error=None, result=result, status_code=200
+        )
+
+    if err == "user_not_found":
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            error="That user no longer exists.",
+            result=None,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        error="Could not reset password.",
+        result=None,
+        status_code=status.HTTP_400_BAD_REQUEST,
     )
 
 

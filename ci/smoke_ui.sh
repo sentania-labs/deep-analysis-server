@@ -225,7 +225,111 @@ check "GET /profile (no cookie) → 302" "302" "$noauth_profile_status"
 check_contains "/profile redirect targets /login" "/login" "$noauth_profile"
 
 # --------------------------------------------------------------------------
-# 7. POST /logout → 303 to /login, cookie cleared
+# 7. /admin/users — admin panel surface (W3.5-C)
+# --------------------------------------------------------------------------
+echo ""
+echo "--- 7. /admin/users admin panel ---"
+
+# The bootstrap admin from $PROFILE_COOKIE is still authenticated.
+admin_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/users")
+admin_status=$(echo "$admin_out" | tail -n1)
+admin_html=$(echo "$admin_out" | sed '$d')
+check "GET /admin/users (admin cookie) → 200" "200" "$admin_status"
+check_contains "GET /admin/users contains the admin email" \
+    "${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" "$admin_html"
+check_contains "GET /admin/users mentions Users heading" "Users" "$admin_html"
+
+# Unauthenticated must redirect to /login.
+noauth_admin=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/users")
+noauth_admin_status=$(echo "$noauth_admin" | head -n1 | awk '{print $2}')
+check "GET /admin/users (no cookie) → 302" "302" "$noauth_admin_status"
+check_contains "/admin/users redirect targets /login" "/login" "$noauth_admin"
+
+# End-to-end CRUD: seed testuser@local via the auth JSON API
+# (reachable on the internal docker network only — gateway no longer
+# routes /admin/* JSON publicly), rotate its password through the
+# web admin UI, then delete it. Skip seeding gracefully when docker
+# compose isn't reachable (e.g. running this script against a remote
+# stack manually) — the GET-only checks above still gate the build.
+ADMIN_JWT=$(awk -F'\t' '$0 !~ /^#/ && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE")
+if [ -z "$ADMIN_JWT" ]; then
+    check "Extracted admin JWT from session cookie" "ok" "FAILED (cookie jar missing da_session)"
+fi
+
+if command -v docker >/dev/null 2>&1 \
+   && [ -n "$ADMIN_JWT" ] \
+   && docker compose ps auth >/dev/null 2>&1; then
+
+    # Seed testuser@local via auth's internal JSON API. Idempotent:
+    # if the row already exists from a prior run we look up its id.
+    create_resp=$(docker compose exec -T auth sh -c \
+        "curl -s -X POST http://localhost:8000/admin/users \
+            -H 'Authorization: Bearer ${ADMIN_JWT}' \
+            -H 'Content-Type: application/json' \
+            -d '{\"email\":\"testuser@local\",\"password\":\"TestUserPw2026!\",\"role\":\"user\",\"must_change_password\":false}'" \
+        || true)
+    TEST_USER_ID=$(echo "$create_resp" | sed -n 's/.*"id":\s*\([0-9]\+\).*/\1/p')
+    if [ -z "$TEST_USER_ID" ]; then
+        list_resp=$(docker compose exec -T auth sh -c \
+            "curl -s -H 'Authorization: Bearer ${ADMIN_JWT}' http://localhost:8000/admin/users?limit=200" \
+            || true)
+        TEST_USER_ID=$(echo "$list_resp" \
+            | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for u in d.get("users", []):
+    if u.get("email") == "testuser@local":
+        print(u["id"]); break')
+    fi
+
+    if [ -z "$TEST_USER_ID" ]; then
+        check "Seeded testuser@local via auth admin API" "ok" "FAILED (no id captured)"
+    else
+        check "Seeded testuser@local via auth admin API" "ok" "ok (id=$TEST_USER_ID)"
+
+        # Reset-password through the web admin UI — temp password is
+        # rendered inline in the response HTML.
+        reset_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
+            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/reset-password")
+        reset_status=$(echo "$reset_out" | tail -n1)
+        reset_html=$(echo "$reset_out" | sed '$d')
+        check "POST /admin/users/{id}/reset-password → 200" "200" "$reset_status"
+        check_contains "Reset-password page renders temporary password" \
+            "temp-password" "$reset_html"
+
+        # Self-delete must be blocked at the web layer (admin == bootstrap).
+        admin_user_id=$(docker compose exec -T auth sh -c \
+            "curl -s -H 'Authorization: Bearer ${ADMIN_JWT}' http://localhost:8000/auth/me" \
+            | sed -n 's/.*"user_id":\s*\([0-9]\+\).*/\1/p' || true)
+        if [ -n "$admin_user_id" ]; then
+            self_del_status=$(curl -sk -o /dev/null -w "%{http_code}" -b "$PROFILE_COOKIE" \
+                -X POST "$BASE_URL/admin/users/${admin_user_id}/delete")
+            check "POST /admin/users/{self}/delete → 400" "400" "$self_del_status"
+        fi
+
+        # Delete through the web admin UI — should redirect back to /admin/users.
+        delete_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
+            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/delete")
+        delete_status=$(echo "$delete_head" | head -n1 | awk '{print $2}')
+        check "POST /admin/users/{id}/delete → 303" "303" "$delete_status"
+        check_contains "Delete redirects to /admin/users" "/admin/users" "$delete_head"
+
+        # Confirm testuser@local is gone from the rendered list.
+        post_delete_html=$(curl -sk -b "$PROFILE_COOKIE" "$BASE_URL/admin/users")
+        if echo "$post_delete_html" | grep -q "testuser@local"; then
+            check "testuser@local removed from list" "ok" "FAILED (still listed)"
+        else
+            check "testuser@local removed from list" "ok" "ok"
+        fi
+    fi
+else
+    echo "  SKIP: admin CRUD end-to-end (docker compose not reachable; GET-only checks still gate)"
+fi
+
+# --------------------------------------------------------------------------
+# 8. POST /logout → 303 to /login, cookie cleared
 # --------------------------------------------------------------------------
 echo ""
 echo "--- 6. POST /logout ---"

@@ -186,8 +186,9 @@ jobs:
           check "POST /auth/login empty body → 422" 422 \
             -X POST "$BASE/auth/login" -H "Content-Type: application/json" -d '{}'
 
-          # No auth header → 401 (auth gate fires before JWT verification)
-          check "GET /admin/users no auth → 401" 401 \
+          # No cookie → 302 to /login (W3.5-C: /admin/* now serves web admin UI,
+          # browser-redirect semantics replace auth's bare 401).
+          check "GET /admin/users no cookie → 302" 302 \
             "$BASE/admin/users"
 
           # No auth header → 401 (ingest route wired + auth gate fires — THE v0.4.2 FIX)

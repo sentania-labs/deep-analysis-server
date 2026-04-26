@@ -37,11 +37,11 @@
         reverse_proxy analytics:8000
     }
 
-    # /admin/* routes to auth until W6 web service is built; see D-series tech debt
-    handle /admin/* {
-        reverse_proxy auth:8000
-    }
-
+    # /admin/* serves the web admin UI (W3.5-C). The auth service still
+    # exposes JSON /admin/* endpoints for internal service-to-service use
+    # (web -> auth) but those are no longer reachable via the gateway.
+    # Operators who need raw API access connect to auth directly on the
+    # internal compose network (docker exec or port-forward).
     handle {
         reverse_proxy web:8000
     }

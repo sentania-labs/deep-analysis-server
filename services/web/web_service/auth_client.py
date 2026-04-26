@@ -41,6 +41,17 @@ class AgentItem:
     revoked_at: datetime | None
 
 
+@dataclass
+class UserItem:
+    id: int
+    email: str
+    role: str
+    disabled: bool
+    must_change_password: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
 class AuthClientError(Exception):
     """Auth call failed for reasons other than bad credentials."""
 
@@ -238,3 +249,101 @@ async def revoke_my_agent(
     if resp.status_code == 404:
         return False, "not_found"
     raise AuthClientError(f"auth /me/agents revoke returned {resp.status_code}: {resp.text}")
+
+
+async def admin_list_users(
+    base_url: str,
+    token: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[UserItem], int]:
+    """Admin-only: list all users via the auth service.
+
+    Returns ``(items, total)``. Non-2xx responses (including 403 if the
+    caller's token isn't an admin) raise :class:`AuthClientError`; the
+    web layer is expected to gate admin routes before calling this.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": limit, "offset": offset},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/users transport error: {exc}") from exc
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth /admin/users returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    items = [
+        UserItem(
+            id=int(u["id"]),
+            email=str(u["email"]),
+            role=str(u["role"]),
+            disabled=bool(u["disabled"]),
+            must_change_password=bool(u["must_change_password"]),
+            created_at=_parse_dt(u.get("created_at")),
+            updated_at=_parse_dt(u.get("updated_at")),
+        )
+        for u in data.get("users", [])
+    ]
+    return items, int(data.get("total", len(items)))
+
+
+async def admin_delete_user(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[bool, str | None]:
+    """Admin-only: delete a user via the auth service.
+
+    - 204 → (True, None)
+    - 400 with detail.error ∈ {cannot_delete_self, cannot_delete_last_admin} → (False, code)
+    - 404 → (False, "user_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/admin/users/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth DELETE /admin/users transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (400, 404):
+        try:
+            detail = resp.json().get("detail") or {}
+            code = detail.get("error") if isinstance(detail, dict) else None
+        except ValueError:
+            code = None
+        return False, code or "delete_failed"
+    raise AuthClientError(f"auth DELETE /admin/users returned {resp.status_code}: {resp.text}")
+
+
+async def admin_reset_password(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[str | None, str | None]:
+    """Admin-only: rotate another user's password.
+
+    Returns ``(temporary_password, error_code)``:
+    - 200 → (temp, None)
+    - 404 → (None, "user_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/users/{user_id}/reset-password",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/users reset-password transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return str(resp.json()["temporary_password"]), None
+    if resp.status_code == 404:
+        return None, "user_not_found"
+    raise AuthClientError(
+        f"auth /admin/users reset-password returned {resp.status_code}: {resp.text}"
+    )

@@ -13,14 +13,15 @@ Allowed paths per service:
   for direct probing)
 * ``/metrics`` — Prometheus scrape endpoint
 
-Auth additionally owns ``/admin/*`` until W6 (see ``gateway/Caddyfile``
-and the temp-route note from commit fac34b2). Remove the carve-out
-when the web service takes over /admin.
+Both auth and web own ``/admin/*``: auth keeps its JSON admin API for
+service-to-service calls (web → auth) and direct ops access on the
+internal docker network; web serves the admin UI at the same prefix
+through the gateway (W3.5-C, see ``gateway/Caddyfile``).
 
 The web service owns the Caddy catch-all, so end-user-facing browser
-routes (``/login``, ``/logout``, ``/dashboard``, ``/settings/*``)
-intentionally live at the top level — they're user-typed URLs, not
-service-namespaced API routes.
+routes (``/login``, ``/logout``, ``/dashboard``, ``/settings/*``,
+``/profile/*``, ``/admin/*``) intentionally live at the top level —
+they're user-typed URLs, not service-namespaced API routes.
 """
 
 from __future__ import annotations
@@ -56,6 +57,9 @@ _WEB_BROWSER_PATHS = frozenset(
         "/profile/edit",
         "/profile/agents",
         "/profile/agents/{agent_id}/revoke",
+        "/admin/users",
+        "/admin/users/{user_id}/delete",
+        "/admin/users/{user_id}/reset-password",
     }
 )
 

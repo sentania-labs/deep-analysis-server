@@ -155,11 +155,23 @@ re-mint a new one. Full protocol in `docs/agent-protocol.md`.
 
 Use these endpoints to bootstrap the first user, mint registration
 codes, revoke compromised agents, and reset forgotten passwords. All
-live under `/admin/*` and require a JWT whose `role` claim is
-`admin` — non-admin callers get `403 forbidden`.
+live under `/admin/*` on the auth service and require a JWT whose
+`role` claim is `admin` — non-admin callers get `403 forbidden`.
+
+> **Routing note (W3.5-C onward):** The gateway now routes `/admin/*`
+> on the public hostname to the **web** service (admin UI). The auth
+> service's JSON `/admin/*` endpoints remain reachable on the internal
+> compose network — operators who need raw API access can connect
+> through the auth container directly (e.g., `docker compose exec auth
+> curl -s http://localhost:8000/admin/users -H ...`) or via a
+> port-forward. The `https://${DOMAIN}/admin/*` curl examples below
+> only work with `BASE=http://auth:8000` on the internal docker
+> network; a plain browser call to `https://${DOMAIN}/admin/users`
+> hits the admin UI instead.
 
 Placeholder: `${ADMIN_JWT}` below is the access token from a
-`POST /auth/login` call by an admin user.
+`POST /auth/login` call by an admin user. `${BASE}` is `http://auth:8000`
+on the internal compose network (see the routing note above).
 
 ### Users
 

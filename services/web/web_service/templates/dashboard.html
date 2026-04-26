@@ -6,9 +6,17 @@
 <section class="panel">
     <h1>Dashboard</h1>
     {% if user.email %}
-        <p>Welcome, {{ user.email }}. Profile and agents coming soon.</p>
+        <p>Welcome, {{ user.email }}.</p>
     {% else %}
-        <p>Welcome, user #{{ user.user_id }}. Profile and agents coming soon.</p>
+        <p>Welcome, user #{{ user.user_id }}.</p>
     {% endif %}
+    <ul class="dashboard-actions">
+        <li><a href="/profile">Profile</a></li>
+        <li><a href="/profile/agents">My agents</a></li>
+        <li><a href="/settings/password">Change password</a></li>
+        {% if user.role == "admin" %}
+        <li><a href="/admin/users">Admin: users</a></li>
+        {% endif %}
+    </ul>
 </section>
 {% endblock %}
