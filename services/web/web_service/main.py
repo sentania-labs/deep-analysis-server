@@ -238,6 +238,147 @@ async def password_submit(
     return redirect
 
 
+@app.get("/profile", response_class=HTMLResponse)
+async def profile(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {"user": user, "me": me},
+    )
+
+
+@app.get("/profile/edit", response_class=HTMLResponse)
+async def profile_edit_form(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile_edit.html",
+        {"user": user, "email": me.email, "error": None},
+    )
+
+
+@app.post("/profile/edit")
+async def profile_edit_submit(
+    request: Request,
+    email: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    submitted = email.strip()
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "profile_edit.html",
+            {"user": user, "email": submitted, "error": message},
+            status_code=code,
+        )
+
+    if not submitted:
+        return _render_error("Email is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ok, err = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
+    except auth_client.AuthClientError:
+        _log.exception("auth PATCH /me call failed")
+        return templates.TemplateResponse(
+            request,
+            "profile_edit.html",
+            {
+                "user": user,
+                "email": submitted,
+                "error": "Authentication service unavailable. Please try again.",
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(url="/profile", status_code=status.HTTP_303_SEE_OTHER)
+    if err == "email_taken":
+        return _render_error(
+            "That email is already in use by another account.",
+            status.HTTP_409_CONFLICT,
+        )
+    if err == "invalid_email":
+        return _render_error(
+            "Email address is not valid.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    return _render_error(
+        "Could not update profile.",
+        status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.get("/profile/agents", response_class=HTMLResponse)
+async def profile_agents(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        agents = await auth_client.list_my_agents(settings.auth_service_url, user.token)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me/agents call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile_agents.html",
+        {"user": user, "agents": agents},
+    )
+
+
+@app.post("/profile/agents/{agent_id}/revoke")
+async def profile_agents_revoke(
+    agent_id: str,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        ok, err = await auth_client.revoke_my_agent(settings.auth_service_url, user.token, agent_id)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me/agents revoke call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    # 403/404 still bounce to the list — listing will reflect current
+    # state (or omit the agent), which is the user-facing truth.
+    if not ok:
+        _log.info("profile.agent_revoke.rejected", extra={"err": err})
+    return RedirectResponse(url="/profile/agents", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _service_unavailable(request: Request, user: BrowserUser) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {
+            "user": user,
+            "me": None,
+            "error": "Authentication service unavailable. Please try again.",
+        },
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 @app.post("/logout")
 async def logout(
     request: Request,

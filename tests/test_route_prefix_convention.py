@@ -52,6 +52,10 @@ _WEB_BROWSER_PATHS = frozenset(
         "/logout",
         "/dashboard",
         "/settings/password",
+        "/profile",
+        "/profile/edit",
+        "/profile/agents",
+        "/profile/agents/{agent_id}/revoke",
     }
 )
 

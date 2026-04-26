@@ -78,8 +78,9 @@ fi
 
 COOKIE_JAR=$(mktemp)
 PW_COOKIE=$(mktemp)
+PROFILE_COOKIE=$(mktemp)
 LOGOUT_COOKIE=$(mktemp)
-trap 'rm -f "$COOKIE_JAR" "$PW_COOKIE" "$LOGOUT_COOKIE"' EXIT
+trap 'rm -f "$COOKIE_JAR" "$PW_COOKIE" "$PROFILE_COOKIE" "$LOGOUT_COOKIE"' EXIT
 
 echo "=== Deep Analysis UI smoke — $BASE_URL ==="
 
@@ -188,7 +189,43 @@ restore_status=$(curl -sk -o /dev/null -w "%{http_code}" \
 check "Restore bootstrap password → 303" "303" "$restore_status"
 
 # --------------------------------------------------------------------------
-# 6. POST /logout → 303 to /login, cookie cleared
+# 6. Self-service /profile surface (GET/POST)
+# --------------------------------------------------------------------------
+echo ""
+echo "--- 6. /profile self-service ---"
+
+# Step 5's password rotation revoked the cookie in $COOKIE_JAR. Log in fresh
+# so /profile checks are independent of the rotation flow.
+curl -sk -o /dev/null -c "$PROFILE_COOKIE" \
+    -X POST "$BASE_URL/login" \
+    --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
+    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
+
+profile_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile")
+profile_status=$(echo "$profile_out" | tail -n1)
+profile_html=$(echo "$profile_out" | sed '$d')
+check "GET /profile (with cookie) → 200" "200" "$profile_status"
+check_contains "GET /profile contains 'Edit email'" "Edit email" "$profile_html"
+check_contains "GET /profile links to /profile/agents" "/profile/agents" "$profile_html"
+
+edit_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile/edit")
+edit_status=$(echo "$edit_out" | tail -n1)
+edit_html=$(echo "$edit_out" | sed '$d')
+check "GET /profile/edit (with cookie) → 200" "200" "$edit_status"
+check_contains "GET /profile/edit contains email field" 'name="email"' "$edit_html"
+
+agents_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile/agents")
+agents_status=$(echo "$agents_out" | tail -n1)
+check "GET /profile/agents (with cookie) → 200" "200" "$agents_status"
+
+# Unauthenticated must redirect to /login.
+noauth_profile=$(curl -sk -D - -o /dev/null "$BASE_URL/profile")
+noauth_profile_status=$(echo "$noauth_profile" | head -n1 | awk '{print $2}')
+check "GET /profile (no cookie) → 302" "302" "$noauth_profile_status"
+check_contains "/profile redirect targets /login" "/login" "$noauth_profile"
+
+# --------------------------------------------------------------------------
+# 7. POST /logout → 303 to /login, cookie cleared
 # --------------------------------------------------------------------------
 echo ""
 echo "--- 6. POST /logout ---"

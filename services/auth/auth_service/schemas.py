@@ -37,6 +37,10 @@ class MeResponse(BaseModel):
     must_change_password: bool
 
 
+class UpdateMeRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+
+
 class AgentRegistrationCodeResponse(BaseModel):
     code: str
     expires_at: datetime
