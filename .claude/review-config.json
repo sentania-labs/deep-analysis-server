@@ -1,0 +1,18 @@
+{
+  "self_reviewer": {
+    "loop_limit": 4,
+    "diff_base": "origin/main",
+    "lint_command": "ruff check && mypy .",
+    "test_command": "pytest",
+    "ignore_paths": []
+  },
+  "codex_address": {
+    "loop_limit": 4
+  },
+  "release": {
+    "tool": "python-semantic-release",
+    "version_file": "pyproject.toml",
+    "branch": "main",
+    "major_on_zero": false
+  }
+}

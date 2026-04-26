@@ -77,3 +77,7 @@ members = [
     "services/analytics",
     "services/web",
 ]
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"

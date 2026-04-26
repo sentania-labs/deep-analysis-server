@@ -31,3 +31,6 @@ Thumbs.db
 *.swp
 *.swo
 docker-compose.override.yml
+# self-review pre-push gate
+.review-passed
+.claude/.review-audit.log

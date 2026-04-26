@@ -2,60 +2,40 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
+  id-token: write
 
 jobs:
-  publish:
-    name: publish (${{ matrix.service }})
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [auth, ingest, parser, analytics, web]
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build ${{ matrix.service }} image
-        uses: docker/build-push-action@v5
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
         with:
-          context: .
-          file: services/${{ matrix.service }}/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/sentania-labs/deep-analysis-${{ matrix.service }}:${{ github.ref_name }}
-            ghcr.io/sentania-labs/deep-analysis-${{ matrix.service }}:latest
+          python-version: "3.12"
 
-  create-release:
-    name: Create GitHub Release
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          body: |
-            Images published to GHCR (public, pullable without auth):
+      - name: Install python-semantic-release
+        run: pip install python-semantic-release
 
-            - `ghcr.io/sentania-labs/deep-analysis-auth:${{ github.ref_name }}`
-            - `ghcr.io/sentania-labs/deep-analysis-ingest:${{ github.ref_name }}`
-            - `ghcr.io/sentania-labs/deep-analysis-parser:${{ github.ref_name }}`
-            - `ghcr.io/sentania-labs/deep-analysis-analytics:${{ github.ref_name }}`
-            - `ghcr.io/sentania-labs/deep-analysis-web:${{ github.ref_name }}`
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            Also tagged as `:latest`.
-
-            See the compose stack and deploy guide in the repo for self-hosting.
+      - name: Run semantic-release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          semantic-release version --no-vcs-release
+          semantic-release publish || true
