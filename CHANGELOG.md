@@ -5,7 +5,7 @@ project follows [Semantic Versioning](https://semver.org/) loosely while
 in pre-1.0; expect minor versions to introduce breaking changes until the
 API surface stabilizes.
 
-## Unreleased
+## v0.5.0 — 2026-04-26
 
 ### Added
 
