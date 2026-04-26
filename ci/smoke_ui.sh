@@ -290,7 +290,7 @@ for u in d.get("users", []):
     if [ -z "$TEST_USER_ID" ]; then
         check "Seeded testuser@local via auth admin API" "ok" "FAILED (no id captured)"
     else
-        check "Seeded testuser@local via auth admin API" "ok" "ok (id=$TEST_USER_ID)"
+        check_contains "Seeded testuser@local via auth admin API" "ok" "ok (id=$TEST_USER_ID)"
 
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
