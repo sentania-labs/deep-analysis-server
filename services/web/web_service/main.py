@@ -305,7 +305,7 @@ async def profile_edit_submit(
         return _render_error("Email is required.", status.HTTP_400_BAD_REQUEST)
 
     try:
-        ok, err = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
+        result = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
     except auth_client.AuthForbidden:
         _log.info("profile.edit.update_me.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -322,14 +322,21 @@ async def profile_edit_submit(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    if ok:
-        return RedirectResponse(url="/profile", status_code=status.HTTP_303_SEE_OTHER)
-    if err == "email_taken":
+    if result.ok:
+        # Email is a JWT claim — auth re-mints the access token; we
+        # rotate the session cookie so subsequent requests resolve the
+        # new identity (avoids a stale-claim → /login bounce on the
+        # next password-change re-login).
+        redirect = RedirectResponse(url="/profile", status_code=status.HTTP_303_SEE_OTHER)
+        if result.access_token and result.expires_in is not None:
+            _set_session_cookie(redirect, result.access_token, result.expires_in)
+        return redirect
+    if result.error == "email_taken":
         return _render_error(
             "That email is already in use by another account.",
             status.HTTP_409_CONFLICT,
         )
-    if err == "invalid_email":
+    if result.error == "invalid_email":
         return _render_error(
             "Email address is not valid.",
             status.HTTP_400_BAD_REQUEST,

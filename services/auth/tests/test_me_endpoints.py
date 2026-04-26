@@ -123,6 +123,35 @@ async def test_patch_me_updates_email(client: Any, db_session: AsyncSession) -> 
 
 
 @pytest.mark.asyncio
+async def test_patch_me_returns_fresh_access_token_with_updated_email_claim(
+    client: Any, db_session: AsyncSession
+) -> None:
+    """Email is part of the JWT claim set; PATCH /auth/me must mint a
+    fresh access token so the caller can rotate its session cookie.
+    Without this, BrowserUser.email goes stale and downstream flows
+    that re-use the email claim (e.g. post-password-change re-login)
+    break.
+    """
+    from auth_service.deps import get_verifier
+
+    await _seed_user(db_session, email="orig@example.com", password="pw")
+    token = await _login(client, "orig@example.com", "pw")
+
+    r = await client.patch("/auth/me", json={"email": "renamed@example.com"}, headers=_h(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+
+    assert "access_token" in body, body
+    assert "expires_in" in body, body
+    assert body["access_token"] != token, "fresh token must differ from caller's token"
+    assert int(body["expires_in"]) > 0
+
+    claims = get_verifier().verify(body["access_token"])
+    assert claims["email"] == "renamed@example.com"
+    assert claims["sub"] == str(body["user_id"])
+
+
+@pytest.mark.asyncio
 async def test_patch_me_normalizes_lowercase(client: Any, db_session: AsyncSession) -> None:
     await _seed_user(db_session, email="orig@example.com", password="pw")
     token = await _login(client, "orig@example.com", "pw")

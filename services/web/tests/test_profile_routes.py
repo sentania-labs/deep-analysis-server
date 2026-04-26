@@ -140,8 +140,13 @@ async def test_post_profile_edit_success_redirects(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> tuple[bool, str | None]:
-        return True, None
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token="fresh-token-xyz",
+            expires_in=900,
+        )
 
     monkeypatch.setattr(auth_client, "update_me", fake_update_me)
     dep, _ = _override_user()
@@ -159,6 +164,41 @@ async def test_post_profile_edit_success_redirects(
 
 
 @pytest.mark.asyncio
+async def test_post_profile_edit_success_rotates_session_cookie(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Email is a JWT claim; on update_me success the response must
+    set the new cookie returned by auth so BrowserUser.email stays
+    consistent for subsequent requests in the same session.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token="rotated.jwt.value",
+            expires_in=900,
+        )
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    dep, _ = _override_user(token="stale.jwt.value")
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "new@example.com"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 303
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "rotated.jwt.value" in set_cookie
+    assert "stale.jwt.value" not in set_cookie
+
+
+@pytest.mark.asyncio
 async def test_post_profile_edit_email_taken_renders_inline(
     app_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -167,8 +207,8 @@ async def test_post_profile_edit_email_taken_renders_inline(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> tuple[bool, str | None]:
-        return False, "email_taken"
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(ok=False, error="email_taken")
 
     monkeypatch.setattr(auth_client, "update_me", fake_update_me)
     dep, _ = _override_user()
@@ -196,8 +236,8 @@ async def test_post_profile_edit_invalid_email_renders_inline(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> tuple[bool, str | None]:
-        return False, "invalid_email"
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(ok=False, error="invalid_email")
 
     monkeypatch.setattr(auth_client, "update_me", fake_update_me)
     dep, _ = _override_user()
@@ -628,3 +668,105 @@ async def test_post_revoke_my_agent_redirects_to_login_on_auth_forbidden(
 
     assert r.status_code == 302
     assert r.headers["location"] == "/login"
+
+
+# ---------------------------------------------------------------------------
+# Same-session chain: email change → password change → success
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_email_change_then_password_change_chain_uses_new_email(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the round-4 P2: changing email then password in
+    the same session must succeed without bouncing the user to /login.
+
+    Before the fix, /profile/edit didn't rotate the session cookie,
+    so BrowserUser.email stayed pinned to the old value. The
+    subsequent /settings/password handler then called
+    auth_client.login(user.email, new_password) with the *old* email,
+    which 401'd, and the password-change flow fell through to /login
+    even though the password update had succeeded.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    # Stateful BrowserUser so step 2 sees the rotated identity that
+    # step 1 would have set via the cookie. Mirrors what a real
+    # cookie + JWT verifier would resolve on the next request.
+    state = {
+        "user": _deps.BrowserUser(
+            user_id=42,
+            email="old@example.com",
+            role="user",
+            must_change_password=False,
+            scope=None,
+            token="t1.old",
+        )
+    }
+
+    async def dep() -> _deps.BrowserUser:
+        return state["user"]
+
+    async def fake_update_me(_url: str, _token: str, email: str) -> auth_client.UpdateMeResult:
+        # Auth mints a new token for the rotated email claim; web
+        # sets the cookie. Mirror the post-rotation user state so the
+        # next request resolves the new identity.
+        state["user"] = _deps.BrowserUser(
+            user_id=42,
+            email=email,
+            role="user",
+            must_change_password=False,
+            scope=None,
+            token="t2.rotated",
+        )
+        return auth_client.UpdateMeResult(
+            ok=True, error=None, access_token="t2.rotated", expires_in=900
+        )
+
+    async def fake_change_password(
+        _url: str, _token: str, _cur: str, _new: str
+    ) -> tuple[bool, str | None]:
+        return True, None
+
+    captured: dict[str, Any] = {}
+
+    async def fake_login(_url: str, email: str, _password: str) -> auth_client.LoginResult:
+        captured["email"] = email
+        return auth_client.LoginResult(
+            access_token="t3.fresh",
+            refresh_token="r3",
+            expires_in=900,
+            must_change_password=False,
+        )
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    monkeypatch.setattr(auth_client, "change_password", fake_change_password)
+    monkeypatch.setattr(auth_client, "login", fake_login)
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    _main.app.dependency_overrides[_deps.get_current_browser_user_any_scope] = dep
+    try:
+        r1 = await app_client.post("/profile/edit", data={"email": "new@example.com"})
+        assert r1.status_code == 303
+        assert r1.headers["location"].endswith("/profile")
+
+        r2 = await app_client.post(
+            "/settings/password",
+            data={
+                "current_password": "old-pw",
+                "new_password": "new-pw-1234",
+                "confirm_password": "new-pw-1234",
+            },
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r2.status_code == 303
+    assert r2.headers["location"].endswith("/dashboard")
+    # The post-password-change re-login must use the NEW email, not
+    # the stale one — that's what the cookie rotation buys us.
+    assert captured["email"] == "new@example.com"

@@ -253,14 +253,18 @@ async def test_update_me_success(monkeypatch: pytest.MonkeyPatch) -> None:
                 "email": "renamed@example.com",
                 "role": "user",
                 "must_change_password": False,
+                "access_token": "fresh.jwt.value",
+                "expires_in": 900,
             },
         ),
         capture,
     )
 
-    ok, err = await auth_client.update_me("http://auth:8000", "tok", "renamed@example.com")
-    assert ok is True
-    assert err is None
+    result = await auth_client.update_me("http://auth:8000", "tok", "renamed@example.com")
+    assert result.ok is True
+    assert result.error is None
+    assert result.access_token == "fresh.jwt.value"
+    assert result.expires_in == 900
     assert capture["kwargs"]["json"] == {"email": "renamed@example.com"}
     assert capture["kwargs"]["headers"]["Authorization"] == "Bearer tok"
 
@@ -276,9 +280,10 @@ async def test_update_me_email_taken_returns_email_taken(
         httpx.Response(409, json={"detail": {"error": "email_already_exists"}}),
     )
 
-    ok, err = await auth_client.update_me("http://auth:8000", "tok", "taken@example.com")
-    assert ok is False
-    assert err == "email_taken"
+    result = await auth_client.update_me("http://auth:8000", "tok", "taken@example.com")
+    assert result.ok is False
+    assert result.error == "email_taken"
+    assert result.access_token is None
 
 
 @pytest.mark.asyncio
@@ -292,9 +297,10 @@ async def test_update_me_validation_returns_invalid_email(
         httpx.Response(422, json={"detail": [{"msg": "too short"}]}),
     )
 
-    ok, err = await auth_client.update_me("http://auth:8000", "tok", "")
-    assert ok is False
-    assert err == "invalid_email"
+    result = await auth_client.update_me("http://auth:8000", "tok", "")
+    assert result.ok is False
+    assert result.error == "invalid_email"
+    assert result.access_token is None
 
 
 @pytest.mark.asyncio

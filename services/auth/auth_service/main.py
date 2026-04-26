@@ -49,6 +49,7 @@ from auth_service.schemas import (
     RefreshRequest,
     TokenResponse,
     UpdateMeRequest,
+    UpdateMeResponse,
 )
 from auth_service.settings import get_settings
 from common.logging import configure_logging
@@ -279,12 +280,12 @@ async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeResponse:
 _ME_AGENTS_MAX_LIMIT = 200
 
 
-@app.patch("/auth/me", response_model=MeResponse)
+@app.patch("/auth/me", response_model=UpdateMeResponse)
 async def update_me(
     body: UpdateMeRequest,
     caller: AuthenticatedUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
-) -> MeResponse:
+) -> UpdateMeResponse:
     new_email = body.email.strip().lower()
     if not new_email:
         # min_length on the schema covers blank, but a whitespace-only
@@ -318,12 +319,25 @@ async def update_me(
     await db.commit()
     await db.refresh(user)
 
+    # Email is a JWT claim; the caller's existing token is now stale.
+    # Mint a fresh access token bound to the same session_id so the
+    # web layer can rotate the cookie without forcing a re-login.
+    settings = get_settings()
+    fresh_access = issue_access_token(
+        user.id,
+        user.role,
+        caller.session_id,
+        email=user.email,
+    )
+
     _log.info("auth.me.updated", extra={"user_id": user.id})
-    return MeResponse(
+    return UpdateMeResponse(
         user_id=user.id,
         email=user.email,
         role=user.role,
         must_change_password=user.must_change_password,
+        access_token=fresh_access,
+        expires_in=settings.access_token_ttl_seconds,
     )
 
 

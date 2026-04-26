@@ -52,6 +52,19 @@ class UserItem:
     updated_at: datetime | None
 
 
+@dataclass
+class UpdateMeResult:
+    """Result of PATCH /auth/me. On success, carries the rotated
+    access token + ttl so the web layer can refresh the session
+    cookie without forcing the user to re-login.
+    """
+
+    ok: bool
+    error: str | None = None
+    access_token: str | None = None
+    expires_in: int | None = None
+
+
 class AuthClientError(Exception):
     """Auth call failed for transport, 5xx, or unexpected non-2xx."""
 
@@ -219,13 +232,16 @@ async def update_me(
     base_url: str,
     token: str,
     email: str,
-) -> tuple[bool, str | None]:
-    """Try to update the caller's email. Returns (ok, error_code).
+) -> UpdateMeResult:
+    """Try to update the caller's email.
 
-    Maps known auth responses to UI-stable error codes:
-      - 200 → (True, None)
-      - 409 (email_already_exists) → (False, "email_taken")
-      - 400/422 → (False, "invalid_email")
+    On 200, returns ``UpdateMeResult(ok=True, access_token=..., expires_in=...)``
+    — the auth response carries a freshly-minted token because email is a
+    JWT claim and the caller's existing token is now stale.
+
+    Maps known error responses to UI-stable error codes:
+      - 409 (email_already_exists) → ``UpdateMeResult(ok=False, error="email_taken")``
+      - 400/422 → ``UpdateMeResult(ok=False, error="invalid_email")``
 
     401/403 raise :class:`AuthForbidden`; 5xx / transport raise
     :class:`AuthClientError`.
@@ -240,13 +256,19 @@ async def update_me(
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth /me PATCH transport error: {exc}") from exc
     if resp.status_code == 200:
-        return True, None
+        data = resp.json()
+        return UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token=str(data["access_token"]),
+            expires_in=int(data["expires_in"]),
+        )
     if resp.status_code in (401, 403):
         raise AuthForbidden(f"auth /me PATCH returned {resp.status_code}")
     if resp.status_code == 409:
-        return False, "email_taken"
+        return UpdateMeResult(ok=False, error="email_taken")
     if resp.status_code in (400, 422):
-        return False, "invalid_email"
+        return UpdateMeResult(ok=False, error="invalid_email")
     raise AuthClientError(f"auth /me PATCH returned {resp.status_code}: {resp.text}")
 
 
