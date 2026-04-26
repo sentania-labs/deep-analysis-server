@@ -56,8 +56,11 @@ jar_has_live_session() {
     local jar="$1"
     [ -s "$jar" ] || return 1
     # Netscape format: domain \t http_only \t path \t secure \t expires \t name \t value
+    # Note: curl prefixes HttpOnly cookies' domain field with `#HttpOnly_`,
+    # so a plain `^#` skip would drop the very lines we need. Treat
+    # `# ` (comment-with-space) as the comment marker instead.
     awk -v now="$(date +%s)" '
-        $0 !~ /^#/ && $0 !~ /^$/ {
+        $0 !~ /^# / && $0 !~ /^$/ {
             # Count real fields (tab-separated).
             n = split($0, f, "\t")
             if (n < 7) next
@@ -251,7 +254,7 @@ check_contains "/admin/users redirect targets /login" "/login" "$noauth_admin"
 # web admin UI, then delete it. Skip seeding gracefully when docker
 # compose isn't reachable (e.g. running this script against a remote
 # stack manually) — the GET-only checks above still gate the build.
-ADMIN_JWT=$(awk -F'\t' '$0 !~ /^#/ && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE")
+ADMIN_JWT=$(awk -F'\t' '$0 !~ /^# / && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE")
 if [ -z "$ADMIN_JWT" ]; then
     check "Extracted admin JWT from session cookie" "ok" "FAILED (cookie jar missing da_session)"
 fi
