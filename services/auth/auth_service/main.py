@@ -1,9 +1,10 @@
 import contextlib
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,14 +38,18 @@ from auth_service.registration import (
 from auth_service.schemas import (
     AgentHeartbeatRequest,
     AgentHeartbeatResponse,
+    AgentListView,
     AgentRegisterRequest,
     AgentRegisterResponse,
     AgentRegistrationCodeResponse,
+    AgentView,
     LoginRequest,
     MeResponse,
     PasswordChangeRequest,
     RefreshRequest,
     TokenResponse,
+    UpdateMeRequest,
+    UpdateMeResponse,
 )
 from auth_service.settings import get_settings
 from common.logging import configure_logging
@@ -270,6 +275,140 @@ async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeResponse:
         role=user.role,
         must_change_password=user.must_change_password,
     )
+
+
+_ME_AGENTS_MAX_LIMIT = 200
+
+
+@app.patch("/auth/me", response_model=UpdateMeResponse)
+async def update_me(
+    body: UpdateMeRequest,
+    caller: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> UpdateMeResponse:
+    new_email = body.email.strip().lower()
+    if not new_email:
+        # min_length on the schema covers blank, but a whitespace-only
+        # string would slip through — guard explicitly.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_email"},
+        )
+
+    user = (await db.execute(select(User).where(User.id == caller.user_id))).scalar_one_or_none()
+    if user is None or user.disabled:
+        raise _INVALID_CREDENTIALS
+
+    if new_email != user.email.lower():
+        clash = (
+            await db.execute(
+                select(User).where(
+                    func.lower(User.email) == new_email,
+                    User.id != user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "email_already_exists"},
+            )
+
+    user.email = new_email
+    user.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(user)
+
+    # Email is a JWT claim; the caller's existing token is now stale.
+    # Mint a fresh access token bound to the same session_id so the
+    # web layer can rotate the cookie without forcing a re-login.
+    settings = get_settings()
+    fresh_access = issue_access_token(
+        user.id,
+        user.role,
+        caller.session_id,
+        email=user.email,
+    )
+
+    _log.info("auth.me.updated", extra={"user_id": user.id})
+    return UpdateMeResponse(
+        user_id=user.id,
+        email=user.email,
+        role=user.role,
+        must_change_password=user.must_change_password,
+        access_token=fresh_access,
+        expires_in=settings.access_token_ttl_seconds,
+    )
+
+
+@app.get("/auth/me/agents", response_model=AgentListView)
+async def list_my_agents(
+    limit: int = Query(50, ge=1, le=_ME_AGENTS_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    caller: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> AgentListView:
+    total = int(
+        (
+            await db.execute(
+                select(func.count())
+                .select_from(AgentRegistration)
+                .where(AgentRegistration.user_id == caller.user_id)
+            )
+        ).scalar_one()
+    )
+    rows = (
+        (
+            await db.execute(
+                select(AgentRegistration)
+                .where(AgentRegistration.user_id == caller.user_id)
+                .order_by(AgentRegistration.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    agents = [
+        AgentView(
+            agent_id=a.id,
+            user_id=a.user_id,
+            user_email=caller.email,
+            machine_name=a.machine_name,
+            client_version=a.client_version,
+            created_at=a.created_at,
+            last_seen_at=a.last_seen_at,
+            revoked_at=a.revoked_at,
+        )
+        for a in rows
+    ]
+    return AgentListView(agents=agents, total=total)
+
+
+@app.post("/auth/me/agents/{agent_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_my_agent(
+    agent_id: uuid.UUID,
+    caller: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    agent = (
+        await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent_id))
+    ).scalar_one_or_none()
+    # Treat "doesn't exist" and "exists but isn't yours" as the same
+    # 404 — the caller has no business knowing the difference, and a
+    # distinct 403 lets a probe enumerate live agent IDs across the
+    # tenant.
+    if agent is None or agent.user_id != caller.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "agent_not_found"},
+        )
+    if agent.revoked_at is None:
+        agent.revoked_at = datetime.now(UTC)
+        await db.commit()
+        _log.info("auth.me.agent_revoked", extra={"agent_id": str(agent_id)})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # TODO(policy): minimum-length of 12 is a stub; real password policy TBD.

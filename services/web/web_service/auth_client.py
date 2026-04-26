@@ -9,6 +9,8 @@ URL formatting or error translation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 import httpx
 
@@ -21,12 +23,72 @@ class LoginResult:
     must_change_password: bool
 
 
+@dataclass
+class MeResult:
+    user_id: int
+    email: str
+    role: str
+    must_change_password: bool
+
+
+@dataclass
+class AgentItem:
+    agent_id: str
+    machine_name: str
+    client_version: str | None
+    created_at: datetime | None
+    last_seen_at: datetime | None
+    revoked_at: datetime | None
+
+
+@dataclass
+class UserItem:
+    id: int
+    email: str
+    role: str
+    disabled: bool
+    must_change_password: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+@dataclass
+class UpdateMeResult:
+    """Result of PATCH /auth/me. On success, carries the rotated
+    access token + ttl so the web layer can refresh the session
+    cookie without forcing the user to re-login.
+    """
+
+    ok: bool
+    error: str | None = None
+    access_token: str | None = None
+    expires_in: int | None = None
+
+
 class AuthClientError(Exception):
-    """Auth call failed for reasons other than bad credentials."""
+    """Auth call failed for transport, 5xx, or unexpected non-2xx."""
 
 
 class InvalidCredentials(Exception):
     """Auth rejected the login as invalid credentials."""
+
+
+class AuthForbidden(Exception):
+    """Auth rejected the request as 401/403.
+
+    Distinct from :class:`AuthClientError` so callers can differentiate a
+    revoked/demoted admin (browser session JWT still carries an ``admin``
+    claim, but auth's DB no longer agrees) from a real backend outage.
+    """
+
+
+def _parse_dt(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 async def login(base_url: str, email: str, password: str) -> LoginResult:
@@ -59,9 +121,11 @@ async def change_password(
 ) -> tuple[bool, str | None]:
     """Try to change the password. Returns (ok, error_code).
 
-    On 204, returns (True, None). On a validation/auth failure, returns
+    On 204, returns (True, None). On a 400 validation failure, returns
     (False, <error-code-from-auth>) so the caller can render an inline
-    message.
+    message. 401/403 raise :class:`AuthForbidden` — the session is no
+    longer accepted by auth (revoked, expired, or current password
+    rejected) and the caller must re-authenticate.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -74,7 +138,9 @@ async def change_password(
         raise AuthClientError(f"auth /password/change transport error: {exc}") from exc
     if resp.status_code == 204:
         return True, None
-    if resp.status_code in (400, 401):
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /password/change returned {resp.status_code}")
+    if resp.status_code == 400:
         try:
             detail = resp.json().get("detail") or {}
             code = detail.get("error") if isinstance(detail, dict) else None
@@ -98,3 +164,244 @@ async def logout(base_url: str, token: str) -> None:
             )
     except httpx.HTTPError:
         return
+
+
+async def get_me(base_url: str, token: str) -> MeResult:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /me transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth /me returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    return MeResult(
+        user_id=int(data["user_id"]),
+        email=str(data["email"]),
+        role=str(data["role"]),
+        must_change_password=bool(data["must_change_password"]),
+    )
+
+
+async def list_my_agents(
+    base_url: str,
+    token: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[AgentItem], int]:
+    """List the caller's own agents.
+
+    Returns ``(items, total)`` so the web layer can render pagination
+    controls. ``total`` is the unfiltered count of the caller's agents
+    (matches the auth-side ``AgentListView.total``).
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/auth/me/agents",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": limit, "offset": offset},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /me/agents transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me/agents returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth /me/agents returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    items = [
+        AgentItem(
+            agent_id=str(a["agent_id"]),
+            machine_name=str(a["machine_name"]),
+            client_version=a.get("client_version"),
+            created_at=_parse_dt(a.get("created_at")),
+            last_seen_at=_parse_dt(a.get("last_seen_at")),
+            revoked_at=_parse_dt(a.get("revoked_at")),
+        )
+        for a in data.get("agents", [])
+    ]
+    return items, int(data.get("total", len(items)))
+
+
+async def update_me(
+    base_url: str,
+    token: str,
+    email: str,
+) -> UpdateMeResult:
+    """Try to update the caller's email.
+
+    On 200, returns ``UpdateMeResult(ok=True, access_token=..., expires_in=...)``
+    — the auth response carries a freshly-minted token because email is a
+    JWT claim and the caller's existing token is now stale.
+
+    Maps known error responses to UI-stable error codes:
+      - 409 (email_already_exists) → ``UpdateMeResult(ok=False, error="email_taken")``
+      - 400/422 → ``UpdateMeResult(ok=False, error="invalid_email")``
+
+    401/403 raise :class:`AuthForbidden`; 5xx / transport raise
+    :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                f"{base_url}/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"email": email},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /me PATCH transport error: {exc}") from exc
+    if resp.status_code == 200:
+        data = resp.json()
+        return UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token=str(data["access_token"]),
+            expires_in=int(data["expires_in"]),
+        )
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me PATCH returned {resp.status_code}")
+    if resp.status_code == 409:
+        return UpdateMeResult(ok=False, error="email_taken")
+    if resp.status_code in (400, 422):
+        return UpdateMeResult(ok=False, error="invalid_email")
+    raise AuthClientError(f"auth /me PATCH returned {resp.status_code}: {resp.text}")
+
+
+async def revoke_my_agent(
+    base_url: str,
+    token: str,
+    agent_id: str,
+) -> tuple[bool, str | None]:
+    """Try to revoke one of the caller's own agents. Returns (ok, error_code).
+
+    - 204 → (True, None)
+    - 404 → (False, "not_found")
+
+    401/403 raise :class:`AuthForbidden`; 5xx / transport raise
+    :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/auth/me/agents/{agent_id}/revoke",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /me/agents revoke transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me/agents revoke returned {resp.status_code}")
+    if resp.status_code == 404:
+        return False, "not_found"
+    raise AuthClientError(f"auth /me/agents revoke returned {resp.status_code}: {resp.text}")
+
+
+async def admin_list_users(
+    base_url: str,
+    token: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[UserItem], int]:
+    """Admin-only: list all users via the auth service.
+
+    Returns ``(items, total)``. Raises :class:`AuthForbidden` on 401/403
+    (caller's session/role no longer satisfies auth's check) and
+    :class:`AuthClientError` on transport / 5xx / other non-2xx so the
+    web layer can render an admin-denied page vs. a service-outage page.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": limit, "offset": offset},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/users transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/users returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth /admin/users returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    items = [
+        UserItem(
+            id=int(u["id"]),
+            email=str(u["email"]),
+            role=str(u["role"]),
+            disabled=bool(u["disabled"]),
+            must_change_password=bool(u["must_change_password"]),
+            created_at=_parse_dt(u.get("created_at")),
+            updated_at=_parse_dt(u.get("updated_at")),
+        )
+        for u in data.get("users", [])
+    ]
+    return items, int(data.get("total", len(items)))
+
+
+async def admin_delete_user(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[bool, str | None]:
+    """Admin-only: delete a user via the auth service.
+
+    - 204 → (True, None)
+    - 400 with detail.error ∈ {cannot_delete_self, cannot_delete_last_admin} → (False, code)
+    - 404 → (False, "user_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/admin/users/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth DELETE /admin/users transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth DELETE /admin/users returned {resp.status_code}")
+    if resp.status_code in (400, 404):
+        try:
+            detail = resp.json().get("detail") or {}
+            code = detail.get("error") if isinstance(detail, dict) else None
+        except ValueError:
+            code = None
+        return False, code or "delete_failed"
+    raise AuthClientError(f"auth DELETE /admin/users returned {resp.status_code}: {resp.text}")
+
+
+async def admin_reset_password(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[str | None, str | None]:
+    """Admin-only: rotate another user's password.
+
+    Returns ``(temporary_password, error_code)``:
+    - 200 → (temp, None)
+    - 404 → (None, "user_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/users/{user_id}/reset-password",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/users reset-password transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return str(resp.json()["temporary_password"]), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/users reset-password returned {resp.status_code}")
+    if resp.status_code == 404:
+        return None, "user_not_found"
+    raise AuthClientError(
+        f"auth /admin/users reset-password returned {resp.status_code}: {resp.text}"
+    )

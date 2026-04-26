@@ -162,6 +162,28 @@ jobs:
           docker compose ps
           docker compose logs --tail=200
           exit 1
+      - name: Wait for upstream services
+        # Gateway /health is answered by Caddy directly, so it doesn't
+        # imply upstreams are ready. Without this wait, the route-prefix
+        # smoke races the FastAPI services and gets 502s ("connection
+        # refused") from Caddy. Each /<svc>/healthz is unauthenticated.
+        run: |
+          for svc in auth ingest web; do
+            for i in $(seq 1 60); do
+              code=$(curl -sk -o /dev/null -w "%{http_code}" "https://deepanalysis.local/${svc}/healthz")
+              if [ "$code" = "200" ]; then
+                echo "${svc} up after ${i} tries"
+                break
+              fi
+              if [ "$i" = "60" ]; then
+                echo "${svc} never became ready"
+                docker compose ps
+                docker compose logs --tail=200 "${svc}"
+                exit 1
+              fi
+              sleep 2
+            done
+          done
       - name: Route prefix smoke (v0.4.2 fix verification)
         # Verifies gateway routing + auth-gate behavior without needing
         # an admin account. Full E2E (login → upload → 201) is a follow-up
@@ -186,8 +208,9 @@ jobs:
           check "POST /auth/login empty body → 422" 422 \
             -X POST "$BASE/auth/login" -H "Content-Type: application/json" -d '{}'
 
-          # No auth header → 401 (auth gate fires before JWT verification)
-          check "GET /admin/users no auth → 401" 401 \
+          # No cookie → 302 to /login (W3.5-C: /admin/* now serves web admin UI,
+          # browser-redirect semantics replace auth's bare 401).
+          check "GET /admin/users no cookie → 302" 302 \
             "$BASE/admin/users"
 
           # No auth header → 401 (ingest route wired + auth gate fires — THE v0.4.2 FIX)

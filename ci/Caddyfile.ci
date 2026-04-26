@@ -33,11 +33,9 @@ deepanalysis.local {
         reverse_proxy analytics:8000
     }
 
-    # /admin/* temp-routes to auth until W6 splits the admin surface.
-    handle /admin/* {
-        reverse_proxy auth:8000
-    }
-
+    # /admin/* serves the web admin UI (W3.5-C); mirrors the production
+    # Caddyfile. Auth's JSON /admin/* endpoints stay reachable on the
+    # internal compose network for service-to-service calls.
     handle {
         reverse_proxy web:8000
     }

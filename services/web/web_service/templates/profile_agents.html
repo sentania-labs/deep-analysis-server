@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}My agents &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>My agents</h1>
+    <p><a href="/profile">&larr; Back to profile</a></p>
+    {% if not agents %}
+        <p>No agents registered yet.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Machine</th>
+                    <th>Client version</th>
+                    <th>Last seen</th>
+                    <th>Registered</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in agents %}
+                <tr>
+                    <td>{{ a.machine_name }}</td>
+                    <td>{{ a.client_version or "—" }}</td>
+                    <td>{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M UTC") if a.last_seen_at else "never" }}</td>
+                    <td>{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "—" }}</td>
+                    <td>
+                        {% if a.revoked_at %}
+                            revoked {{ a.revoked_at.strftime("%Y-%m-%d") }}
+                        {% else %}
+                            active
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not a.revoked_at %}
+                        <form method="post"
+                              action="/profile/agents/{{ a.agent_id }}/revoke"
+                              onsubmit="return confirm('Revoke this agent? It will need to be re-registered to upload again.');">
+                            <button type="submit" class="btn btn-danger">Revoke</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% set first_idx = (page - 1) * per_page + 1 %}
+        {% set last_idx = first_idx + agents|length - 1 %}
+        {% set has_prev = page > 1 %}
+        {% set has_next = last_idx < total %}
+        <nav class="pagination" aria-label="Agent list pagination">
+            <p class="muted">
+                Showing {{ first_idx }}–{{ last_idx }} of
+                {{ total }} agent{{ "" if total == 1 else "s" }}.
+            </p>
+            {% if has_prev or has_next %}
+            <p>
+                {% if has_prev %}
+                <a class="btn"
+                   href="/profile/agents?page={{ page - 1 }}&per_page={{ per_page }}"
+                   rel="prev">&larr; Previous</a>
+                {% endif %}
+                <span class="muted">Page {{ page }}</span>
+                {% if has_next %}
+                <a class="btn"
+                   href="/profile/agents?page={{ page + 1 }}&per_page={{ per_page }}"
+                   rel="next">Next &rarr;</a>
+                {% endif %}
+            </p>
+            {% endif %}
+        </nav>
+    {% endif %}
+</section>
+{% endblock %}

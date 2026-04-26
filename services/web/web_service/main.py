@@ -9,10 +9,11 @@ independent and coexist in the compose stack.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Form, Request, Response, status
+from fastapi import Depends, FastAPI, Form, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -208,6 +209,9 @@ async def password_submit(
             current_password,
             new_password,
         )
+    except auth_client.AuthForbidden:
+        _log.info("password.change.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth service change_password call failed")
         return _render_error(
@@ -236,6 +240,491 @@ async def password_submit(
     redirect = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     _set_session_cookie(redirect, fresh.access_token, fresh.expires_in)
     return redirect
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.get_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {"user": user, "me": me},
+    )
+
+
+@app.get("/profile/edit", response_class=HTMLResponse)
+async def profile_edit_form(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.edit.get_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile_edit.html",
+        {"user": user, "email": me.email, "error": None},
+    )
+
+
+@app.post("/profile/edit")
+async def profile_edit_submit(
+    request: Request,
+    email: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    submitted = email.strip()
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "profile_edit.html",
+            {"user": user, "email": submitted, "error": message},
+            status_code=code,
+        )
+
+    if not submitted:
+        return _render_error("Email is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        result = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
+    except auth_client.AuthForbidden:
+        _log.info("profile.edit.update_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth PATCH /me call failed")
+        return templates.TemplateResponse(
+            request,
+            "profile_edit.html",
+            {
+                "user": user,
+                "email": submitted,
+                "error": "Authentication service unavailable. Please try again.",
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if result.ok:
+        # Email is a JWT claim — auth re-mints the access token; we
+        # rotate the session cookie so subsequent requests resolve the
+        # new identity (avoids a stale-claim → /login bounce on the
+        # next password-change re-login).
+        redirect = RedirectResponse(url="/profile", status_code=status.HTTP_303_SEE_OTHER)
+        if result.access_token and result.expires_in is not None:
+            _set_session_cookie(redirect, result.access_token, result.expires_in)
+        return redirect
+    if result.error == "email_taken":
+        return _render_error(
+            "That email is already in use by another account.",
+            status.HTTP_409_CONFLICT,
+        )
+    if result.error == "invalid_email":
+        return _render_error(
+            "Email address is not valid.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    return _render_error(
+        "Could not update profile.",
+        status.HTTP_400_BAD_REQUEST,
+    )
+
+
+_PROFILE_AGENTS_DEFAULT_PER_PAGE = 50
+# Matches auth-side `_ME_AGENTS_MAX_LIMIT` so per_page above this 422s here
+# rather than getting silently clamped at the auth boundary.
+_PROFILE_AGENTS_MAX_PER_PAGE = 200
+
+
+@app.get("/profile/agents", response_class=HTMLResponse)
+async def profile_agents(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_PROFILE_AGENTS_MAX_PER_PAGE),
+    ] = _PROFILE_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    offset = (page - 1) * per_page
+    try:
+        agents, total = await auth_client.list_my_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except auth_client.AuthForbidden:
+        _log.info("profile.agents.list.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me/agents call failed")
+        return _service_unavailable(request, user)
+    return templates.TemplateResponse(
+        request,
+        "profile_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+        },
+    )
+
+
+@app.post("/profile/agents/{agent_id}/revoke")
+async def profile_agents_revoke(
+    # Typed UUID rejects malformed IDs at the route boundary with 422,
+    # so they never round-trip to auth and surface as a misclassified
+    # 503 from the AuthClientError → outage path.
+    agent_id: uuid.UUID,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        ok, err = await auth_client.revoke_my_agent(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
+    except auth_client.AuthForbidden:
+        _log.info("profile.agents.revoke.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth /me/agents revoke call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    # 404 still bounces to the list — listing will reflect current
+    # state (or omit the agent), which is the user-facing truth.
+    if not ok:
+        _log.info("profile.agent_revoke.rejected", extra={"err": err})
+    return RedirectResponse(url="/profile/agents", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _service_unavailable(request: Request, user: BrowserUser) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {
+            "user": user,
+            "me": None,
+            "error": "Authentication service unavailable. Please try again.",
+        },
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin panel — W3.5-C
+# ---------------------------------------------------------------------------
+
+
+_ADMIN_USERS_DEFAULT_PER_PAGE = 50
+_ADMIN_USERS_MAX_PER_PAGE = 200
+
+
+def _require_admin_or_403(request: Request, user: BrowserUser) -> Response | None:
+    """Return a 403 response if `user` is not an admin, else None.
+
+    Admin gating is enforced both here (cheap rejection for the common
+    case) and at the auth service (authoritative). The double-check
+    means a stale role claim or a rogue local edit can't slip through.
+    """
+    if user.role != "admin":
+        return templates.TemplateResponse(
+            request,
+            "admin_forbidden.html",
+            {"user": user},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
+def _admin_forbidden(request: Request, user: BrowserUser) -> Response:
+    """Render the admin-denied page.
+
+    Used when auth's authoritative role/session check rejects the call
+    even though the JWT claim said ``admin`` (revoked session, demoted
+    role) — see :class:`auth_client.AuthForbidden`.
+    """
+    return templates.TemplateResponse(
+        request,
+        "admin_forbidden.html",
+        {"user": user},
+        status_code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    offset = (page - 1) * per_page
+    try:
+        users, total = await auth_client.admin_list_users(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/users call failed")
+        return templates.TemplateResponse(
+            request,
+            "admin_users.html",
+            {
+                "user": user,
+                "users": [],
+                "total": 0,
+                "page": page,
+                "per_page": per_page,
+                "error": "Authentication service unavailable. Please try again.",
+                "result": None,
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "user": user,
+            "users": users,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": None,
+            "result": None,
+        },
+    )
+
+
+def _render_admin_users_sync(
+    request: Request,
+    user: BrowserUser,
+    users: list[Any],
+    total: int,
+    *,
+    page: int,
+    per_page: int,
+    error: str | None,
+    result: dict[str, Any] | None,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "user": user,
+            "users": users,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": error,
+            "result": result,
+        },
+        status_code=status_code,
+    )
+
+
+async def _refetch_admin_users(
+    settings: WebSettings,
+    user: BrowserUser,
+    *,
+    page: int,
+    per_page: int,
+) -> tuple[list[Any], int]:
+    """Best-effort list refetch for inline-error rendering paths.
+
+    Swallows ``AuthForbidden`` and ``AuthClientError`` — by the time we
+    call this, the original mutation has already produced a status the
+    caller wants to surface; we just want list context underneath it.
+    """
+    try:
+        return await auth_client.admin_list_users(
+            settings.auth_service_url,
+            user.token,
+            limit=per_page,
+            offset=(page - 1) * per_page,
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        return [], 0
+
+
+@app.post("/admin/users/{user_id}/delete")
+async def admin_user_delete(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    if user_id == user.user_id:
+        # Auth would also reject this, but short-circuit so we don't
+        # waste a round trip — and so the inline error renders against
+        # whatever list state the page already has.
+        users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error="You cannot delete yourself.",
+            result=None,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        ok, err = await auth_client.admin_delete_user(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.delete.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth DELETE /admin/users call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
+
+    # Fetch the list again so the inline error has context.
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+
+    if err == "cannot_delete_self":
+        message = "You cannot delete yourself."
+        code = status.HTTP_400_BAD_REQUEST
+    elif err == "cannot_delete_last_admin":
+        message = "Cannot delete the last admin account."
+        code = status.HTTP_400_BAD_REQUEST
+    elif err == "user_not_found":
+        message = "That user no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not delete user."
+        code = status.HTTP_400_BAD_REQUEST
+
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        result=None,
+        status_code=code,
+    )
+
+
+@app.post("/admin/users/{user_id}/reset-password")
+async def admin_user_reset_password(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        temp, err = await auth_client.admin_reset_password(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.reset.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/users reset-password call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+
+    if temp is not None:
+        result = {"user_id": user_id, "temporary_password": temp}
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error=None,
+            result=result,
+            status_code=200,
+        )
+
+    if err == "user_not_found":
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error="That user no longer exists.",
+            result=None,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error="Could not reset password.",
+        result=None,
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 @app.post("/logout")

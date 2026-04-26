@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Profile &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Profile</h1>
+    {% if error %}
+        <p class="form-error" role="alert">{{ error }}</p>
+    {% endif %}
+    {% if me %}
+        {% if me.must_change_password %}
+            <p class="form-banner" role="status">
+                You must change your password before continuing.
+            </p>
+        {% endif %}
+        <dl class="profile-fields">
+            <dt>Email</dt>
+            <dd>{{ me.email or "(not set)" }}</dd>
+            <dt>Role</dt>
+            <dd>{{ me.role }}</dd>
+            <dt>User ID</dt>
+            <dd>{{ me.user_id }}</dd>
+        </dl>
+    {% endif %}
+    <ul class="profile-actions">
+        <li><a href="/profile/edit">Edit email</a></li>
+        <li><a href="/settings/password">Change password</a></li>
+        <li><a href="/profile/agents">My agents</a></li>
+    </ul>
+</section>
+{% endblock %}

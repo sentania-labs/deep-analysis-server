@@ -37,6 +37,21 @@ class MeResponse(BaseModel):
     must_change_password: bool
 
 
+class UpdateMeRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+
+
+class UpdateMeResponse(MeResponse):
+    """PATCH /auth/me response — extends MeResponse with a refreshed
+    access token. Email is part of the access-token claim set, so we
+    re-mint on every successful update; the web layer rotates the
+    session cookie so subsequent requests resolve the new identity.
+    """
+
+    access_token: str
+    expires_in: int
+
+
 class AgentRegistrationCodeResponse(BaseModel):
     code: str
     expires_at: datetime

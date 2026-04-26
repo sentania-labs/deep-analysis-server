@@ -1,0 +1,772 @@
+"""Web profile/self-service route tests.
+
+Verifies the W3.5-B browser surface: GET /profile, GET/POST
+/profile/edit, GET /profile/agents, POST /profile/agents/{id}/revoke.
+
+Auth at the web layer is bypassed via FastAPI dependency overrides so
+we can focus on handler behavior + auth_client wiring. End-to-end
+auth flow is exercised by the smoke tests under ci/.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+import pytest
+import pytest_asyncio
+
+
+@pytest_asyncio.fixture
+async def app_client() -> AsyncIterator[httpx.AsyncClient]:
+    from web_service import deps as _deps
+    from web_service import main as _main
+    from web_service import settings as _settings
+
+    _settings._settings = None
+    _deps.reset_verifier()
+
+    transport = httpx.ASGITransport(app=_main.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+
+def _override_user(token: str = "fake-tok") -> Any:
+    from web_service import deps as _deps
+
+    fake_user = _deps.BrowserUser(
+        user_id=42,
+        email="u@example.com",
+        role="user",
+        must_change_password=False,
+        scope=None,
+        token=token,
+    )
+
+    async def _dep() -> _deps.BrowserUser:
+        return fake_user
+
+    return _dep, fake_user
+
+
+# ---------------------------------------------------------------------------
+# GET /profile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_profile_renders(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_get_me(_url: str, _token: str) -> auth_client.MeResult:
+        return auth_client.MeResult(
+            user_id=42, email="u@example.com", role="user", must_change_password=False
+        )
+
+    monkeypatch.setattr(auth_client, "get_me", fake_get_me)
+
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "u@example.com" in r.text
+    assert "/profile/edit" in r.text
+    assert "/profile/agents" in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_profile_unauthenticated_redirects(
+    app_client: httpx.AsyncClient,
+) -> None:
+    r = await app_client.get("/profile")
+    assert r.status_code == 302
+    assert r.headers["location"].startswith("/login")
+
+
+# ---------------------------------------------------------------------------
+# GET /profile/edit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_profile_edit_prefills_email(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_get_me(_url: str, _token: str) -> auth_client.MeResult:
+        return auth_client.MeResult(
+            user_id=42, email="orig@example.com", role="user", must_change_password=False
+        )
+
+    monkeypatch.setattr(auth_client, "get_me", fake_get_me)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/edit")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert 'name="email"' in r.text
+    assert 'value="orig@example.com"' in r.text
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/edit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_success_redirects(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token="fresh-token-xyz",
+            expires_in=900,
+        )
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(
+            "/profile/edit",
+            data={"email": "renamed@example.com"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 303
+    assert r.headers["location"].endswith("/profile")
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_success_rotates_session_cookie(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Email is a JWT claim; on update_me success the response must
+    set the new cookie returned by auth so BrowserUser.email stays
+    consistent for subsequent requests in the same session.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(
+            ok=True,
+            error=None,
+            access_token="rotated.jwt.value",
+            expires_in=900,
+        )
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    dep, _ = _override_user(token="stale.jwt.value")
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "new@example.com"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 303
+    set_cookie = r.headers.get("set-cookie", "")
+    assert "rotated.jwt.value" in set_cookie
+    assert "stale.jwt.value" not in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_email_taken_renders_inline(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(ok=False, error="email_taken")
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(
+            "/profile/edit",
+            data={"email": "taken@example.com"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 409
+    assert "already" in r.text.lower() or "taken" in r.text.lower()
+    # Form re-rendered with the submitted email so the user can fix it.
+    assert 'value="taken@example.com"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_invalid_email_renders_inline(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+        return auth_client.UpdateMeResult(ok=False, error="invalid_email")
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "bad"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 400
+    # The form is re-rendered, not redirected.
+    assert 'name="email"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_503_when_auth_unreachable(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthClientError("simulated outage")
+
+    monkeypatch.setattr(auth_client, "update_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "x@example.com"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 503
+    assert "unavailable" in r.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# GET /profile/agents
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_lists_agents(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    aid = str(uuid.uuid4())
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        items = [
+            auth_client.AgentItem(
+                agent_id=aid,
+                machine_name="laptop-1",
+                client_version="0.4.0",
+                created_at=datetime(2026, 4, 1, tzinfo=UTC),
+                last_seen_at=datetime(2026, 4, 25, tzinfo=UTC),
+                revoked_at=None,
+            ),
+            auth_client.AgentItem(
+                agent_id=str(uuid.uuid4()),
+                machine_name="dead-laptop",
+                client_version=None,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                last_seen_at=None,
+                revoked_at=datetime(2026, 4, 20, tzinfo=UTC),
+            ),
+        ]
+        return items, len(items)
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "laptop-1" in r.text
+    assert "0.4.0" in r.text
+    assert "dead-laptop" in r.text
+    # Revoke button only appears for active (non-revoked) agents.
+    assert f"/profile/agents/{aid}/revoke" in r.text
+
+
+def _stub_agent(aid: str | None = None) -> Any:
+    from datetime import UTC, datetime
+
+    from web_service import auth_client
+
+    return auth_client.AgentItem(
+        agent_id=aid or str(uuid.uuid4()),
+        machine_name="box",
+        client_version="0.4.0",
+        created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        last_seen_at=datetime(2026, 4, 25, tzinfo=UTC),
+        revoked_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_passes_pagination_to_auth_client(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        captured["limit"] = limit
+        captured["offset"] = offset
+        return [], 0
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=3&per_page=25")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert captured == {"limit": 25, "offset": 50}
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_renders_next_link_when_more_pages(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        return [_stub_agent(), _stub_agent()], 5
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=1&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "page=2" in r.text
+    assert "Next" in r.text
+    assert "page=0" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_renders_prev_link_on_later_page(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        # Last page: 1 of 3 items, fits on a single per_page=2 page-2.
+        return [_stub_agent()], 3
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=2&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "page=1" in r.text
+    assert "Previous" in r.text
+    assert "Next" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_rejects_per_page_above_ceiling(
+    app_client: httpx.AsyncClient,
+) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?per_page=500")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /profile/agents/{id}/revoke
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_redirects(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_revoke(_url: str, _token: str, agent_id: str) -> tuple[bool, str | None]:
+        captured["agent_id"] = agent_id
+        return True, None
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", fake_revoke)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    aid = str(uuid.uuid4())
+    try:
+        r = await app_client.post(f"/profile/agents/{aid}/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 303
+    assert r.headers["location"].endswith("/profile/agents")
+    assert captured["agent_id"] == aid
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_503_when_auth_unreachable(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthClientError("simulated outage")
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(f"/profile/agents/{uuid.uuid4()}/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_malformed_id_422_never_reaches_auth_client(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed agent_id should 422 at the FastAPI route boundary.
+
+    Regression: with `agent_id: str` it forwarded to auth, which 422'd,
+    which `revoke_my_agent` then mapped to AuthClientError → 503. Typing
+    the path param as uuid.UUID makes FastAPI reject the URL itself.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    called = False
+
+    async def fake_revoke(*_a: Any, **_kw: Any) -> tuple[bool, str | None]:
+        nonlocal called
+        called = True
+        return True, None
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", fake_revoke)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/agents/not-a-uuid/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 422
+    assert called is False
+
+
+# ---------------------------------------------------------------------------
+# AuthForbidden handling — auth's authoritative session check rejected the
+# call even though the JWT locally validated. Self-service routes redirect
+# to /login (session-expired flow) rather than render a 503.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_profile_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "get_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_get_profile_edit_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "get_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/edit")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "update_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "x@example.com"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "list_my_agents", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(f"/profile/agents/{uuid.uuid4()}/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+# ---------------------------------------------------------------------------
+# Same-session chain: email change → password change → success
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_email_change_then_password_change_chain_uses_new_email(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the round-4 P2: changing email then password in
+    the same session must succeed without bouncing the user to /login.
+
+    Before the fix, /profile/edit didn't rotate the session cookie,
+    so BrowserUser.email stayed pinned to the old value. The
+    subsequent /settings/password handler then called
+    auth_client.login(user.email, new_password) with the *old* email,
+    which 401'd, and the password-change flow fell through to /login
+    even though the password update had succeeded.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    # Stateful BrowserUser so step 2 sees the rotated identity that
+    # step 1 would have set via the cookie. Mirrors what a real
+    # cookie + JWT verifier would resolve on the next request.
+    state = {
+        "user": _deps.BrowserUser(
+            user_id=42,
+            email="old@example.com",
+            role="user",
+            must_change_password=False,
+            scope=None,
+            token="t1.old",
+        )
+    }
+
+    async def dep() -> _deps.BrowserUser:
+        return state["user"]
+
+    async def fake_update_me(_url: str, _token: str, email: str) -> auth_client.UpdateMeResult:
+        # Auth mints a new token for the rotated email claim; web
+        # sets the cookie. Mirror the post-rotation user state so the
+        # next request resolves the new identity.
+        state["user"] = _deps.BrowserUser(
+            user_id=42,
+            email=email,
+            role="user",
+            must_change_password=False,
+            scope=None,
+            token="t2.rotated",
+        )
+        return auth_client.UpdateMeResult(
+            ok=True, error=None, access_token="t2.rotated", expires_in=900
+        )
+
+    async def fake_change_password(
+        _url: str, _token: str, _cur: str, _new: str
+    ) -> tuple[bool, str | None]:
+        return True, None
+
+    captured: dict[str, Any] = {}
+
+    async def fake_login(_url: str, email: str, _password: str) -> auth_client.LoginResult:
+        captured["email"] = email
+        return auth_client.LoginResult(
+            access_token="t3.fresh",
+            refresh_token="r3",
+            expires_in=900,
+            must_change_password=False,
+        )
+
+    monkeypatch.setattr(auth_client, "update_me", fake_update_me)
+    monkeypatch.setattr(auth_client, "change_password", fake_change_password)
+    monkeypatch.setattr(auth_client, "login", fake_login)
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    _main.app.dependency_overrides[_deps.get_current_browser_user_any_scope] = dep
+    try:
+        r1 = await app_client.post("/profile/edit", data={"email": "new@example.com"})
+        assert r1.status_code == 303
+        assert r1.headers["location"].endswith("/profile")
+
+        r2 = await app_client.post(
+            "/settings/password",
+            data={
+                "current_password": "old-pw",
+                "new_password": "new-pw-1234",
+                "confirm_password": "new-pw-1234",
+            },
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r2.status_code == 303
+    assert r2.headers["location"].endswith("/dashboard")
+    # The post-password-change re-login must use the NEW email, not
+    # the stale one — that's what the cookie rotation buys us.
+    assert captured["email"] == "new@example.com"
