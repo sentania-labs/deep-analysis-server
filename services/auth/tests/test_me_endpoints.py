@@ -206,9 +206,9 @@ async def test_me_revoke_own_agent(client: Any, db_session: AsyncSession) -> Non
 
 
 @pytest.mark.asyncio
-async def test_me_revoke_someone_elses_agent_forbidden(
-    client: Any, db_session: AsyncSession
-) -> None:
+async def test_me_revoke_someone_elses_agent_404(client: Any, db_session: AsyncSession) -> None:
+    # Non-owners get 404 (not 403) so we don't leak the existence of
+    # other users' agent IDs through an enumeration probe.
     await _seed_user(db_session, email="owner@example.com", password="pw")
     await _seed_user(db_session, email="other@example.com", password="pw")
     owner_token = await _login(client, "owner@example.com", "pw")
@@ -216,8 +216,8 @@ async def test_me_revoke_someone_elses_agent_forbidden(
     other_agent = await _register_agent(client, other_token, machine_name="other-laptop")
 
     r = await client.post(f"/auth/me/agents/{other_agent}/revoke", headers=_h(owner_token))
-    assert r.status_code == 403
-    assert r.json() == {"detail": {"error": "forbidden"}}
+    assert r.status_code == 404
+    assert r.json() == {"detail": {"error": "agent_not_found"}}
 
 
 @pytest.mark.asyncio
@@ -227,6 +227,7 @@ async def test_me_revoke_unknown_agent_404(client: Any, db_session: AsyncSession
 
     r = await client.post(f"/auth/me/agents/{uuid.uuid4()}/revoke", headers=_h(token))
     assert r.status_code == 404
+    assert r.json() == {"detail": {"error": "agent_not_found"}}
 
 
 @pytest.mark.asyncio

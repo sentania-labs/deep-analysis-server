@@ -381,17 +381,14 @@ async def revoke_my_agent(
     agent = (
         await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent_id))
     ).scalar_one_or_none()
-    if agent is None:
+    # Treat "doesn't exist" and "exists but isn't yours" as the same
+    # 404 — the caller has no business knowing the difference, and a
+    # distinct 403 lets a probe enumerate live agent IDs across the
+    # tenant.
+    if agent is None or agent.user_id != caller.user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "agent_not_found"},
-        )
-    if agent.user_id != caller.user_id:
-        # Don't leak existence to non-owners; pure 403 keeps the
-        # admin/self-service split clean.
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": "forbidden"},
         )
     if agent.revoked_at is None:
         agent.revoked_at = datetime.now(UTC)
