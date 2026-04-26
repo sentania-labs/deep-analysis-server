@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Form, Request, Response, status
+from fastapi import Depends, FastAPI, Form, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -384,6 +384,10 @@ def _service_unavailable(request: Request, user: BrowserUser) -> Response:
 # ---------------------------------------------------------------------------
 
 
+_ADMIN_USERS_DEFAULT_PER_PAGE = 50
+_ADMIN_USERS_MAX_PER_PAGE = 200
+
+
 def _require_admin_or_403(request: Request, user: BrowserUser) -> Response | None:
     """Return a 403 response if `user` is not an admin, else None.
 
@@ -401,17 +405,44 @@ def _require_admin_or_403(request: Request, user: BrowserUser) -> Response | Non
     return None
 
 
+def _admin_forbidden(request: Request, user: BrowserUser) -> Response:
+    """Render the admin-denied page.
+
+    Used when auth's authoritative role/session check rejects the call
+    even though the JWT claim said ``admin`` (revoked session, demoted
+    role) — see :class:`auth_client.AuthForbidden`.
+    """
+    return templates.TemplateResponse(
+        request,
+        "admin_forbidden.html",
+        {"user": user},
+        status_code=status.HTTP_403_FORBIDDEN,
+    )
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 async def admin_users_list(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
+
+    offset = (page - 1) * per_page
     try:
-        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
+        users, total = await auth_client.admin_list_users(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
     except auth_client.AuthClientError:
         _log.exception("auth /admin/users call failed")
         return templates.TemplateResponse(
@@ -421,6 +452,8 @@ async def admin_users_list(
                 "user": user,
                 "users": [],
                 "total": 0,
+                "page": page,
+                "per_page": per_page,
                 "error": "Authentication service unavailable. Please try again.",
                 "result": None,
             },
@@ -433,6 +466,8 @@ async def admin_users_list(
             "user": user,
             "users": users,
             "total": total,
+            "page": page,
+            "per_page": per_page,
             "error": None,
             "result": None,
         },
@@ -445,6 +480,8 @@ def _render_admin_users_sync(
     users: list[Any],
     total: int,
     *,
+    page: int,
+    per_page: int,
     error: str | None,
     result: dict[str, Any] | None,
     status_code: int,
@@ -456,11 +493,37 @@ def _render_admin_users_sync(
             "user": user,
             "users": users,
             "total": total,
+            "page": page,
+            "per_page": per_page,
             "error": error,
             "result": result,
         },
         status_code=status_code,
     )
+
+
+async def _refetch_admin_users(
+    settings: WebSettings,
+    user: BrowserUser,
+    *,
+    page: int,
+    per_page: int,
+) -> tuple[list[Any], int]:
+    """Best-effort list refetch for inline-error rendering paths.
+
+    Swallows ``AuthForbidden`` and ``AuthClientError`` — by the time we
+    call this, the original mutation has already produced a status the
+    caller wants to surface; we just want list context underneath it.
+    """
+    try:
+        return await auth_client.admin_list_users(
+            settings.auth_service_url,
+            user.token,
+            limit=per_page,
+            offset=(page - 1) * per_page,
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        return [], 0
 
 
 @app.post("/admin/users/{user_id}/delete")
@@ -469,6 +532,11 @@ async def admin_user_delete(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -478,15 +546,14 @@ async def admin_user_delete(
         # Auth would also reject this, but short-circuit so we don't
         # waste a round trip — and so the inline error renders against
         # whatever list state the page already has.
-        try:
-            users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
-        except auth_client.AuthClientError:
-            users, total = [], 0
+        users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
         return _render_admin_users_sync(
             request,
             user,
             users,
             total,
+            page=page,
+            per_page=per_page,
             error="You cannot delete yourself.",
             result=None,
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -496,6 +563,9 @@ async def admin_user_delete(
         ok, err = await auth_client.admin_delete_user(
             settings.auth_service_url, user.token, user_id
         )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.delete.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
     except auth_client.AuthClientError:
         _log.exception("auth DELETE /admin/users call failed")
         return Response(
@@ -507,10 +577,7 @@ async def admin_user_delete(
         return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
 
     # Fetch the list again so the inline error has context.
-    try:
-        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
-    except auth_client.AuthClientError:
-        users, total = [], 0
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
 
     if err == "cannot_delete_self":
         message = "You cannot delete yourself."
@@ -526,7 +593,15 @@ async def admin_user_delete(
         code = status.HTTP_400_BAD_REQUEST
 
     return _render_admin_users_sync(
-        request, user, users, total, error=message, result=None, status_code=code
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        result=None,
+        status_code=code,
     )
 
 
@@ -536,6 +611,11 @@ async def admin_user_reset_password(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE),
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -545,6 +625,9 @@ async def admin_user_reset_password(
         temp, err = await auth_client.admin_reset_password(
             settings.auth_service_url, user.token, user_id
         )
+    except auth_client.AuthForbidden:
+        _log.info("admin.users.reset.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
     except auth_client.AuthClientError:
         _log.exception("auth /admin/users reset-password call failed")
         return Response(
@@ -552,15 +635,20 @@ async def admin_user_reset_password(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    try:
-        users, total = await auth_client.admin_list_users(settings.auth_service_url, user.token)
-    except auth_client.AuthClientError:
-        users, total = [], 0
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
 
     if temp is not None:
         result = {"user_id": user_id, "temporary_password": temp}
         return _render_admin_users_sync(
-            request, user, users, total, error=None, result=result, status_code=200
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error=None,
+            result=result,
+            status_code=200,
         )
 
     if err == "user_not_found":
@@ -569,6 +657,8 @@ async def admin_user_reset_password(
             user,
             users,
             total,
+            page=page,
+            per_page=per_page,
             error="That user no longer exists.",
             result=None,
             status_code=status.HTTP_404_NOT_FOUND,
@@ -578,6 +668,8 @@ async def admin_user_reset_password(
         user,
         users,
         total,
+        page=page,
+        per_page=per_page,
         error="Could not reset password.",
         result=None,
         status_code=status.HTTP_400_BAD_REQUEST,

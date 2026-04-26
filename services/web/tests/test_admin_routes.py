@@ -444,3 +444,192 @@ async def test_post_reset_password_forbidden_for_non_admin(
         _main.app.dependency_overrides.clear()
 
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# AuthForbidden handling — auth's authoritative role/session check rejected
+# the call even though the JWT claim said `admin` (revoked session, demoted
+# role). Should render the admin-denied page, not a 503.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_admin_users_admin_forbidden_renders_403(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated demotion")
+
+    monkeypatch.setattr(auth_client, "admin_list_users", boom)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/users")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 403
+    assert "503" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_delete_user_admin_forbidden_renders_403(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated demotion")
+
+    monkeypatch.setattr(auth_client, "admin_delete_user", boom)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/users/2/delete")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_post_reset_password_admin_forbidden_renders_403(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated demotion")
+
+    monkeypatch.setattr(auth_client, "admin_reset_password", boom)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/users/2/reset-password")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Pagination (?page=&per_page=)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_admin_users_passes_pagination_to_auth_client(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.UserItem], int]:
+        captured["limit"] = limit
+        captured["offset"] = offset
+        return [], 0
+
+    monkeypatch.setattr(auth_client, "admin_list_users", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/users?page=3&per_page=25")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert captured == {"limit": 25, "offset": 50}
+
+
+@pytest.mark.asyncio
+async def test_get_admin_users_renders_next_link_when_more_pages(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.UserItem], int]:
+        return _sample_users(), 250
+
+    monkeypatch.setattr(auth_client, "admin_list_users", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/users?page=1&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "page=2" in r.text
+    assert "Next" in r.text
+    # Page 1 has no previous link.
+    assert "page=0" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_admin_users_renders_prev_link_on_later_page(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.UserItem], int]:
+        # Last page: 3 of 3 items, fits on a single per_page=2 page-2.
+        return [_sample_users()[1]], 3
+
+    monkeypatch.setattr(auth_client, "admin_list_users", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/users?page=2&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # Prev link to page=1 with the same per_page.
+    assert "page=1" in r.text
+    assert "Previous" in r.text
+    # No next on the last page.
+    assert "Next" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_admin_users_rejects_per_page_above_ceiling(
+    app_client: httpx.AsyncClient,
+) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/users?per_page=500")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 422

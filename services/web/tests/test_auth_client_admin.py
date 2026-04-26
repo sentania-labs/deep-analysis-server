@@ -137,17 +137,33 @@ async def test_admin_list_users_raises_on_5xx(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_admin_list_users_raises_on_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-admin token reaching this helper is a programmer error.
+async def test_admin_list_users_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """403 means the caller's session/role no longer satisfies auth.
 
-    The web layer is supposed to reject non-admins before the call;
-    surfacing 403 as AuthClientError keeps the helper honest.
+    Web's claim-check can pass (JWT still says ``admin``) while auth's
+    DB check rejects (session revoked, role demoted). Surfacing this as
+    a distinct exception lets callers render an admin-denied page
+    instead of a misleading 503.
     """
     from web_service import auth_client
 
     _stub_get(monkeypatch, httpx.Response(403, json={"detail": {"error": "admin_required"}}))
 
-    with pytest.raises(auth_client.AuthClientError):
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.admin_list_users("http://auth:8000", "tok")
+
+
+@pytest.mark.asyncio
+async def test_admin_list_users_raises_auth_forbidden_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_get(monkeypatch, httpx.Response(401, json={"detail": "expired"}))
+
+    with pytest.raises(auth_client.AuthForbidden):
         await auth_client.admin_list_users("http://auth:8000", "tok")
 
 
@@ -227,6 +243,20 @@ async def test_admin_delete_user_translates_transport_error(
         await auth_client.admin_delete_user("http://auth:8000", "tok", 7)
 
 
+@pytest.mark.asyncio
+async def test_admin_delete_user_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_delete(
+        monkeypatch,
+        httpx.Response(403, json={"detail": {"error": "admin_required"}}),
+    )
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.admin_delete_user("http://auth:8000", "tok", 7)
+
+
 # ---------------------------------------------------------------------------
 # admin_reset_password
 # ---------------------------------------------------------------------------
@@ -275,4 +305,18 @@ async def test_admin_reset_password_translates_transport_error(
 
     monkeypatch.setattr(httpx.AsyncClient, "post", boom)
     with pytest.raises(auth_client.AuthClientError):
+        await auth_client.admin_reset_password("http://auth:8000", "tok", 7)
+
+
+@pytest.mark.asyncio
+async def test_admin_reset_password_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(403, json={"detail": {"error": "admin_required"}}),
+    )
+    with pytest.raises(auth_client.AuthForbidden):
         await auth_client.admin_reset_password("http://auth:8000", "tok", 7)

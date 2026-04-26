@@ -53,11 +53,20 @@ class UserItem:
 
 
 class AuthClientError(Exception):
-    """Auth call failed for reasons other than bad credentials."""
+    """Auth call failed for transport, 5xx, or unexpected non-2xx."""
 
 
 class InvalidCredentials(Exception):
     """Auth rejected the login as invalid credentials."""
+
+
+class AuthForbidden(Exception):
+    """Auth rejected the request as 401/403.
+
+    Distinct from :class:`AuthClientError` so callers can differentiate a
+    revoked/demoted admin (browser session JWT still carries an ``admin``
+    claim, but auth's DB no longer agrees) from a real backend outage.
+    """
 
 
 def _parse_dt(raw: Any) -> datetime | None:
@@ -259,9 +268,10 @@ async def admin_list_users(
 ) -> tuple[list[UserItem], int]:
     """Admin-only: list all users via the auth service.
 
-    Returns ``(items, total)``. Non-2xx responses (including 403 if the
-    caller's token isn't an admin) raise :class:`AuthClientError`; the
-    web layer is expected to gate admin routes before calling this.
+    Returns ``(items, total)``. Raises :class:`AuthForbidden` on 401/403
+    (caller's session/role no longer satisfies auth's check) and
+    :class:`AuthClientError` on transport / 5xx / other non-2xx so the
+    web layer can render an admin-denied page vs. a service-outage page.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -272,6 +282,8 @@ async def admin_list_users(
             )
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth /admin/users transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/users returned {resp.status_code}")
     if resp.status_code >= 400:
         raise AuthClientError(f"auth /admin/users returned {resp.status_code}: {resp.text}")
     data = resp.json()
@@ -311,6 +323,8 @@ async def admin_delete_user(
         raise AuthClientError(f"auth DELETE /admin/users transport error: {exc}") from exc
     if resp.status_code == 204:
         return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth DELETE /admin/users returned {resp.status_code}")
     if resp.status_code in (400, 404):
         try:
             detail = resp.json().get("detail") or {}
@@ -342,6 +356,8 @@ async def admin_reset_password(
         raise AuthClientError(f"auth /admin/users reset-password transport error: {exc}") from exc
     if resp.status_code == 200:
         return str(resp.json()["temporary_password"]), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/users reset-password returned {resp.status_code}")
     if resp.status_code == 404:
         return None, "user_not_found"
     raise AuthClientError(
