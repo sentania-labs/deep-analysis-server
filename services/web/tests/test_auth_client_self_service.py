@@ -172,8 +172,9 @@ async def test_list_my_agents_returns_items(monkeypatch: pytest.MonkeyPatch) -> 
         capture,
     )
 
-    items = await auth_client.list_my_agents("http://auth:8000", "tok", limit=10, offset=0)
+    items, total = await auth_client.list_my_agents("http://auth:8000", "tok", limit=10, offset=0)
     assert len(items) == 1
+    assert total == 1
     assert items[0].agent_id == agent_id
     assert items[0].machine_name == "laptop-1"
     assert items[0].client_version == "0.4.0"
@@ -189,8 +190,9 @@ async def test_list_my_agents_empty(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _stub_get(monkeypatch, httpx.Response(200, json={"agents": [], "total": 0}))
 
-    items = await auth_client.list_my_agents("http://auth:8000", "tok")
+    items, total = await auth_client.list_my_agents("http://auth:8000", "tok")
     assert items == []
+    assert total == 0
 
 
 @pytest.mark.asyncio

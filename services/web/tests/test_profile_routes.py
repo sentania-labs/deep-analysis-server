@@ -256,8 +256,8 @@ async def test_get_profile_agents_lists_agents(
 
     async def fake_list(
         _url: str, _token: str, limit: int = 50, offset: int = 0
-    ) -> list[auth_client.AgentItem]:
-        return [
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        items = [
             auth_client.AgentItem(
                 agent_id=aid,
                 machine_name="laptop-1",
@@ -275,6 +275,7 @@ async def test_get_profile_agents_lists_agents(
                 revoked_at=datetime(2026, 4, 20, tzinfo=UTC),
             ),
         ]
+        return items, len(items)
 
     monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
     dep, _ = _override_user()
@@ -290,6 +291,125 @@ async def test_get_profile_agents_lists_agents(
     assert "dead-laptop" in r.text
     # Revoke button only appears for active (non-revoked) agents.
     assert f"/profile/agents/{aid}/revoke" in r.text
+
+
+def _stub_agent(aid: str | None = None) -> Any:
+    from datetime import UTC, datetime
+
+    from web_service import auth_client
+
+    return auth_client.AgentItem(
+        agent_id=aid or str(uuid.uuid4()),
+        machine_name="box",
+        client_version="0.4.0",
+        created_at=datetime(2026, 4, 1, tzinfo=UTC),
+        last_seen_at=datetime(2026, 4, 25, tzinfo=UTC),
+        revoked_at=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_passes_pagination_to_auth_client(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        captured["limit"] = limit
+        captured["offset"] = offset
+        return [], 0
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=3&per_page=25")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert captured == {"limit": 25, "offset": 50}
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_renders_next_link_when_more_pages(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        return [_stub_agent(), _stub_agent()], 5
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=1&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "page=2" in r.text
+    assert "Next" in r.text
+    assert "page=0" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_renders_prev_link_on_later_page(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AgentItem], int]:
+        # Last page: 1 of 3 items, fits on a single per_page=2 page-2.
+        return [_stub_agent()], 3
+
+    monkeypatch.setattr(auth_client, "list_my_agents", fake_list)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?page=2&per_page=2")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "page=1" in r.text
+    assert "Previous" in r.text
+    assert "Next" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_rejects_per_page_above_ceiling(
+    app_client: httpx.AsyncClient,
+) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents?per_page=500")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 422
 
 
 # ---------------------------------------------------------------------------

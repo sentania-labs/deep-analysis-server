@@ -180,7 +180,13 @@ async def list_my_agents(
     token: str,
     limit: int = 50,
     offset: int = 0,
-) -> list[AgentItem]:
+) -> tuple[list[AgentItem], int]:
+    """List the caller's own agents.
+
+    Returns ``(items, total)`` so the web layer can render pagination
+    controls. ``total`` is the unfiltered count of the caller's agents
+    (matches the auth-side ``AgentListView.total``).
+    """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -195,7 +201,7 @@ async def list_my_agents(
     if resp.status_code >= 400:
         raise AuthClientError(f"auth /me/agents returned {resp.status_code}: {resp.text}")
     data = resp.json()
-    return [
+    items = [
         AgentItem(
             agent_id=str(a["agent_id"]),
             machine_name=str(a["machine_name"]),
@@ -206,6 +212,7 @@ async def list_my_agents(
         )
         for a in data.get("agents", [])
     ]
+    return items, int(data.get("total", len(items)))
 
 
 async def update_me(

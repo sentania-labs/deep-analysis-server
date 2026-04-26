@@ -339,14 +339,28 @@ async def profile_edit_submit(
     )
 
 
+_PROFILE_AGENTS_DEFAULT_PER_PAGE = 50
+# Matches auth-side `_ME_AGENTS_MAX_LIMIT` so per_page above this 422s here
+# rather than getting silently clamped at the auth boundary.
+_PROFILE_AGENTS_MAX_PER_PAGE = 200
+
+
 @app.get("/profile/agents", response_class=HTMLResponse)
 async def profile_agents(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_PROFILE_AGENTS_MAX_PER_PAGE),
+    ] = _PROFILE_AGENTS_DEFAULT_PER_PAGE,
 ) -> Response:
+    offset = (page - 1) * per_page
     try:
-        agents = await auth_client.list_my_agents(settings.auth_service_url, user.token)
+        agents, total = await auth_client.list_my_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
     except auth_client.AuthForbidden:
         _log.info("profile.agents.list.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -356,7 +370,13 @@ async def profile_agents(
     return templates.TemplateResponse(
         request,
         "profile_agents.html",
-        {"user": user, "agents": agents},
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+        },
     )
 
 
