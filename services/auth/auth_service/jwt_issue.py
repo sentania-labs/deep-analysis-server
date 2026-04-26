@@ -33,6 +33,7 @@ class JWTIssuer:
         session_id: uuid.UUID,
         scope: str | None = None,
         override_ttl_seconds: int | None = None,
+        email: str | None = None,
     ) -> str:
         now = datetime.now(UTC)
         ttl = override_ttl_seconds if override_ttl_seconds is not None else self._access_ttl
@@ -47,6 +48,8 @@ class JWTIssuer:
         }
         if scope is not None:
             claims["scope"] = scope
+        if email is not None:
+            claims["email"] = email
         return jwt.encode(claims, self._private_key, algorithm="RS256")
 
 
@@ -72,9 +75,15 @@ def issue_access_token(
     session_id: uuid.UUID,
     scope: str | None = None,
     override_ttl_seconds: int | None = None,
+    email: str | None = None,
 ) -> str:
     return get_issuer().issue_access_token(
-        user_id, role, session_id, scope=scope, override_ttl_seconds=override_ttl_seconds
+        user_id,
+        role,
+        session_id,
+        scope=scope,
+        override_ttl_seconds=override_ttl_seconds,
+        email=email,
     )
 
 

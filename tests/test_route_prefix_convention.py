@@ -16,6 +16,11 @@ Allowed paths per service:
 Auth additionally owns ``/admin/*`` until W6 (see ``gateway/Caddyfile``
 and the temp-route note from commit fac34b2). Remove the carve-out
 when the web service takes over /admin.
+
+The web service owns the Caddy catch-all, so end-user-facing browser
+routes (``/login``, ``/logout``, ``/dashboard``, ``/settings/*``)
+intentionally live at the top level — they're user-typed URLs, not
+service-namespaced API routes.
 """
 
 from __future__ import annotations
@@ -37,6 +42,18 @@ _SERVICES: dict[str, tuple[str, ...]] = {
 }
 
 _INFRA_PATHS = frozenset({"/healthz", "/metrics"})
+
+# Web-service browser routes that Caddy routes via the catch-all — they
+# sit outside the /web/ namespace on purpose because they are URLs a
+# human types or lands on, not service API paths.
+_WEB_BROWSER_PATHS = frozenset(
+    {
+        "/login",
+        "/logout",
+        "/dashboard",
+        "/settings/password",
+    }
+)
 
 
 def _ensure_import_env() -> None:
@@ -70,6 +87,8 @@ def test_all_routes_are_prefixed(service: str) -> None:
             continue
         path = route.path
         if path in _INFRA_PATHS:
+            continue
+        if service == "web" and path in _WEB_BROWSER_PATHS:
             continue
         if any(path.startswith(p) for p in allowed_prefixes):
             continue

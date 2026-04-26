@@ -109,6 +109,8 @@ jobs:
         run: uv run pytest services/auth/tests/
       - name: pytest services/ingest/tests
         run: uv run pytest services/ingest/tests/
+      - name: pytest services/web/tests
+        run: uv run pytest services/web/tests/
 
   docker-build:
     name: docker-build (${{ matrix.service }})
@@ -200,6 +202,94 @@ jobs:
             exit 1
           fi
           echo "PASS: all route prefix checks passed"
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: docker compose down
+        if: always()
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml down -v
+
+  smoke-ui:
+    name: smoke-ui
+    runs-on: ubuntu-latest
+    needs: [compose-smoke]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    env:
+      DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: admin@ci.local
+      DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: CISmokeAdminPass2026!
+      DATABASE_URL: postgresql+psycopg://da:changeme@localhost:5432/deep_analysis
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        run: uv sync --all-packages --dev
+      - name: Map deepanalysis.local to loopback
+        run: echo "127.0.0.1 deepanalysis.local" | sudo tee -a /etc/hosts
+      - name: Seed .env for compose (with bootstrap admin)
+        run: |
+          cp .env.example .env
+          echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
+          echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
+          echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
+          echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" >> .env
+          echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
+      - name: Generate JWT keypair for CI
+        run: |
+          mkdir -p /tmp/ci-jwt-keys
+          uv run python -m auth_service.keygen --out /tmp/ci-jwt-keys
+          chmod 644 /tmp/ci-jwt-keys/jwt_public.pem
+          chmod 600 /tmp/ci-jwt-keys/jwt_private.pem
+      - name: Start postgres only (pre-migration)
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build postgres
+      - name: Wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U da -d deep_analysis > /dev/null 2>&1; then
+              echo "postgres healthy after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "postgres never became healthy"
+          docker compose ps
+          exit 1
+      - name: alembic upgrade head (root)
+        run: uv run alembic upgrade head
+      - name: alembic upgrade head (auth)
+        run: uv run alembic -c services/auth/alembic.ini upgrade head
+      - name: alembic upgrade head (ingest)
+        run: uv run alembic -c services/ingest/alembic.ini upgrade head
+      - name: docker compose up (full stack)
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
+      - name: Wait for gateway + auth bootstrap
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sk -o /dev/null -w "%{http_code}" https://deepanalysis.local/health | grep -q 200; then
+              break
+            fi
+            sleep 2
+          done
+          # Bootstrap admin is created during the auth container's
+          # lifespan startup — give it a few extra seconds after the
+          # gateway answers to finish the DB write.
+          for i in $(seq 1 30); do
+            code=$(curl -sk -o /dev/null -w "%{http_code}" \
+              -X POST https://deepanalysis.local/auth/login \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}")
+            if [ "$code" = "200" ]; then
+              echo "bootstrap admin ready after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "bootstrap admin never came online"
+          docker compose ps
+          docker compose logs --tail=200
+          exit 1
+      - name: Run UI smoke
+        run: bash ci/smoke_ui.sh https://deepanalysis.local
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --tail=200

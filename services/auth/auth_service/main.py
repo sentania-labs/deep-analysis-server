@@ -164,10 +164,11 @@ async def login(
             session_row.id,
             scope=PASSWORD_CHANGE_SCOPE,
             override_ttl_seconds=settings.password_change_token_ttl_seconds,
+            email=user.email,
         )
         expires_in = settings.password_change_token_ttl_seconds
     else:
-        access = issue_access_token(user.id, user.role, session_row.id)
+        access = issue_access_token(user.id, user.role, session_row.id, email=user.email)
         expires_in = settings.access_token_ttl_seconds
 
     return TokenResponse(
@@ -218,7 +219,7 @@ async def refresh(
     await db.commit()
     await db.refresh(new_session)
 
-    access = issue_access_token(user.id, user.role, new_session.id)
+    access = issue_access_token(user.id, user.role, new_session.id, email=user.email)
     return TokenResponse(
         access_token=access,
         refresh_token=new_refresh,

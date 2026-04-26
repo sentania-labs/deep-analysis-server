@@ -1,5 +1,14 @@
-# ci/docker-compose.ci.yml — CI override for compose-smoke
+# ci/docker-compose.ci.yml — CI override for compose-smoke and smoke-ui.
+#
 # Switches the gateway from ACME (needs public DNS) to tls internal for CI.
+#
+# JWT key handling for smoke-ui:
+# The auth service generates the RS256 keypair at container startup if the
+# private key is absent. In CI, we generate the keypair on the host before
+# docker compose up and bind-mount the key directory into every service that
+# needs JWT access (auth: both keys; all others: public key only).
+# The host-side path used in CI workflows is /tmp/ci-jwt-keys/ — set via
+# DA_JWT_KEYS_DIR in the CI environment (defaults to /tmp/ci-jwt-keys).
 services:
   gateway:
     environment:
@@ -7,3 +16,34 @@ services:
       DEEP_ANALYSIS_ACME_EMAIL: ""  # not used with tls internal
     volumes:
       - ./ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro
+
+  auth:
+    environment:
+      DA_JWT_PRIVATE_KEY_PATH: /data/secrets/jwt_private.pem
+      DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
+    volumes:
+      - /tmp/ci-jwt-keys:/data/secrets:ro
+
+  ingest:
+    environment:
+      DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
+    volumes:
+      - /tmp/ci-jwt-keys:/data/secrets:ro
+
+  web:
+    environment:
+      DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
+    volumes:
+      - /tmp/ci-jwt-keys:/data/secrets:ro
+
+  analytics:
+    environment:
+      DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
+    volumes:
+      - /tmp/ci-jwt-keys:/data/secrets:ro
+
+  parser:
+    environment:
+      DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
+    volumes:
+      - /tmp/ci-jwt-keys:/data/secrets:ro
