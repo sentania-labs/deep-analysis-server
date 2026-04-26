@@ -131,3 +131,49 @@ async def test_post_password_change_returns_503_when_auth_unreachable(
     # Password template marker — confirms the failure rendered the right page.
     assert 'name="new_password"' in r.text
     assert 'action="/settings/password"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_password_change_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AuthForbidden from change_password (revoked session, current password
+    rejected) bounces the caller to /login rather than rendering a 503 — the
+    cookie's no longer valid at auth, so re-auth is the only path forward."""
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def raise_forbidden(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "change_password", raise_forbidden)
+
+    fake_user = _deps.BrowserUser(
+        user_id=1,
+        email="u@example.com",
+        role="user",
+        must_change_password=True,
+        scope=_deps.PASSWORD_CHANGE_SCOPE,
+        token="fake-token",
+    )
+
+    async def fake_user_dep() -> _deps.BrowserUser:
+        return fake_user
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user_any_scope] = fake_user_dep
+    try:
+        r = await app_client.post(
+            "/settings/password",
+            data={
+                "current_password": "old-pw",
+                "new_password": "new-pw-9876",
+                "confirm_password": "new-pw-9876",
+            },
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"

@@ -347,3 +347,130 @@ async def test_post_revoke_my_agent_503_when_auth_unreachable(
         _main.app.dependency_overrides.clear()
 
     assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# AuthForbidden handling — auth's authoritative session check rejected the
+# call even though the JWT locally validated. Self-service routes redirect
+# to /login (session-expired flow) rather than render a 503.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_profile_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "get_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_get_profile_edit_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "get_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/edit")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_post_profile_edit_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "update_me", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/profile/edit", data={"email": "x@example.com"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_get_profile_agents_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "list_my_agents", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/profile/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_my_agent_redirects_to_login_on_auth_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("simulated session revocation")
+
+    monkeypatch.setattr(auth_client, "revoke_my_agent", boom)
+    dep, _ = _override_user()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(f"/profile/agents/{uuid.uuid4()}/revoke")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"

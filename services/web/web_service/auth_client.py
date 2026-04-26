@@ -108,9 +108,11 @@ async def change_password(
 ) -> tuple[bool, str | None]:
     """Try to change the password. Returns (ok, error_code).
 
-    On 204, returns (True, None). On a validation/auth failure, returns
+    On 204, returns (True, None). On a 400 validation failure, returns
     (False, <error-code-from-auth>) so the caller can render an inline
-    message.
+    message. 401/403 raise :class:`AuthForbidden` — the session is no
+    longer accepted by auth (revoked, expired, or current password
+    rejected) and the caller must re-authenticate.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -123,7 +125,9 @@ async def change_password(
         raise AuthClientError(f"auth /password/change transport error: {exc}") from exc
     if resp.status_code == 204:
         return True, None
-    if resp.status_code in (400, 401):
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /password/change returned {resp.status_code}")
+    if resp.status_code == 400:
         try:
             detail = resp.json().get("detail") or {}
             code = detail.get("error") if isinstance(detail, dict) else None
@@ -158,6 +162,8 @@ async def get_me(base_url: str, token: str) -> MeResult:
             )
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth /me transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me returned {resp.status_code}")
     if resp.status_code >= 400:
         raise AuthClientError(f"auth /me returned {resp.status_code}: {resp.text}")
     data = resp.json()
@@ -184,6 +190,8 @@ async def list_my_agents(
             )
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth /me/agents transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me/agents returned {resp.status_code}")
     if resp.status_code >= 400:
         raise AuthClientError(f"auth /me/agents returned {resp.status_code}: {resp.text}")
     data = resp.json()
@@ -210,7 +218,10 @@ async def update_me(
     Maps known auth responses to UI-stable error codes:
       - 200 → (True, None)
       - 409 (email_already_exists) → (False, "email_taken")
-      - other 4xx → (False, <auth-error-code-or-"invalid_email">)
+      - 400/422 → (False, "invalid_email")
+
+    401/403 raise :class:`AuthForbidden`; 5xx / transport raise
+    :class:`AuthClientError`.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -223,12 +234,12 @@ async def update_me(
         raise AuthClientError(f"auth /me PATCH transport error: {exc}") from exc
     if resp.status_code == 200:
         return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me PATCH returned {resp.status_code}")
     if resp.status_code == 409:
         return False, "email_taken"
     if resp.status_code in (400, 422):
         return False, "invalid_email"
-    if resp.status_code in (401, 403):
-        return False, "unauthorized"
     raise AuthClientError(f"auth /me PATCH returned {resp.status_code}: {resp.text}")
 
 
@@ -240,8 +251,10 @@ async def revoke_my_agent(
     """Try to revoke one of the caller's own agents. Returns (ok, error_code).
 
     - 204 → (True, None)
-    - 403 → (False, "forbidden")
     - 404 → (False, "not_found")
+
+    401/403 raise :class:`AuthForbidden`; 5xx / transport raise
+    :class:`AuthClientError`.
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -253,8 +266,8 @@ async def revoke_my_agent(
         raise AuthClientError(f"auth /me/agents revoke transport error: {exc}") from exc
     if resp.status_code == 204:
         return True, None
-    if resp.status_code == 403:
-        return False, "forbidden"
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /me/agents revoke returned {resp.status_code}")
     if resp.status_code == 404:
         return False, "not_found"
     raise AuthClientError(f"auth /me/agents revoke returned {resp.status_code}: {resp.text}")

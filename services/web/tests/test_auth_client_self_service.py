@@ -112,6 +112,32 @@ async def test_get_me_raises_on_5xx(monkeypatch: pytest.MonkeyPatch) -> None:
         await auth_client.get_me("http://auth:8000", "tok")
 
 
+@pytest.mark.asyncio
+async def test_get_me_raises_auth_forbidden_on_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    """401 means the caller's session is no longer accepted by auth.
+
+    Web's local JWT verifier passed (signature/exp ok) but auth's
+    authoritative session check rejected. Surfacing this as a distinct
+    exception lets callers redirect to /login rather than a 503.
+    """
+    from web_service import auth_client
+
+    _stub_get(monkeypatch, httpx.Response(401, json={"detail": {"error": "unauthorized"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.get_me("http://auth:8000", "tok")
+
+
+@pytest.mark.asyncio
+async def test_get_me_raises_auth_forbidden_on_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    from web_service import auth_client
+
+    _stub_get(monkeypatch, httpx.Response(403, json={"detail": {"error": "forbidden"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.get_me("http://auth:8000", "tok")
+
+
 # ---------------------------------------------------------------------------
 # list_my_agents
 # ---------------------------------------------------------------------------
@@ -179,6 +205,30 @@ async def test_list_my_agents_translates_transport_error(
     monkeypatch.setattr(httpx.AsyncClient, "get", boom)
 
     with pytest.raises(auth_client.AuthClientError):
+        await auth_client.list_my_agents("http://auth:8000", "tok")
+
+
+@pytest.mark.asyncio
+async def test_list_my_agents_raises_auth_forbidden_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_get(monkeypatch, httpx.Response(401, json={"detail": {"error": "unauthorized"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.list_my_agents("http://auth:8000", "tok")
+
+
+@pytest.mark.asyncio
+async def test_list_my_agents_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_get(monkeypatch, httpx.Response(403, json={"detail": {"error": "forbidden"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
         await auth_client.list_my_agents("http://auth:8000", "tok")
 
 
@@ -258,6 +308,30 @@ async def test_update_me_translates_transport_error(monkeypatch: pytest.MonkeyPa
         await auth_client.update_me("http://auth:8000", "tok", "x@example.com")
 
 
+@pytest.mark.asyncio
+async def test_update_me_raises_auth_forbidden_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_patch(monkeypatch, httpx.Response(401, json={"detail": {"error": "unauthorized"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.update_me("http://auth:8000", "tok", "x@example.com")
+
+
+@pytest.mark.asyncio
+async def test_update_me_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_patch(monkeypatch, httpx.Response(403, json={"detail": {"error": "forbidden"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.update_me("http://auth:8000", "tok", "x@example.com")
+
+
 # ---------------------------------------------------------------------------
 # revoke_my_agent
 # ---------------------------------------------------------------------------
@@ -279,7 +353,9 @@ async def test_revoke_my_agent_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_revoke_my_agent_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_revoke_my_agent_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from web_service import auth_client
 
     _stub_post(
@@ -287,9 +363,23 @@ async def test_revoke_my_agent_forbidden(monkeypatch: pytest.MonkeyPatch) -> Non
         httpx.Response(403, json={"detail": {"error": "forbidden"}}),
     )
 
-    ok, err = await auth_client.revoke_my_agent("http://auth:8000", "tok", str(uuid.uuid4()))
-    assert ok is False
-    assert err == "forbidden"
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.revoke_my_agent("http://auth:8000", "tok", str(uuid.uuid4()))
+
+
+@pytest.mark.asyncio
+async def test_revoke_my_agent_raises_auth_forbidden_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(401, json={"detail": {"error": "unauthorized"}}),
+    )
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.revoke_my_agent("http://auth:8000", "tok", str(uuid.uuid4()))
 
 
 @pytest.mark.asyncio
@@ -319,3 +409,53 @@ async def test_revoke_my_agent_translates_transport_error(
 
     with pytest.raises(auth_client.AuthClientError):
         await auth_client.revoke_my_agent("http://auth:8000", "tok", str(uuid.uuid4()))
+
+
+# ---------------------------------------------------------------------------
+# change_password
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_change_password_raises_auth_forbidden_on_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """401 from /auth/password/change means auth no longer accepts the
+    session (revoked, expired, or current password rejected). Callers
+    redirect to /login rather than rendering an inline form error."""
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(401, json={"detail": {"error": "invalid_credentials"}}),
+    )
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.change_password("http://auth:8000", "tok", "old-pw", "new-pw-9876")
+
+
+@pytest.mark.asyncio
+async def test_change_password_raises_auth_forbidden_on_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_post(monkeypatch, httpx.Response(403, json={"detail": {"error": "forbidden"}}))
+
+    with pytest.raises(auth_client.AuthForbidden):
+        await auth_client.change_password("http://auth:8000", "tok", "old-pw", "new-pw-9876")
+
+
+@pytest.mark.asyncio
+async def test_change_password_weak_password_returns_business_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """400 weak_password stays a tuple-return business error so the
+    caller can re-render the form inline."""
+    from web_service import auth_client
+
+    _stub_post(monkeypatch, httpx.Response(400, json={"detail": {"error": "weak_password"}}))
+
+    ok, err = await auth_client.change_password("http://auth:8000", "tok", "old-pw", "abc")
+    assert ok is False
+    assert err == "weak_password"

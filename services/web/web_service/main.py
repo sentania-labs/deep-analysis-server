@@ -208,6 +208,9 @@ async def password_submit(
             current_password,
             new_password,
         )
+    except auth_client.AuthForbidden:
+        _log.info("password.change.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth service change_password call failed")
         return _render_error(
@@ -246,6 +249,9 @@ async def profile(
 ) -> Response:
     try:
         me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.get_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me call failed")
         return _service_unavailable(request, user)
@@ -264,6 +270,9 @@ async def profile_edit_form(
 ) -> Response:
     try:
         me = await auth_client.get_me(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.edit.get_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me call failed")
         return _service_unavailable(request, user)
@@ -296,6 +305,9 @@ async def profile_edit_submit(
 
     try:
         ok, err = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
+    except auth_client.AuthForbidden:
+        _log.info("profile.edit.update_me.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth PATCH /me call failed")
         return templates.TemplateResponse(
@@ -335,6 +347,9 @@ async def profile_agents(
 ) -> Response:
     try:
         agents = await auth_client.list_my_agents(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.agents.list.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me/agents call failed")
         return _service_unavailable(request, user)
@@ -353,13 +368,16 @@ async def profile_agents_revoke(
 ) -> Response:
     try:
         ok, err = await auth_client.revoke_my_agent(settings.auth_service_url, user.token, agent_id)
+    except auth_client.AuthForbidden:
+        _log.info("profile.agents.revoke.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me/agents revoke call failed")
         return Response(
             content="Authentication service unavailable. Please try again.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    # 403/404 still bounce to the list — listing will reflect current
+    # 404 still bounces to the list — listing will reflect current
     # state (or omit the agent), which is the user-facing truth.
     if not ok:
         _log.info("profile.agent_revoke.rejected", extra={"err": err})
