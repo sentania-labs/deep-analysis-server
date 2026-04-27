@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service import models as _models  # noqa: F401 — ensure Base.metadata loaded
@@ -652,13 +653,26 @@ async def register(
     )
     db.add(user)
     # Flush to get user.id before stamping the invite consumption.
-    await db.flush()
+    # The pre-insert SELECT above is the happy-path check, but a second
+    # registration racing into the same email between SELECT and INSERT
+    # will land on the unique index. Catch that and translate to 409.
+    try:
+        await db.flush()
 
-    if invite is not None:
-        invite.used_at = datetime.now(UTC)
-        invite.used_by_user_id = user.id
+        if invite is not None:
+            invite.used_at = datetime.now(UTC)
+            invite.used_by_user_id = user.id
 
-    await db.commit()
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        msg = str(exc.orig if exc.orig is not None else exc).lower()
+        if "ix_users_email_lower" in msg or ("unique" in msg and "email" in msg):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "email_already_taken"},
+            ) from exc
+        raise
     await db.refresh(user)
 
     _log.info("auth.register.success", extra={"user_id": user.id, "mode": mode})

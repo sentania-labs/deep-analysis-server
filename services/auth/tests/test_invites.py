@@ -624,6 +624,52 @@ async def test_register_email_uniqueness(client: Any, db_session: AsyncSession) 
 
 
 @pytest.mark.asyncio
+async def test_register_email_race_returns_409(
+    client: Any,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulate a race where two registrations both pass the pre-insert
+    SELECT for the same email but only one wins the unique index. The
+    second must surface as 409 email_already_taken (not a 500)."""
+    from auth_service import main as _main
+
+    await _set_mode(db_session, "open")
+    # Seed the row that the racing INSERT will collide with — but
+    # patch the pre-insert SELECT to return None so the handler
+    # *thinks* the email is free and proceeds to flush.
+    await _seed_user(db_session, email="race@example.com", role="user")
+
+    real_execute = AsyncSession.execute
+
+    async def fake_execute(self: AsyncSession, statement: Any, *a: Any, **kw: Any) -> Any:
+        result = await real_execute(self, statement, *a, **kw)
+        compiled = str(getattr(statement, "compile", lambda: statement)()).lower()
+        if "from auth.users" in compiled and "lower(auth.users.email)" in compiled:
+
+            class _Empty:
+                def scalar_one_or_none(self) -> None:
+                    return None
+
+            return _Empty()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", fake_execute)
+
+    r = await client.post(
+        "/auth/register",
+        json={"email": "race@example.com", "password": "longenoughpw!!"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json() == {"detail": {"error": "email_already_taken"}}
+
+    # The handler must not have referenced _main here at runtime, but
+    # importing it forces the auth app module to be loaded for
+    # monkeypatch's scope check parity with other tests.
+    _ = _main
+
+
+@pytest.mark.asyncio
 async def test_register_password_complexity(client: Any, db_session: AsyncSession) -> None:
     await _set_mode(db_session, "open")
     r = await client.post(
