@@ -42,6 +42,18 @@ class AgentItem:
 
 
 @dataclass
+class AdminAgentItem:
+    agent_id: str
+    user_id: int
+    user_email: str
+    machine_name: str
+    client_version: str | None
+    created_at: datetime | None
+    last_seen_at: datetime | None
+    revoked_at: datetime | None
+
+
+@dataclass
 class UserItem:
     id: int
     email: str
@@ -375,6 +387,79 @@ async def admin_delete_user(
             code = None
         return False, code or "delete_failed"
     raise AuthClientError(f"auth DELETE /admin/users returned {resp.status_code}: {resp.text}")
+
+
+async def admin_list_agents(
+    base_url: str,
+    token: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[AdminAgentItem], int]:
+    """Admin-only: list every agent across every user.
+
+    Mirrors :func:`admin_list_users`: ``(items, total)`` for pagination,
+    :class:`AuthForbidden` on 401/403 (revoked/demoted admin) and
+    :class:`AuthClientError` on transport / 5xx so the web layer can
+    distinguish the admin-denied page from a service-outage page.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/agents",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": limit, "offset": offset},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/agents transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/agents returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth /admin/agents returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    items = [
+        AdminAgentItem(
+            agent_id=str(a["agent_id"]),
+            user_id=int(a["user_id"]),
+            user_email=str(a["user_email"]),
+            machine_name=str(a["machine_name"]),
+            client_version=a.get("client_version"),
+            created_at=_parse_dt(a.get("created_at")),
+            last_seen_at=_parse_dt(a.get("last_seen_at")),
+            revoked_at=_parse_dt(a.get("revoked_at")),
+        )
+        for a in data.get("agents", [])
+    ]
+    return items, int(data.get("total", len(items)))
+
+
+async def admin_revoke_agent(
+    base_url: str,
+    token: str,
+    agent_id: str,
+) -> tuple[bool, str | None]:
+    """Admin-only: revoke any agent regardless of ownership.
+
+    - 204 → (True, None)
+    - 404 → (False, "agent_not_found")
+
+    401/403 raise :class:`AuthForbidden`; transport / 5xx raise
+    :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/agents/{agent_id}/revoke",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/agents revoke transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/agents revoke returned {resp.status_code}")
+    if resp.status_code == 404:
+        return False, "agent_not_found"
+    raise AuthClientError(f"auth /admin/agents revoke returned {resp.status_code}: {resp.text}")
 
 
 async def admin_reset_password(

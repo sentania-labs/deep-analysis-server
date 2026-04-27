@@ -786,6 +786,171 @@ async def admin_user_reset_password(
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin agents — W3.6.2 (cross-user view + revoke-any)
+# ---------------------------------------------------------------------------
+
+
+_ADMIN_AGENTS_DEFAULT_PER_PAGE = 50
+_ADMIN_AGENTS_MAX_PER_PAGE = 200
+
+
+async def _refetch_admin_agents(
+    settings: WebSettings,
+    user: BrowserUser,
+    *,
+    page: int,
+    per_page: int,
+) -> tuple[list[Any], int]:
+    """Best-effort agents list refetch for inline-error rendering.
+
+    Mirrors :func:`_refetch_admin_users`: swallows AuthForbidden /
+    AuthClientError so the caller can surface the original mutation
+    status against a (possibly empty) list view.
+    """
+    try:
+        return await auth_client.admin_list_agents(
+            settings.auth_service_url,
+            user.token,
+            limit=per_page,
+            offset=(page - 1) * per_page,
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        return [], 0
+
+
+def _render_admin_agents_sync(
+    request: Request,
+    user: BrowserUser,
+    agents: list[Any],
+    total: int,
+    *,
+    page: int,
+    per_page: int,
+    error: str | None,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+@app.get("/admin/agents", response_class=HTMLResponse)
+async def admin_agents_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    offset = (page - 1) * per_page
+    try:
+        agents, total = await auth_client.admin_list_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.agents.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/agents call failed")
+        return _render_admin_agents_sync(
+            request,
+            user,
+            [],
+            0,
+            page=page,
+            per_page=per_page,
+            error="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error=None,
+        status_code=200,
+    )
+
+
+@app.post("/admin/agents/{agent_id}/revoke")
+async def admin_agent_revoke(
+    # Typed UUID rejects malformed IDs at the route boundary with 422
+    # so they never round-trip and surface as a misclassified 503.
+    agent_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, err = await auth_client.admin_revoke_agent(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.agents.revoke.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/agents revoke call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(
+            url=f"/admin/agents?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    # 404 — agent gone in the meantime. Surface inline so the operator
+    # sees the page they expected, with a note that the row is stale.
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if err == "agent_not_found":
+        message = "That agent no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not revoke agent."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        status_code=code,
+    )
+
+
 @app.post("/logout")
 async def logout(
     request: Request,

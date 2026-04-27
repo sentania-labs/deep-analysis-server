@@ -283,6 +283,54 @@ for u in d.get("users", []):
     else
         check_contains "Seeded testuser@local via auth admin API" "ok" "ok (id=$TEST_USER_ID)"
 
+        # ------------------------------------------------------------------
+        # W3.6.2 — /admin/agents reachable, expected columns, revoke action.
+        # We check this before deleting testuser@local so the agents view
+        # has at least the migrated agent row to render against.
+        # ------------------------------------------------------------------
+        agents_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/agents")
+        agents_status=$(echo "$agents_out" | tail -n1)
+        agents_html=$(echo "$agents_out" | sed '$d')
+        check "GET /admin/agents (admin cookie) → 200" "200" "$agents_status"
+        check_contains "GET /admin/agents heading" "Agents" "$agents_html"
+        check_contains "GET /admin/agents has Owner column" "Owner" "$agents_html"
+        check_contains "GET /admin/agents has Machine column" "Machine" "$agents_html"
+        check_contains "GET /admin/agents has Last seen column" "Last seen" "$agents_html"
+
+        # /admin/agents must be admin-only — unauth bounces to /login.
+        noauth_agents=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/agents")
+        noauth_agents_status=$(echo "$noauth_agents" | head -n1 | awk '{print $2}')
+        check "GET /admin/agents (no cookie) → 302" "302" "$noauth_agents_status"
+        check_contains "/admin/agents redirect targets /login" "/login" "$noauth_agents"
+
+        # End-to-end revoke-any: capture the first active agent_id from
+        # the list view, POST revoke through the web layer, then assert
+        # the row's revoke action is gone on refresh. Skips silently if
+        # there are no agents in the rendered list (smoke runs against
+        # a freshly migrated DB may have zero agents).
+        AGENT_ID=$(echo "$agents_html" \
+            | grep -oE '/admin/agents/[0-9a-f-]{36}/revoke' \
+            | head -n1 \
+            | sed -E 's|/admin/agents/([0-9a-f-]+)/revoke|\1|')
+        if [ -n "$AGENT_ID" ]; then
+            revoke_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
+                -X POST "$BASE_URL/admin/agents/${AGENT_ID}/revoke")
+            revoke_status=$(echo "$revoke_head" | head -n1 | awk '{print $2}')
+            check "POST /admin/agents/{id}/revoke → 303" "303" "$revoke_status"
+            check_contains "Revoke redirects back to /admin/agents" \
+                "/admin/agents" "$revoke_head"
+
+            post_revoke_html=$(curl -sk -b "$PROFILE_COOKIE" "$BASE_URL/admin/agents")
+            if echo "$post_revoke_html" | grep -q "/admin/agents/${AGENT_ID}/revoke"; then
+                check "Revoke action removed from refreshed list" "ok" \
+                    "FAILED (revoke action still rendered)"
+            else
+                check "Revoke action removed from refreshed list" "ok" "ok"
+            fi
+        else
+            echo "  SKIP: revoke-any end-to-end (no active agents in list)"
+        fi
+
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
         reset_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
