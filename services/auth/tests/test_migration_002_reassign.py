@@ -235,6 +235,45 @@ def test_upgrade_uses_env_var_target(
     assert _agent_owner(at_001, admin_agent) == custom_target
 
 
+def test_downgrade_skips_restore_when_prior_owner_deleted(
+    at_001: Engine,
+    db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the prior admin owner is deleted between upgrade and downgrade,
+    the restore for that row is skipped (warned), and the rest of the
+    downgrade — including other agents and dropping the log table —
+    completes cleanly.
+    """
+    admin_id = _seed_user(at_001, email="admin@local", role="admin")
+    survivor_admin_id = _seed_user(at_001, email="boss@local", role="admin")
+    target_id = _seed_user(at_001, email="testuser@local", role="user")
+
+    orphaned_agent = _seed_agent(at_001, admin_id, "doomed-admin-laptop")
+    survivor_agent = _seed_agent(at_001, survivor_admin_id, "boss-laptop")
+
+    monkeypatch.delenv("DA_AGENT_REASSIGN_TARGET_EMAIL", raising=False)
+    command.upgrade(_auth_cfg(db_url), "head")
+
+    assert _agent_owner(at_001, orphaned_agent) == target_id
+    assert _agent_owner(at_001, survivor_agent) == target_id
+
+    # Delete the prior owner of `orphaned_agent` — simulates an admin
+    # account purge between upgrade and downgrade.
+    with at_001.begin() as conn:
+        conn.execute(text("DELETE FROM auth.users WHERE id = :uid"), {"uid": admin_id})
+
+    # Downgrade must not raise even though one prior owner is gone.
+    command.downgrade(_auth_cfg(db_url), "001")
+
+    # The orphaned agent stays with the post-reassignment owner (target),
+    # because restoring it would have violated the FK. The survivor's
+    # prior ownership is restored normally. Log table is dropped either way.
+    assert _agent_owner(at_001, orphaned_agent) == target_id
+    assert _agent_owner(at_001, survivor_agent) == survivor_admin_id
+    assert not _log_table_exists(at_001)
+
+
 def test_upgrade_fails_when_target_missing(
     at_001: Engine,
     db_url: str,

@@ -27,12 +27,15 @@ The check constraint on ``users.role`` is already in place from
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 
 from alembic import op
+
+_log = logging.getLogger("alembic.runtime.migration")
 
 revision: str = "002"
 down_revision: str | None = "001"
@@ -128,9 +131,22 @@ def downgrade() -> None:
     ).fetchall()
 
     for row in log_rows:
-        # Restore prior ownership only when the agent still exists.
-        # An agent that's been deleted post-upgrade can't be restored,
-        # but we don't fail the downgrade for it either.
+        # Skip restore if the prior owner has been deleted post-upgrade.
+        # Restoring a stale prior_user_id violates the user_id FK and
+        # blows up the whole downgrade — better to leave the agent
+        # under its current (post-reassignment) owner and warn.
+        prior_exists = conn.execute(
+            sa.text("SELECT 1 FROM auth.users WHERE id = :uid"),
+            {"uid": row.prior_user_id},
+        ).fetchone()
+        if prior_exists is None:
+            _log.warning(
+                "002.downgrade: skipping restore for agent %s; "
+                "prior owner user_id=%s no longer exists",
+                row.agent_id,
+                row.prior_user_id,
+            )
+            continue
         conn.execute(
             sa.text("UPDATE auth.agent_registrations SET user_id = :prior WHERE id = :aid"),
             {"prior": row.prior_user_id, "aid": row.agent_id},
