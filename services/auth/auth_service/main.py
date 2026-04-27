@@ -503,6 +503,17 @@ async def register_agent(
     if user_id is None:
         raise _INVALID_REGISTRATION_CODE
 
+    # Defense-in-depth: a code minted before W3.6.1's hard role split
+    # could still be live in Redis and was minted by a then-allowed
+    # admin. After the split, admins are not agent owners, so reject
+    # the consume rather than create an admin-owned agent row.
+    owner = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if owner is None or owner.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "admin_cannot_register_agent"},
+        )
+
     api_token = generate_api_token()
     now = datetime.now(UTC)
     agent = AgentRegistration(

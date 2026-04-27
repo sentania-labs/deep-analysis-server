@@ -65,3 +65,40 @@ async def test_register_invalid_code(client: Any) -> None:
     )
     assert r.status_code == 401
     assert r.json() == {"detail": {"error": "invalid_registration_code"}}
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_admin_owned_code(
+    client: Any,
+    redis_client: Any,
+    db_session: Any,
+) -> None:
+    """A registration code minted by (or for) a user whose role is now
+    'admin' must be refused at consume time, even if it is still valid
+    in Redis. Defends against pre-W3.6.1 codes carrying through the
+    role split."""
+    from auth_service.models import User
+    from auth_service.passwords import hash_password
+    from auth_service.registration import (
+        generate_registration_code,
+        store_registration_code,
+    )
+
+    admin = User(
+        email="admin-stale-code@example.com",
+        password_hash=hash_password("BootstrapPw2026!"),
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    await db_session.refresh(admin)
+
+    code = generate_registration_code()
+    await store_registration_code(redis_client, code, admin.id, ttl_seconds=600)
+
+    r = await client.post(
+        "/auth/agent/register",
+        json={"code": code, "machine_name": "laptop-1", "client_version": "0.4.0"},
+    )
+    assert r.status_code == 403
+    assert r.json() == {"detail": {"error": "admin_cannot_register_agent"}}
