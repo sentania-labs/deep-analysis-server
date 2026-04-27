@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Settings · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Settings</h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings" aria-current="page"><strong>Settings</strong></a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if saved %}
+    <div class="alert alert-info" role="status">Registration mode updated.</div>
+    {% endif %}
+
+    <h2>Registration mode</h2>
+    <p class="muted">
+        Controls whether new users can sign themselves up
+        ({{ "open" }}) or only register via an admin-issued invite
+        token ({{ "invite_only" }}).
+    </p>
+
+    {% if mode is none %}
+        <p class="muted">Current mode unavailable.</p>
+    {% else %}
+        <p>
+            Current: <strong>{{ mode.mode }}</strong>
+            {% if mode.updated_at %}
+                <span class="muted">
+                    (updated {{ mode.updated_at.strftime("%Y-%m-%d %H:%M") }}
+                    {%- if mode.updated_by_user_id %} by user #{{ mode.updated_by_user_id }}{% endif -%})
+                </span>
+            {% endif %}
+        </p>
+
+        <form method="post" action="/admin/settings/registration-mode" class="inline-form">
+            <label class="field">
+                <span>Mode</span>
+                {# UID=1 is the only account permitted to flip cluster-global
+                   toggles. Other admins see the current value but the
+                   <select> is disabled and the form has no submit button —
+                   any tampering still fails server-side at require_root_admin. #}
+                <select name="mode"
+                        {% if not is_root_admin %}disabled title="{{ lock_tooltip }}"{% endif %}>
+                    <option value="open" {% if mode.mode == "open" %}selected{% endif %}>open</option>
+                    <option value="invite_only" {% if mode.mode == "invite_only" %}selected{% endif %}>invite_only</option>
+                </select>
+            </label>
+            {% if is_root_admin %}
+                <button type="submit" class="btn btn-primary">Save</button>
+            {% else %}
+                <p class="muted" role="note">{{ lock_tooltip }}</p>
+            {% endif %}
+        </form>
+    {% endif %}
+</section>
+{% endblock %}

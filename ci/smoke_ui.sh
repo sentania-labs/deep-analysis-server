@@ -331,6 +331,43 @@ for u in d.get("users", []):
             echo "  SKIP: revoke-any end-to-end (no active agents in list)"
         fi
 
+        # ------------------------------------------------------------------
+        # W3.6.3 — /admin/settings reachable, registration mode toggle.
+        # ------------------------------------------------------------------
+        settings_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/settings")
+        settings_status=$(echo "$settings_out" | tail -n1)
+        settings_html=$(echo "$settings_out" | sed '$d')
+        check "GET /admin/settings (admin cookie) → 200" "200" "$settings_status"
+        check_contains "GET /admin/settings has Registration mode" "Registration mode" "$settings_html"
+        # Bootstrap admin is always UID=1 — toggle should be enabled
+        # (no `disabled` attribute on the <select>).
+        if echo "$settings_html" | grep -qE 'select[^>]*name="mode"[^>]*disabled'; then
+            check "Bootstrap admin sees enabled toggle" "ok" "FAILED (select is disabled)"
+        else
+            check "Bootstrap admin sees enabled toggle" "ok" "ok"
+        fi
+
+        # /admin/settings must be admin-only — unauth bounces to /login.
+        noauth_settings=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/settings")
+        noauth_settings_status=$(echo "$noauth_settings" | head -n1 | awk '{print $2}')
+        check "GET /admin/settings (no cookie) → 302" "302" "$noauth_settings_status"
+        check_contains "/admin/settings redirect targets /login" "/login" "$noauth_settings"
+
+        # Toggle to open and back to invite_only — full round-trip.
+        toggle_open_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
+            -X POST "$BASE_URL/admin/settings/registration-mode" \
+            --data-urlencode "mode=open")
+        toggle_open_status=$(echo "$toggle_open_head" | head -n1 | awk '{print $2}')
+        check "POST /admin/settings/registration-mode (mode=open) → 303" "303" "$toggle_open_status"
+
+        post_toggle_html=$(curl -sk -b "$PROFILE_COOKIE" "$BASE_URL/admin/settings")
+        check_contains "Settings page reflects mode=open" "<strong>open</strong>" "$post_toggle_html"
+
+        toggle_back_status=$(curl -sk -o /dev/null -w "%{http_code}" -b "$PROFILE_COOKIE" \
+            -X POST "$BASE_URL/admin/settings/registration-mode" \
+            --data-urlencode "mode=invite_only")
+        check "POST /admin/settings/registration-mode (mode=invite_only) → 303" "303" "$toggle_back_status"
+
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
         reset_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \

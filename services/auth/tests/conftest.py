@@ -120,10 +120,23 @@ async def async_engine(async_db_url: str, _migrate: None) -> AsyncIterator[Any]:
 async def _truncate(async_engine: Any) -> AsyncIterator[None]:
     sm = async_sessionmaker(async_engine, expire_on_commit=False)
     async with sm() as s:
+        # CASCADE follows ``server_settings.updated_by_user_id`` → users
+        # FK and wipes that row too — reseed it after the truncate so
+        # each test starts with the migration-seeded default.
         await s.execute(
             text(
                 "TRUNCATE auth.agent_registrations, auth.sessions, auth.users "
                 "RESTART IDENTITY CASCADE"
+            )
+        )
+        await s.execute(
+            text(
+                "INSERT INTO auth.server_settings (key, value) "
+                "VALUES ('registration_mode', '\"invite_only\"'::jsonb) "
+                "ON CONFLICT (key) DO UPDATE SET "
+                "    value = EXCLUDED.value, "
+                "    updated_by_user_id = NULL, "
+                "    updated_at = now()"
             )
         )
         await s.commit()

@@ -140,3 +140,16 @@ class StaleCleanupResponse(BaseModel):
 
 class RevokeSessionsResponse(BaseModel):
     revoked_count: int
+
+
+RegistrationMode = Literal["open", "invite_only"]
+
+
+class RegistrationModeView(BaseModel):
+    mode: RegistrationMode
+    updated_at: datetime
+    updated_by_user_id: int | None
+
+
+class SetRegistrationModeRequest(BaseModel):
+    mode: RegistrationMode

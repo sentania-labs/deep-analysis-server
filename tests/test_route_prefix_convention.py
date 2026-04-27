@@ -62,6 +62,8 @@ _WEB_BROWSER_PATHS = frozenset(
         "/admin/users/{user_id}/reset-password",
         "/admin/agents",
         "/admin/agents/{agent_id}/revoke",
+        "/admin/settings",
+        "/admin/settings/registration-mode",
     }
 )
 

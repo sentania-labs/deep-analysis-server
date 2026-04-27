@@ -36,7 +36,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 metadata = MetaData(schema="auth")
@@ -123,4 +123,32 @@ class AgentRegistration(Base):
     __table_args__ = (
         UniqueConstraint("api_token_hash", name="uq_agent_registrations_api_token_hash"),
         Index("ix_agent_registrations_user_id", "user_id"),
+    )
+
+
+class ServerSetting(Base):
+    """Key/value store for global server settings.
+
+    Single-row-per-key shape (PK on ``key``) so admin endpoints can
+    UPSERT without ordering games. ``value`` is JSONB so future
+    settings can hold structured payloads without a schema migration
+    each time. ``updated_by_user_id`` is nullable + ON DELETE SET NULL
+    so deleting an old admin doesn't strand audit-trail rows.
+
+    Introduced for W3.6 sub-item 3 (registration_mode). Sub-item 4
+    keeps invite tokens in Redis, so this table starts with the one
+    row.
+    """
+
+    __tablename__ = "server_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
     )

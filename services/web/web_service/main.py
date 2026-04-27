@@ -951,6 +951,148 @@ async def admin_agent_revoke(
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin settings — W3.6.3 (registration mode toggle, UID=1 only)
+# ---------------------------------------------------------------------------
+
+
+# Mirrors auth-side ``ROOT_ADMIN_USER_ID`` — the original installer
+# admin (auto-PK 1, minted by ``bootstrap_admin``). The web layer
+# checks this purely for UI state (enabled vs. disabled toggle); the
+# auth service is the authoritative gate on writes.
+_ROOT_ADMIN_USER_ID = 1
+_REGISTRATION_MODE_LOCK_TOOLTIP = (
+    "Registration mode is locked to UID=1 (the original installer admin)."
+)
+
+
+def _render_admin_settings(
+    request: Request,
+    user: BrowserUser,
+    *,
+    mode: auth_client.RegistrationMode | None,
+    error: str | None,
+    saved: bool,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_settings.html",
+        {
+            "user": user,
+            "mode": mode,
+            "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
+            "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
+            "error": error,
+            "saved": saved,
+        },
+        status_code=status_code,
+    )
+
+
+@app.get("/admin/settings", response_class=HTMLResponse)
+async def admin_settings(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    saved: Annotated[int, Query(ge=0, le=1)] = 0,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        mode = await auth_client.admin_get_registration_mode(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.get.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/settings/registration-mode call failed")
+        return _render_admin_settings(
+            request,
+            user,
+            mode=None,
+            error="Authentication service unavailable. Please try again.",
+            saved=False,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return _render_admin_settings(
+        request,
+        user,
+        mode=mode,
+        error=None,
+        saved=saved == 1,
+        status_code=200,
+    )
+
+
+@app.post("/admin/settings/registration-mode")
+async def admin_settings_registration_mode(
+    request: Request,
+    mode: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    # Browsers can't form-PUT, so this route is the form handler that
+    # forwards to auth's PUT endpoint. Auth is the authoritative gate
+    # on UID=1 — we don't short-circuit here so a non-root admin who
+    # bypasses the disabled UI still gets a clean inline error.
+    try:
+        view, err = await auth_client.admin_set_registration_mode(
+            settings.auth_service_url, user.token, mode
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.put.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth PUT /admin/settings/registration-mode call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if view is not None:
+        # 303 so the browser does a GET on the success page (refresh-
+        # safe). Re-fetching through the GET handler keeps the UI in
+        # sync with whatever auth has now committed.
+        return RedirectResponse(
+            url="/admin/settings?saved=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    # Inline error: re-fetch current mode so the page still shows the
+    # active value alongside the failure message.
+    current: auth_client.RegistrationMode | None
+    try:
+        current = await auth_client.admin_get_registration_mode(
+            settings.auth_service_url, user.token
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        current = None
+
+    if err == "not_root_admin":
+        message = _REGISTRATION_MODE_LOCK_TOOLTIP
+        code = status.HTTP_403_FORBIDDEN
+    elif err == "invalid_mode":
+        message = "Invalid registration mode."
+        code = status.HTTP_400_BAD_REQUEST
+    else:
+        message = "Could not update registration mode."
+        code = status.HTTP_400_BAD_REQUEST
+
+    return _render_admin_settings(
+        request,
+        user,
+        mode=current,
+        error=message,
+        saved=False,
+        status_code=code,
+    )
+
+
 @app.post("/logout")
 async def logout(
     request: Request,

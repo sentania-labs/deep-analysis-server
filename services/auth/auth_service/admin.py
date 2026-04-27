@@ -16,16 +16,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service.db import get_session
-from auth_service.deps import AuthenticatedUser, require_admin
-from auth_service.models import AgentRegistration, User
+from auth_service.deps import AuthenticatedUser, require_admin, require_root_admin
+from auth_service.models import AgentRegistration, ServerSetting, User
 from auth_service.models import Session as SessionRow
 from auth_service.passwords import hash_password
 from auth_service.schemas import (
     AgentListView,
     AgentView,
     CreateUserRequest,
+    RegistrationModeView,
     ResetPasswordResponse,
     RevokeSessionsResponse,
+    SetRegistrationModeRequest,
     StaleCleanupResponse,
     UpdateUserRequest,
     UserListView,
@@ -256,6 +258,77 @@ async def revoke_agent(
         agent.revoked_at = datetime.now(UTC)
         await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Server settings — W3.6.3 (registration mode toggle, UID=1 only)
+# ---------------------------------------------------------------------------
+
+
+_REGISTRATION_MODE_KEY = "registration_mode"
+
+
+def _registration_mode_view(row: ServerSetting) -> RegistrationModeView:
+    # Migration 003 seeds value=`"invite_only"` (a JSON string). Fall
+    # through to ``invite_only`` if a future migration ever stores a
+    # malformed value — never let an unparseable row brick the toggle.
+    mode = row.value if isinstance(row.value, str) else "invite_only"
+    if mode not in ("open", "invite_only"):
+        mode = "invite_only"
+    return RegistrationModeView(
+        mode=mode,
+        updated_at=row.updated_at,
+        updated_by_user_id=row.updated_by_user_id,
+    )
+
+
+@router.get("/settings/registration-mode", response_model=RegistrationModeView)
+async def get_registration_mode(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> RegistrationModeView:
+    """Read the current registration mode. Any admin may read."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == _REGISTRATION_MODE_KEY))
+    ).scalar_one_or_none()
+    if row is None:
+        # Migration 003 seeds the row, so absence means a migration was
+        # rolled back or skipped. Surface 503 so ops sees it; lying with
+        # a synthesized default would mask the underlying drift.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "registration_mode_unconfigured"},
+        )
+    return _registration_mode_view(row)
+
+
+@router.put("/settings/registration-mode", response_model=RegistrationModeView)
+async def set_registration_mode(
+    body: SetRegistrationModeRequest,
+    admin: AuthenticatedUser = Depends(require_root_admin),
+    db: AsyncSession = Depends(get_session),
+) -> RegistrationModeView:
+    """Flip the registration mode. Only the original installer admin
+    (UID=1, role=admin) may write — see :func:`require_root_admin`."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == _REGISTRATION_MODE_KEY))
+    ).scalar_one_or_none()
+    now = datetime.now(UTC)
+    if row is None:
+        row = ServerSetting(
+            key=_REGISTRATION_MODE_KEY,
+            value=body.mode,
+            updated_at=now,
+            updated_by_user_id=admin.user_id,
+        )
+        db.add(row)
+    else:
+        row.value = body.mode
+        row.updated_at = now
+        row.updated_by_user_id = admin.user_id
+    await db.commit()
+    await db.refresh(row)
+    return _registration_mode_view(row)
 
 
 @router.post("/agents/cleanup-stale", response_model=StaleCleanupResponse)

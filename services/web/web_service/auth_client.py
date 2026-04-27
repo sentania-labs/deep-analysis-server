@@ -462,6 +462,106 @@ async def admin_revoke_agent(
     raise AuthClientError(f"auth /admin/agents revoke returned {resp.status_code}: {resp.text}")
 
 
+@dataclass
+class RegistrationMode:
+    mode: str  # "open" | "invite_only"
+    updated_at: datetime | None
+    updated_by_user_id: int | None
+
+
+async def admin_get_registration_mode(
+    base_url: str,
+    token: str,
+) -> RegistrationMode:
+    """Admin-only: read the current registration mode.
+
+    Any admin may read; raises :class:`AuthForbidden` on 401/403 (a
+    non-admin or revoked-admin caller) and :class:`AuthClientError` on
+    transport / 5xx so the web layer can distinguish the admin-denied
+    page from a service-outage page.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/settings/registration-mode",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(
+            f"auth /admin/settings/registration-mode transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/settings/registration-mode returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(
+            f"auth /admin/settings/registration-mode returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return RegistrationMode(
+        mode=str(data["mode"]),
+        updated_at=_parse_dt(data.get("updated_at")),
+        updated_by_user_id=(
+            int(data["updated_by_user_id"]) if data.get("updated_by_user_id") is not None else None
+        ),
+    )
+
+
+async def admin_set_registration_mode(
+    base_url: str,
+    token: str,
+    mode: str,
+) -> tuple[RegistrationMode | None, str | None]:
+    """Root-admin-only: flip the registration mode. Returns (view, error_code).
+
+    - 200 → (RegistrationMode, None)
+    - 403 with detail.error == "not_root_admin" → (None, "not_root_admin")
+      (caller is admin but not UID=1 — surfaces inline rather than
+      bouncing to /login; the page still renders for read-only admins)
+    - 422 / other 4xx with a validation-style detail → (None, "invalid_mode")
+
+    Any other 401/403 raises :class:`AuthForbidden`; 5xx / transport
+    raise :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{base_url}/admin/settings/registration-mode",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"mode": mode},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(
+            f"auth PUT /admin/settings/registration-mode transport error: {exc}"
+        ) from exc
+    if resp.status_code == 200:
+        data = resp.json()
+        return RegistrationMode(
+            mode=str(data["mode"]),
+            updated_at=_parse_dt(data.get("updated_at")),
+            updated_by_user_id=(
+                int(data["updated_by_user_id"])
+                if data.get("updated_by_user_id") is not None
+                else None
+            ),
+        ), None
+    if resp.status_code == 403:
+        try:
+            detail = resp.json().get("detail") or {}
+            code = detail.get("error") if isinstance(detail, dict) else None
+        except ValueError:
+            code = None
+        if code == "not_root_admin":
+            return None, "not_root_admin"
+        raise AuthForbidden("auth PUT /admin/settings/registration-mode returned 403")
+    if resp.status_code == 401:
+        raise AuthForbidden("auth PUT /admin/settings/registration-mode returned 401")
+    if resp.status_code in (400, 422):
+        return None, "invalid_mode"
+    raise AuthClientError(
+        f"auth PUT /admin/settings/registration-mode returned {resp.status_code}: {resp.text}"
+    )
+
+
 async def admin_reset_password(
     base_url: str,
     token: str,
