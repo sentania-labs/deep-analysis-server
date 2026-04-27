@@ -602,17 +602,19 @@ async def register(
 
     invite: InviteToken | None = None
     if raw_token:
+        # Lock the row for the duration of the transaction so two
+        # concurrent /auth/register calls racing the same token can't
+        # both observe used_at IS NULL — the second waits, then sees
+        # the stamped row and is rejected.
         invite = (
             await db.execute(
-                select(InviteToken).where(InviteToken.token_hash == hash_invite_token(raw_token))
+                select(InviteToken)
+                .where(InviteToken.token_hash == hash_invite_token(raw_token))
+                .with_for_update()
             )
         ).scalar_one_or_none()
         now = datetime.now(UTC)
         if invite is None or invite.used_at is not None or invite.expires_at <= now:
-            # Mode determines the error code so a probe in open mode
-            # doesn't get the same response shape as a hard rejection
-            # in invite_only — but both are 403 because a bad token is
-            # a denial regardless of mode.
             code = "invalid_invite_token"
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -445,6 +445,60 @@ async def test_register_token_single_use_enforcement(client: Any, db_session: As
 
 
 @pytest.mark.asyncio
+async def test_register_concurrent_consumption_only_one_wins(
+    client: Any, db_session: AsyncSession
+) -> None:
+    """Two parallel POST /auth/register calls racing the same token: one
+    wins (201), one loses (403 invalid_invite_token). Guards against the
+    SELECT-then-UPDATE race that lets both observe the row as unused.
+    """
+    import asyncio
+
+    admin_id = await _seed_user(db_session, email="root@example.com", role="admin")
+    plaintext = "race-token-xyz"
+    invite = InviteToken(
+        token_hash=hash_invite_token(plaintext),
+        created_by_user_id=admin_id,
+        created_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(hours=168),
+    )
+    db_session.add(invite)
+    await db_session.commit()
+
+    async def attempt(email: str) -> Any:
+        return await client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": "longenoughpw!!",
+                "token": plaintext,
+            },
+        )
+
+    r1, r2 = await asyncio.gather(
+        attempt("racer-a@example.com"),
+        attempt("racer-b@example.com"),
+    )
+    statuses = sorted([r1.status_code, r2.status_code])
+    assert statuses == [201, 403], (r1.status_code, r1.text, r2.status_code, r2.text)
+
+    loser = r1 if r1.status_code == 403 else r2
+    assert loser.json() == {"detail": {"error": "invalid_invite_token"}}
+
+    # Exactly one user was created.
+    users = (
+        (
+            await db_session.execute(
+                select(User).where(User.email.in_(["racer-a@example.com", "racer-b@example.com"]))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(users) == 1
+
+
+@pytest.mark.asyncio
 async def test_register_expired_token_rejected(client: Any, db_session: AsyncSession) -> None:
     admin_id = await _seed_user(db_session, email="root@example.com", role="admin")
     plaintext = "expired-tok"
