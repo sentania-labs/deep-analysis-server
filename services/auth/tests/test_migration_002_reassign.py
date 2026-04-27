@@ -289,3 +289,22 @@ def test_upgrade_fails_when_target_missing(
 
     with pytest.raises(RuntimeError, match="reassignment target"):
         command.upgrade(_auth_cfg(db_url), "head")
+
+
+def test_upgrade_fails_when_target_is_admin(
+    at_001: Engine,
+    db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the resolved target user is itself an admin, fail loud rather
+    than reassigning admin-owned agents to another admin (which would
+    leave the data in violation of the W3.6 admin-owns-no-agents rule).
+    """
+    admin_id = _seed_user(at_001, email="admin@local", role="admin")
+    _seed_agent(at_001, admin_id, "admin-laptop")
+    _seed_user(at_001, email="target-admin@example.com", role="admin")
+
+    monkeypatch.setenv("DA_AGENT_REASSIGN_TARGET_EMAIL", "target-admin@example.com")
+
+    with pytest.raises(RuntimeError, match="admin user"):
+        command.upgrade(_auth_cfg(db_url), "head")

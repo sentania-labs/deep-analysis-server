@@ -94,7 +94,7 @@ def upgrade() -> None:
 
     target_email = _target_email()
     target = conn.execute(
-        sa.text("SELECT id FROM auth.users WHERE lower(email) = lower(:email)"),
+        sa.text("SELECT id, role FROM auth.users WHERE lower(email) = lower(:email)"),
         {"email": target_email},
     ).fetchone()
     if target is None:
@@ -103,6 +103,11 @@ def upgrade() -> None:
             "set DA_AGENT_REASSIGN_TARGET_EMAIL to an existing user's email and re-run"
         )
     target_id = int(target.id)
+    if target.role == "admin":
+        raise RuntimeError(
+            f"agent reassignment target {target_email!r} resolves to an admin user; "
+            "set DA_AGENT_REASSIGN_TARGET_EMAIL to a non-admin user's email and re-run"
+        )
 
     for row in admin_agents:
         conn.execute(
