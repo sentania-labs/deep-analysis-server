@@ -19,23 +19,25 @@
     <div class="alert alert-error" role="alert">{{ error }}</div>
     {% endif %}
 
-    {% if not agents %}
-        <p>No agents registered.</p>
-    {% else %}
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Agent ID</th>
-                    <th>Owner</th>
-                    <th>Machine</th>
-                    <th>Client version</th>
-                    <th>Created</th>
-                    <th>Last seen</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Agent ID</th>
+                <th>Owner</th>
+                <th>Machine</th>
+                <th>Client version</th>
+                <th>Created</th>
+                <th>Last seen</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if not agents %}
+            <tr>
+                <td colspan="8" class="muted">No agents registered.</td>
+            </tr>
+            {% else %}
                 {% for a in agents %}
                 <tr>
                     <td><code>{{ a.agent_id }}</code></td>
@@ -67,8 +69,10 @@
                     </td>
                 </tr>
                 {% endfor %}
-            </tbody>
-        </table>
+            {% endif %}
+        </tbody>
+    </table>
+    {% if agents %}
         {% set first_idx = (page - 1) * per_page + 1 %}
         {% set last_idx = first_idx + agents|length - 1 %}
         {% set has_prev = page > 1 %}
