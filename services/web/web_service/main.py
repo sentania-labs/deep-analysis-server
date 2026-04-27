@@ -1449,6 +1449,11 @@ async def register_submit(
             password,
             submitted_token,
         )
+    except auth_client.EmailAlreadyTaken:
+        return _err(
+            "An account with this email already exists. Try logging in or use a different address.",
+            status.HTTP_409_CONFLICT,
+        )
     except auth_client.AuthClientError:
         _log.exception("auth POST /auth/register call failed")
         return _err(

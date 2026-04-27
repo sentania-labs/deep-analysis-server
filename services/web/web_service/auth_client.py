@@ -94,6 +94,18 @@ class AuthForbidden(Exception):
     """
 
 
+class EmailAlreadyTaken(Exception):
+    """Auth rejected /auth/register with 409 ``email_already_taken``.
+
+    This is the race-recovery code emitted when the unique-index
+    IntegrityError fires after the pre-flight SELECT has already passed.
+    The pre-flight clash uses ``email_already_exists`` and continues to
+    flow through the (ok, error_code) return path; raising a typed
+    exception for the race code keeps callers from silently falling
+    through to the generic "registration_failed" message.
+    """
+
+
 def _parse_dt(raw: Any) -> datetime | None:
     if not raw:
         return None
@@ -704,7 +716,13 @@ async def public_register(
 
     Maps known auth-side error codes through to the caller for inline
     rendering — invite_required, invalid_invite_token, weak_password,
-    email_already_exists, invalid_email. Anything else surfaces as
+    email_already_exists, invalid_email.
+
+    A 409 carrying the race-recovery code ``email_already_taken``
+    raises :class:`EmailAlreadyTaken` so the web handler can render a
+    distinct inline message rather than falling through to the generic
+    "registration_failed" branch. Other 4xx still flow through the
+    (ok, code) return path. Anything else surfaces as
     :class:`AuthClientError`.
     """
     payload: dict[str, Any] = {"email": email, "password": password}
@@ -723,6 +741,8 @@ async def public_register(
             code = detail.get("error") if isinstance(detail, dict) else None
         except ValueError:
             code = None
+        if resp.status_code == 409 and code == "email_already_taken":
+            raise EmailAlreadyTaken()
         return False, code or "registration_failed"
     raise AuthClientError(f"auth POST /auth/register returned {resp.status_code}: {resp.text}")
 

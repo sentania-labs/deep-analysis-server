@@ -467,3 +467,116 @@ async def test_change_password_weak_password_returns_business_code(
     ok, err = await auth_client.change_password("http://auth:8000", "tok", "old-pw", "abc")
     assert ok is False
     assert err == "weak_password"
+
+
+# ---------------------------------------------------------------------------
+# public_register
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_public_register_409_email_already_taken_raises_typed_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The race-recovery code from auth's /auth/register IntegrityError
+    fallback raises EmailAlreadyTaken so the web handler can render a
+    distinct inline message instead of falling through to the generic
+    "registration_failed" branch."""
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(409, json={"detail": {"error": "email_already_taken"}}),
+    )
+
+    with pytest.raises(auth_client.EmailAlreadyTaken):
+        await auth_client.public_register(
+            "http://auth:8000",
+            "taken@example.com",
+            "longenoughpw!!",
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_public_register_409_email_already_exists_returns_business_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-flight clash code stays on the (ok, code) return path
+    — only the race-recovery code is promoted to a typed exception."""
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(409, json={"detail": {"error": "email_already_exists"}}),
+    )
+
+    ok, err = await auth_client.public_register(
+        "http://auth:8000",
+        "taken@example.com",
+        "longenoughpw!!",
+        None,
+    )
+    assert ok is False
+    assert err == "email_already_exists"
+
+
+@pytest.mark.asyncio
+async def test_public_register_409_unknown_code_returns_business_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 409 with some other body code must NOT raise EmailAlreadyTaken
+    — only the exact ``email_already_taken`` code is promoted."""
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(409, json={"detail": {"error": "some_other_conflict"}}),
+    )
+
+    ok, err = await auth_client.public_register(
+        "http://auth:8000",
+        "u@example.com",
+        "longenoughpw!!",
+        None,
+    )
+    assert ok is False
+    assert err == "some_other_conflict"
+
+
+@pytest.mark.asyncio
+async def test_public_register_success_returns_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(201, json={"user_id": 42, "email": "new@example.com"}),
+    )
+
+    ok, err = await auth_client.public_register(
+        "http://auth:8000",
+        "new@example.com",
+        "longenoughpw!!",
+        None,
+    )
+    assert ok is True
+    assert err is None
+
+
+@pytest.mark.asyncio
+async def test_public_register_5xx_raises_auth_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+
+    _stub_post(monkeypatch, httpx.Response(503, text="upstream down"))
+
+    with pytest.raises(auth_client.AuthClientError):
+        await auth_client.public_register(
+            "http://auth:8000",
+            "u@example.com",
+            "longenoughpw!!",
+            None,
+        )

@@ -267,6 +267,45 @@ async def test_post_register_weak_password_inline_error(
 
 
 @pytest.mark.asyncio
+async def test_post_register_email_already_taken_renders_inline_error(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth's race-recovery 409 ``email_already_taken`` is raised by
+    auth_client as a typed exception. The /register POST handler must
+    catch it and re-render the form with a friendly inline message —
+    not 500, not the generic "Could not register account." fallback."""
+    from web_service import auth_client
+
+    async def fake_mode(_url: str) -> str:
+        return "open"
+
+    async def fake_register(
+        _url: str, _email: str, _password: str, _token: str | None
+    ) -> tuple[bool, str | None]:
+        raise auth_client.EmailAlreadyTaken()
+
+    monkeypatch.setattr(auth_client, "public_get_registration_mode", fake_mode)
+    monkeypatch.setattr(auth_client, "public_register", fake_register)
+
+    r = await app_client.post(
+        "/register",
+        data={
+            "email": "racing@example.com",
+            "password": "longenoughpw!!",
+            "confirm_password": "longenoughpw!!",
+        },
+    )
+    assert r.status_code == 409
+    assert "An account with this email already exists" in r.text
+    assert "Try logging in or use a different address" in r.text
+    # Form is re-rendered (not a redirect / 500), so the email field
+    # is preserved for the user.
+    assert 'name="email"' in r.text
+    assert "racing@example.com" in r.text
+
+
+@pytest.mark.asyncio
 async def test_post_register_503_on_auth_outage(
     app_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
