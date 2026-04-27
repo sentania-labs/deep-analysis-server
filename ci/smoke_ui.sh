@@ -245,14 +245,31 @@ check_contains "/admin/users redirect targets /login" "/login" "$noauth_admin"
 # web admin UI, then delete it. Skip seeding gracefully when docker
 # compose isn't reachable (e.g. running this script against a remote
 # stack manually) — the GET-only checks above still gate the build.
-ADMIN_JWT=$(awk -F'\t' '$0 !~ /^# / && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE")
+ADMIN_JWT=$(awk -F'\t' '$0 !~ /^# / && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE" || true)
 if [ -z "$ADMIN_JWT" ]; then
     check "Extracted admin JWT from session cookie" "ok" "FAILED (cookie jar missing da_session)"
 fi
 
-if command -v docker >/dev/null 2>&1 \
-   && [ -n "$ADMIN_JWT" ] \
-   && docker compose ps auth >/dev/null 2>&1; then
+# Be explicit about why CRUD might be skipped — silent gates have
+# burned us before. Each gate logs its own SKIP reason.
+RUN_CRUD=1
+if ! command -v docker >/dev/null 2>&1; then
+    echo "  SKIP-REASON: docker CLI not found on PATH"
+    RUN_CRUD=0
+elif [ -z "$ADMIN_JWT" ]; then
+    echo "  SKIP-REASON: no admin JWT in session cookie jar"
+    RUN_CRUD=0
+elif ! docker compose ps auth >/dev/null 2>&1; then
+    echo "  SKIP-REASON: docker compose project not reachable from $(pwd)"
+    RUN_CRUD=0
+fi
+
+if [ "$RUN_CRUD" = "1" ]; then
+    # Inside the CRUD block we relax `errexit` so a single curl/grep
+    # blip cannot silently kill the script and skip section 8 (logout).
+    # Each step still asserts via `check`, so real failures are still
+    # visible in the PASS/FAIL tally.
+    set +e
 
     # Seed testuser@local via auth's internal JSON API. Idempotent:
     # if the row already exists from a prior run we look up its id.
@@ -311,7 +328,7 @@ for u in d.get("users", []):
         AGENT_ID=$(echo "$agents_html" \
             | grep -oE '/admin/agents/[0-9a-f-]{36}/revoke' \
             | head -n1 \
-            | sed -E 's|/admin/agents/([0-9a-f-]+)/revoke|\1|')
+            | sed -E 's|/admin/agents/([0-9a-f-]+)/revoke|\1|' || true)
         if [ -n "$AGENT_ID" ]; then
             revoke_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
                 -X POST "$BASE_URL/admin/agents/${AGENT_ID}/revoke")
@@ -398,7 +415,7 @@ for u in d.get("users", []):
         SMOKE_INVITE_TOKEN=$(echo "$create_invite_html" \
             | grep -oE '/register\?token=[^"<]+' \
             | head -n1 \
-            | sed -E 's|/register\?token=||')
+            | sed -E 's|/register\?token=||' || true)
         if [ -n "$SMOKE_INVITE_TOKEN" ]; then
             check "Captured plaintext invite token from rendered HTML" "ok" "ok"
         else
@@ -456,15 +473,18 @@ for u in d.get("users", []):
             check "testuser@local removed from list" "ok" "ok"
         fi
     fi
+    # Re-enable errexit now that the CRUD block is done — section 8
+    # (logout) needs the same strictness as the rest of the script.
+    set -e
 else
-    echo "  SKIP: admin CRUD end-to-end (docker compose not reachable; GET-only checks still gate)"
+    echo "  SKIP: admin CRUD end-to-end (see SKIP-REASON above; GET-only checks still gate)"
 fi
 
 # --------------------------------------------------------------------------
 # 8. POST /logout → 303 to /login, cookie cleared
 # --------------------------------------------------------------------------
 echo ""
-echo "--- 6. POST /logout ---"
+echo "--- 8. POST /logout ---"
 
 # First log in fresh so we have a live cookie to logout with.
 curl -sk -o /dev/null -c "$LOGOUT_COOKIE" \
