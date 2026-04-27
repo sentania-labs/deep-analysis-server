@@ -116,6 +116,60 @@ async def test_get_invites_renders_list(
 
 
 @pytest.mark.asyncio
+async def test_get_invites_503_on_auth_outage(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: GET /admin/invites must surface a 503 + outage banner
+    when the auth service is unreachable, not render an empty 'no invites'
+    list (which is indistinguishable from a legitimate empty pending state).
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthClientError("simulated outage")
+
+    monkeypatch.setattr(auth_client, "admin_list_invites", boom)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/invites")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 503
+    assert "unavailable" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_invites_403_when_auth_returns_forbidden(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a stale admin claim (auth returns AuthForbidden on the
+    list call) renders the admin-forbidden page, not an empty list.
+    """
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def deny(*_a: Any, **_kw: Any) -> Any:
+        raise auth_client.AuthForbidden("stale role")
+
+    monkeypatch.setattr(auth_client, "admin_list_invites", deny)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/invites")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_get_invites_forbidden_for_non_admin(
     app_client: httpx.AsyncClient,
 ) -> None:

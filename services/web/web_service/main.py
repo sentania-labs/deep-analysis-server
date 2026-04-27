@@ -1165,6 +1165,14 @@ def _render_admin_invites(
     )
 
 
+def _decorate_invites(items: list[Any]) -> list[Any]:
+    decorated: list[Any] = []
+    for item in items:
+        item.age = _format_age(item.created_at)
+        decorated.append(item)
+    return decorated
+
+
 async def _refetch_admin_invites(
     settings: WebSettings,
     user: BrowserUser,
@@ -1172,18 +1180,21 @@ async def _refetch_admin_invites(
     page: int,
     per_page: int,
 ) -> tuple[list[Any], int]:
+    """Best-effort list refetch for inline-error rendering paths.
+
+    Mirrors ``_refetch_admin_users``: by the time we call this, the
+    original mutation already produced the status the caller wants to
+    surface, so swallowing is correct here. The primary GET handler
+    must not use this helper — it needs to propagate auth/service
+    errors so '503 unavailable' doesn't render as 'no invites'.
+    """
     try:
         items, total = await auth_client.admin_list_invites(
             settings.auth_service_url, user.token, page=page, per_page=per_page
         )
     except (auth_client.AuthForbidden, auth_client.AuthClientError):
         return [], 0
-
-    decorated: list[Any] = []
-    for item in items:
-        item.age = _format_age(item.created_at)
-        decorated.append(item)
-    return decorated, total
+    return _decorate_invites(items), total
 
 
 @app.get("/admin/invites", response_class=HTMLResponse)
@@ -1202,14 +1213,29 @@ async def admin_invites_list(
         return blocked
 
     try:
-        invites, total = await _refetch_admin_invites(settings, user, page=page, per_page=per_page)
+        items, total = await auth_client.admin_list_invites(
+            settings.auth_service_url, user.token, page=page, per_page=per_page
+        )
     except auth_client.AuthForbidden:
         _log.info("admin.invites.list.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth GET /admin/invites call failed")
+        return _render_admin_invites(
+            request,
+            user,
+            invites=[],
+            total=0,
+            page=page,
+            per_page=per_page,
+            error="Authentication service unavailable. Please try again.",
+            created=None,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     return _render_admin_invites(
         request,
         user,
-        invites=invites,
+        invites=_decorate_invites(items),
         total=total,
         page=page,
         per_page=per_page,
