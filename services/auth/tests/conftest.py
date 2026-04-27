@@ -125,8 +125,8 @@ async def _truncate(async_engine: Any) -> AsyncIterator[None]:
         # each test starts with the migration-seeded default.
         await s.execute(
             text(
-                "TRUNCATE auth.agent_registrations, auth.sessions, auth.users "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE auth.invite_tokens, auth.agent_registrations, "
+                "auth.sessions, auth.users RESTART IDENTITY CASCADE"
             )
         )
         await s.execute(

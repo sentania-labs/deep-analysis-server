@@ -10,6 +10,8 @@
         <span class="muted"> · </span>
         <a href="/admin/agents">Agents</a>
         <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
         <a href="/admin/settings" aria-current="page"><strong>Settings</strong></a>
     </nav>
 
@@ -23,9 +25,8 @@
 
     <h2>Registration mode</h2>
     <p class="muted">
-        Controls whether new users can sign themselves up
-        ({{ "open" }}) or only register via an admin-issued invite
-        token ({{ "invite_only" }}).
+        <strong>Open:</strong> anyone can register at /register.
+        <strong>Invite-only:</strong> token required.
     </p>
 
     {% if mode is none %}

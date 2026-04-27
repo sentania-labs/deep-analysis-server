@@ -1093,6 +1093,380 @@ async def admin_settings_registration_mode(
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin invites — W3.6.4 (admin mints invite tokens)
+# ---------------------------------------------------------------------------
+
+
+_ADMIN_INVITES_DEFAULT_PER_PAGE = 50
+_ADMIN_INVITES_MAX_PER_PAGE = 200
+_INVITE_DEFAULT_EXPIRES_HOURS = 168  # 7 days
+_INVITE_MAX_EXPIRES_HOURS = 720  # 30 days — mirrors auth-side cap
+
+
+def _format_age(created_at: Any) -> str | None:
+    """Human-friendly age for the invite list.
+
+    Renders as "Nh" under a day, "Nd" otherwise — enough resolution for
+    the admin to spot stale invites without flooding the UI with
+    seconds. Returns None when the timestamp couldn't be parsed
+    upstream so the template can fall back to "—".
+    """
+    if created_at is None:
+        return None
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    delta = _dt.now(_UTC) - created_at
+    hours = int(delta.total_seconds() // 3600)
+    if hours < 24:
+        return f"{hours}h"
+    return f"{hours // 24}d"
+
+
+def _invite_url(request: Request, token: str) -> str:
+    """Build the user-facing invite URL with the plaintext token.
+
+    Uses the request's scheme + host so dev (http://localhost:8000) and
+    prod (https://da.example.com) both produce a working link without
+    config plumbing.
+    """
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/register?token={token}"
+
+
+def _render_admin_invites(
+    request: Request,
+    user: BrowserUser,
+    *,
+    invites: list[Any],
+    total: int,
+    page: int,
+    per_page: int,
+    error: str | None,
+    created: dict[str, Any] | None,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_invites.html",
+        {
+            "user": user,
+            "invites": invites,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": error,
+            "created": created,
+            "default_hours": _INVITE_DEFAULT_EXPIRES_HOURS,
+            "max_hours": _INVITE_MAX_EXPIRES_HOURS,
+        },
+        status_code=status_code,
+    )
+
+
+async def _refetch_admin_invites(
+    settings: WebSettings,
+    user: BrowserUser,
+    *,
+    page: int,
+    per_page: int,
+) -> tuple[list[Any], int]:
+    try:
+        items, total = await auth_client.admin_list_invites(
+            settings.auth_service_url, user.token, page=page, per_page=per_page
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        return [], 0
+
+    decorated: list[Any] = []
+    for item in items:
+        item.age = _format_age(item.created_at)
+        decorated.append(item)
+    return decorated, total
+
+
+@app.get("/admin/invites", response_class=HTMLResponse)
+async def admin_invites_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_INVITES_MAX_PER_PAGE),
+    ] = _ADMIN_INVITES_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        invites, total = await _refetch_admin_invites(settings, user, page=page, per_page=per_page)
+    except auth_client.AuthForbidden:
+        _log.info("admin.invites.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    return _render_admin_invites(
+        request,
+        user,
+        invites=invites,
+        total=total,
+        page=page,
+        per_page=per_page,
+        error=None,
+        created=None,
+        status_code=200,
+    )
+
+
+@app.post("/admin/invites")
+async def admin_invites_create(
+    request: Request,
+    expires_in_hours: Annotated[int, Form(ge=1, le=_INVITE_MAX_EXPIRES_HOURS)],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_INVITES_MAX_PER_PAGE),
+    ] = _ADMIN_INVITES_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        created = await auth_client.admin_create_invite(
+            settings.auth_service_url, user.token, expires_in_hours
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.invites.create.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth POST /admin/invites call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    invites, total = await _refetch_admin_invites(settings, user, page=page, per_page=per_page)
+    # The plaintext token is one-shot — surface it inline; the next
+    # GET /admin/invites navigation will re-render without it.
+    return _render_admin_invites(
+        request,
+        user,
+        invites=invites,
+        total=total,
+        page=page,
+        per_page=per_page,
+        error=None,
+        created={
+            "id": created.id,
+            "token": created.token,
+            "expires_at": created.expires_at,
+            "invite_url": _invite_url(request, created.token),
+        },
+        status_code=200,
+    )
+
+
+@app.post("/admin/invites/{invite_id}/revoke")
+async def admin_invites_revoke(
+    invite_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_INVITES_MAX_PER_PAGE),
+    ] = _ADMIN_INVITES_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, err = await auth_client.admin_revoke_invite(
+            settings.auth_service_url, user.token, str(invite_id)
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.invites.revoke.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth DELETE /admin/invites call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(
+            url=f"/admin/invites?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    invites, total = await _refetch_admin_invites(settings, user, page=page, per_page=per_page)
+    if err == "invite_not_found":
+        message = "That invite no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not revoke invite."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_invites(
+        request,
+        user,
+        invites=invites,
+        total=total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        created=None,
+        status_code=code,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public registration — W3.6.4
+# ---------------------------------------------------------------------------
+
+
+def _render_register(
+    request: Request,
+    *,
+    mode: str,
+    token: str | None,
+    email: str,
+    error: str | None,
+    invite_only_no_token: bool,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "register.html",
+        {
+            "user": None,  # public page; no nav user
+            "mode": mode,
+            "token": token,
+            "email": email,
+            "error": error,
+            "invite_only_no_token": invite_only_no_token,
+        },
+        status_code=status_code,
+    )
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_form(
+    request: Request,
+    token: Annotated[str | None, Query()] = None,
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Public registration landing.
+
+    - ``invite_only`` mode + missing/blank token: render the
+      "registration is invite-only" message (no form).
+    - ``invite_only`` mode + token present: render form, pass token
+      through as a hidden field; auth validates on submit.
+    - ``open`` mode: render the form unconditionally; token is optional
+      (consumed for audit if present).
+    """
+    mode = await auth_client.public_get_registration_mode(settings.auth_service_url)
+    has_token = bool((token or "").strip())
+    invite_only_no_token = mode == "invite_only" and not has_token
+    return _render_register(
+        request,
+        mode=mode,
+        token=token,
+        email="",
+        error=None,
+        invite_only_no_token=invite_only_no_token,
+        status_code=200,
+    )
+
+
+@app.post("/register")
+async def register_submit(
+    request: Request,
+    email: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+    confirm_password: Annotated[str, Form()],
+    token: Annotated[str, Form()] = "",
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    submitted_email = email.strip()
+    submitted_token = (token or "").strip() or None
+    mode = await auth_client.public_get_registration_mode(settings.auth_service_url)
+
+    def _err(message: str, code: int) -> Response:
+        return _render_register(
+            request,
+            mode=mode,
+            token=submitted_token,
+            email=submitted_email,
+            error=message,
+            invite_only_no_token=False,
+            status_code=code,
+        )
+
+    if password != confirm_password:
+        return _err("Passwords do not match.", status.HTTP_400_BAD_REQUEST)
+    if not password:
+        return _err("Password is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_email:
+        return _err("Email is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        ok, err = await auth_client.public_register(
+            settings.auth_service_url,
+            submitted_email,
+            password,
+            submitted_token,
+        )
+    except auth_client.AuthClientError:
+        _log.exception("auth POST /auth/register call failed")
+        return _err(
+            "Authentication service unavailable. Please try again.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        # Land them on /login with a success hint via the email field.
+        # Auth deliberately doesn't auto-login — it keeps the
+        # registration path stateless and forces an explicit credential
+        # round-trip before any session cookie is set.
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    if err == "invite_required":
+        return _render_register(
+            request,
+            mode=mode,
+            token=None,
+            email=submitted_email,
+            error=None,
+            invite_only_no_token=True,
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    if err == "invalid_invite_token":
+        return _err(
+            "That invite token is invalid, expired, or already used.",
+            status.HTTP_403_FORBIDDEN,
+        )
+    if err == "email_already_exists":
+        return _err(
+            "An account with that email already exists.",
+            status.HTTP_409_CONFLICT,
+        )
+    if err == "weak_password":
+        return _err(
+            "Password does not meet complexity requirements (minimum 12 characters).",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    if err == "invalid_email":
+        return _err("Email address is not valid.", status.HTTP_400_BAD_REQUEST)
+    return _err("Could not register account.", status.HTTP_400_BAD_REQUEST)
+
+
 @app.post("/logout")
 async def logout(
     request: Request,

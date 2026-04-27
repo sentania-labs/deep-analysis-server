@@ -136,8 +136,9 @@ class ServerSetting(Base):
     so deleting an old admin doesn't strand audit-trail rows.
 
     Introduced for W3.6 sub-item 3 (registration_mode). Sub-item 4
-    keeps invite tokens in Redis, so this table starts with the one
-    row.
+    persists invite tokens in their own table (``invite_tokens``) — see
+    that model for why Redis was the wrong shape there. This table
+    starts with the one row.
     """
 
     __tablename__ = "server_settings"
@@ -151,4 +152,53 @@ class ServerSetting(Base):
         Integer,
         ForeignKey("auth.users.id", ondelete="SET NULL"),
         nullable=True,
+    )
+
+
+class InviteToken(Base):
+    """Single-use, hashed-at-rest user-invite token.
+
+    Pattern mirrors :class:`AgentRegistration`'s api token: the issuing
+    endpoint returns plaintext once and persists only a SHA-256 hex
+    digest in ``token_hash``. The /auth/register endpoint hashes its
+    inbound token and looks it up here.
+
+    ``created_by_user_id`` and ``used_by_user_id`` use ``ON DELETE SET
+    NULL`` so deleting an admin (issuer) or a user (consumer) doesn't
+    cascade-wipe the invite history.
+
+    A row is "pending" when ``used_at IS NULL AND expires_at > now()``;
+    revocation is implemented by stamping ``expires_at = now()`` rather
+    than deleting the row, so the audit trail of who-minted-what
+    survives. The ``ix_invite_tokens_pending`` composite index covers
+    the pending-list query.
+    """
+
+    __tablename__ = "invite_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_invite_tokens_token_hash"),
+        Index("ix_invite_tokens_pending", "used_at", "expires_at"),
     )

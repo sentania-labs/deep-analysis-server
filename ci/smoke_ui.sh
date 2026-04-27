@@ -368,6 +368,59 @@ for u in d.get("users", []):
             --data-urlencode "mode=invite_only")
         check "POST /admin/settings/registration-mode (mode=invite_only) → 303" "303" "$toggle_back_status"
 
+        # ------------------------------------------------------------------
+        # W3.6.4 — /admin/invites reachable + create + token rendered;
+        # /register?token=... happy path in invite_only mode;
+        # /register without token blocked in invite_only mode.
+        # ------------------------------------------------------------------
+        invites_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/invites")
+        invites_status=$(echo "$invites_out" | tail -n1)
+        invites_html=$(echo "$invites_out" | sed '$d')
+        check "GET /admin/invites (admin cookie) → 200" "200" "$invites_status"
+        check_contains "GET /admin/invites has Pending invites heading" "Pending invites" "$invites_html"
+
+        # /admin/invites must be admin-only — unauth bounces to /login.
+        noauth_invites=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/invites")
+        noauth_invites_status=$(echo "$noauth_invites" | head -n1 | awk '{print $2}')
+        check "GET /admin/invites (no cookie) → 302" "302" "$noauth_invites_status"
+        check_contains "/admin/invites redirect targets /login" "/login" "$noauth_invites"
+
+        # Create an invite — response page renders the plaintext token.
+        create_invite_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
+            -X POST "$BASE_URL/admin/invites" \
+            --data-urlencode "expires_in_hours=168")
+        create_invite_status=$(echo "$create_invite_out" | tail -n1)
+        create_invite_html=$(echo "$create_invite_out" | sed '$d')
+        check "POST /admin/invites → 200" "200" "$create_invite_status"
+        check_contains "Invite create page mentions one-time token" "shown" "$create_invite_html"
+        # Pull the plaintext token out of the rendered invite URL so the
+        # /register flow can use it.
+        SMOKE_INVITE_TOKEN=$(echo "$create_invite_html" \
+            | grep -oE '/register\?token=[^"<]+' \
+            | head -n1 \
+            | sed -E 's|/register\?token=||')
+        if [ -n "$SMOKE_INVITE_TOKEN" ]; then
+            check "Captured plaintext invite token from rendered HTML" "ok" "ok"
+        else
+            check "Captured plaintext invite token from rendered HTML" "ok" "FAILED (no token in HTML)"
+        fi
+
+        # /register?token=<plaintext> renders the form (invite_only default).
+        register_form_out=$(curl -sk -o - -w "\n%{http_code}" \
+            "$BASE_URL/register?token=${SMOKE_INVITE_TOKEN}")
+        register_form_status=$(echo "$register_form_out" | tail -n1)
+        register_form_html=$(echo "$register_form_out" | sed '$d')
+        check "GET /register?token=... → 200" "200" "$register_form_status"
+        check_contains "Register form renders email input" 'name="email"' "$register_form_html"
+
+        # /register without a token in invite_only mode renders the
+        # "registration is invite-only" page.
+        register_blocked_out=$(curl -sk -o - -w "\n%{http_code}" "$BASE_URL/register")
+        register_blocked_status=$(echo "$register_blocked_out" | tail -n1)
+        register_blocked_html=$(echo "$register_blocked_out" | sed '$d')
+        check "GET /register (no token, invite_only) → 200" "200" "$register_blocked_status"
+        check_contains "Blocked /register page mentions invite-only" "invite-only" "$register_blocked_html"
+
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
         reset_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \

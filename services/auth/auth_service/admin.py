@@ -17,13 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service.db import get_session
 from auth_service.deps import AuthenticatedUser, require_admin, require_root_admin
-from auth_service.models import AgentRegistration, ServerSetting, User
+from auth_service.models import AgentRegistration, InviteToken, ServerSetting, User
 from auth_service.models import Session as SessionRow
 from auth_service.passwords import hash_password
+from auth_service.registration import generate_invite_token, hash_invite_token
 from auth_service.schemas import (
     AgentListView,
     AgentView,
+    CreateInviteRequest,
+    CreateInviteResponse,
     CreateUserRequest,
+    InviteListView,
+    InviteView,
     RegistrationModeView,
     ResetPasswordResponse,
     RevokeSessionsResponse,
@@ -329,6 +334,121 @@ async def set_registration_mode(
     await db.commit()
     await db.refresh(row)
     return _registration_mode_view(row)
+
+
+# ---------------------------------------------------------------------------
+# Invite tokens — W3.6 sub-item 4
+# ---------------------------------------------------------------------------
+
+
+_INVITES_DEFAULT_PER_PAGE = 50
+_INVITES_MAX_PER_PAGE = 200
+
+
+def _invite_view(row: InviteToken, creator_email: str | None) -> InviteView:
+    return InviteView(
+        id=row.id,
+        created_by_user_id=row.created_by_user_id,
+        created_by_email=creator_email,
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+    )
+
+
+@router.post(
+    "/invites",
+    response_model=CreateInviteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_invite(
+    body: CreateInviteRequest,
+    admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> CreateInviteResponse:
+    """Mint a single-use invite token. Returns plaintext once.
+
+    The plaintext token is **only** present in this response — it is
+    SHA-256-hashed before being persisted, so a database read can never
+    reconstitute it. Admins copy the token (or invite URL) at this
+    moment and hand it off out-of-band.
+    """
+    plaintext = generate_invite_token()
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(hours=body.expires_in_hours)
+    invite = InviteToken(
+        token_hash=hash_invite_token(plaintext),
+        created_by_user_id=admin.user_id,
+        created_at=now,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+    return CreateInviteResponse(
+        id=invite.id,
+        token=plaintext,
+        expires_at=invite.expires_at,
+        created_at=invite.created_at,
+    )
+
+
+@router.get("/invites", response_model=InviteListView)
+async def list_invites(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(_INVITES_DEFAULT_PER_PAGE, ge=1, le=_INVITES_MAX_PER_PAGE),
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> InviteListView:
+    """List pending invites (not used, not expired)."""
+    now = datetime.now(UTC)
+    pending = (
+        InviteToken.used_at.is_(None),
+        InviteToken.expires_at > now,
+    )
+
+    total = int(
+        (
+            await db.execute(select(func.count()).select_from(InviteToken).where(*pending))
+        ).scalar_one()
+    )
+    offset = (page - 1) * per_page
+    rows = (
+        await db.execute(
+            select(InviteToken, User.email)
+            .join(User, User.id == InviteToken.created_by_user_id, isouter=True)
+            .where(*pending)
+            .order_by(InviteToken.created_at.desc())
+            .limit(per_page)
+            .offset(offset)
+        )
+    ).all()
+
+    invites = [_invite_view(invite, email) for invite, email in rows]
+    return InviteListView(invites=invites, total=total)
+
+
+@router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_invite(
+    invite_id: uuid.UUID,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Revoke a pending invite by stamping ``expires_at = now()``.
+
+    We mark expired rather than deleting so the audit trail of who
+    minted what survives. A used invite is already terminal — revoking
+    it is a no-op (still 204 for idempotency).
+    """
+    invite = (
+        await db.execute(select(InviteToken).where(InviteToken.id == invite_id))
+    ).scalar_one_or_none()
+    if invite is None:
+        raise _error(status.HTTP_404_NOT_FOUND, "invite_not_found")
+    now = datetime.now(UTC)
+    if invite.used_at is None and invite.expires_at > now:
+        invite.expires_at = now
+        await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/agents/cleanup-stale", response_model=StaleCleanupResponse)

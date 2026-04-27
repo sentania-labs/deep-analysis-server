@@ -562,6 +562,171 @@ async def admin_set_registration_mode(
     )
 
 
+@dataclass
+class InviteItem:
+    id: str
+    created_by_user_id: int | None
+    created_by_email: str | None
+    created_at: datetime | None
+    expires_at: datetime | None
+
+
+@dataclass
+class CreatedInvite:
+    id: str
+    token: str
+    expires_at: datetime | None
+    created_at: datetime | None
+
+
+async def admin_create_invite(
+    base_url: str,
+    token: str,
+    expires_in_hours: int,
+) -> CreatedInvite:
+    """Admin-only: mint a new invite token.
+
+    Returns the plaintext token + metadata. Surface-level errors
+    (validation 422 etc.) raise :class:`AuthClientError` — the inline
+    form already constrains the input, so a 422 here is unexpected and
+    deserves to bubble up.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/invites",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"expires_in_hours": expires_in_hours},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST /admin/invites transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST /admin/invites returned {resp.status_code}")
+    if resp.status_code != 201:
+        raise AuthClientError(f"auth POST /admin/invites returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    return CreatedInvite(
+        id=str(data["id"]),
+        token=str(data["token"]),
+        expires_at=_parse_dt(data.get("expires_at")),
+        created_at=_parse_dt(data.get("created_at")),
+    )
+
+
+async def admin_list_invites(
+    base_url: str,
+    token: str,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[InviteItem], int]:
+    """Admin-only: list pending (unused, unexpired) invites."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/invites",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"page": page, "per_page": per_page},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth GET /admin/invites transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth GET /admin/invites returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(f"auth GET /admin/invites returned {resp.status_code}: {resp.text}")
+    data = resp.json()
+    items = [
+        InviteItem(
+            id=str(i["id"]),
+            created_by_user_id=(
+                int(i["created_by_user_id"]) if i.get("created_by_user_id") is not None else None
+            ),
+            created_by_email=i.get("created_by_email"),
+            created_at=_parse_dt(i.get("created_at")),
+            expires_at=_parse_dt(i.get("expires_at")),
+        )
+        for i in data.get("invites", [])
+    ]
+    return items, int(data.get("total", len(items)))
+
+
+async def admin_revoke_invite(
+    base_url: str,
+    token: str,
+    invite_id: str,
+) -> tuple[bool, str | None]:
+    """Admin-only: revoke a pending invite. Returns (ok, error_code)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/admin/invites/{invite_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth DELETE /admin/invites transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth DELETE /admin/invites returned {resp.status_code}")
+    if resp.status_code == 404:
+        return False, "invite_not_found"
+    raise AuthClientError(f"auth DELETE /admin/invites returned {resp.status_code}: {resp.text}")
+
+
+async def public_get_registration_mode(base_url: str) -> str:
+    """Public read of the current registration mode.
+
+    Returns ``"open"`` or ``"invite_only"``. Falls back to
+    ``"invite_only"`` (the safer default) on transport / 5xx so a flaky
+    auth instance defaults to lock-down rather than letting strangers
+    sign up.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/auth/registration-mode")
+    except httpx.HTTPError:
+        return "invite_only"
+    if resp.status_code != 200:
+        return "invite_only"
+    try:
+        mode = str(resp.json().get("mode") or "")
+    except ValueError:
+        return "invite_only"
+    return mode if mode in ("open", "invite_only") else "invite_only"
+
+
+async def public_register(
+    base_url: str,
+    email: str,
+    password: str,
+    invite_token: str | None,
+) -> tuple[bool, str | None]:
+    """Public registration. Returns (ok, error_code).
+
+    Maps known auth-side error codes through to the caller for inline
+    rendering — invite_required, invalid_invite_token, weak_password,
+    email_already_exists, invalid_email. Anything else surfaces as
+    :class:`AuthClientError`.
+    """
+    payload: dict[str, Any] = {"email": email, "password": password}
+    if invite_token:
+        payload["token"] = invite_token
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(f"{base_url}/auth/register", json=payload)
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST /auth/register transport error: {exc}") from exc
+    if resp.status_code == 201:
+        return True, None
+    if resp.status_code in (400, 403, 409, 422):
+        try:
+            detail = resp.json().get("detail") or {}
+            code = detail.get("error") if isinstance(detail, dict) else None
+        except ValueError:
+            code = None
+        return False, code or "registration_failed"
+    raise AuthClientError(f"auth POST /auth/register returned {resp.status_code}: {resp.text}")
+
+
 async def admin_reset_password(
     base_url: str,
     token: str,

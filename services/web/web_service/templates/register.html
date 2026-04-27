@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Register &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="auth-card">
+    <h1>Create an account</h1>
+
+    {% if invite_only_no_token %}
+        <p class="form-error" role="alert">
+            Registration is invite-only. Ask an administrator for an
+            invite link.
+        </p>
+    {% else %}
+        {% if error %}
+            <p class="form-error" role="alert">{{ error }}</p>
+        {% endif %}
+
+        {% if mode == "invite_only" %}
+            <p class="muted">You're using an invite — finish setting up your account below.</p>
+        {% else %}
+            <p class="muted">Anyone can register; an invite token is optional.</p>
+        {% endif %}
+
+        <form method="post" action="/register" class="auth-form">
+            {% if token %}
+                <input type="hidden" name="token" value="{{ token }}">
+            {% endif %}
+            <label class="field">
+                <span>Email</span>
+                <input type="email" name="email" autocomplete="email" required autofocus
+                       value="{{ email or '' }}">
+            </label>
+            <label class="field">
+                <span>Password</span>
+                <input type="password" name="password" autocomplete="new-password" required
+                       minlength="12">
+            </label>
+            <label class="field">
+                <span>Confirm password</span>
+                <input type="password" name="confirm_password" autocomplete="new-password" required
+                       minlength="12">
+            </label>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Create account</button>
+            </div>
+        </form>
+    {% endif %}
+
+    <p class="muted">
+        Already have an account? <a href="/login">Log in</a>.
+    </p>
+</section>
+{% endblock %}
