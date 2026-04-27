@@ -5,7 +5,15 @@
 {% block content %}
 <section class="panel">
     <h1>Users</h1>
-    <p><a href="/dashboard">&larr; Back to dashboard</a></p>
+    <nav class="admin-subnav">
+        <a href="/admin/users" aria-current="page"><strong>Users</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
 
     {% if error %}
     <div class="alert alert-error" role="alert">{{ error }}</div>
@@ -39,7 +47,7 @@
             </thead>
             <tbody>
                 {% for u in users %}
-                <tr>
+                <tr id="user-{{ u.id }}">
                     <td>{{ u.id }}</td>
                     <td>{{ u.email }}</td>
                     <td>{{ u.role }}</td>

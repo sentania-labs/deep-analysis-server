@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Invites · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Invites</h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites" aria-current="page"><strong>Invites</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if created %}
+    <div class="alert alert-info" role="status">
+        <p>
+            Invite created. The plaintext token below is shown <strong>only once</strong> —
+            copy it now and hand it (or the invite URL) to the new user out-of-band.
+        </p>
+        <p>Token: <code class="temp-password">{{ created.token }}</code></p>
+        <p>Invite URL: <code class="temp-password">{{ created.invite_url }}</code></p>
+        {% if created.expires_at %}
+        <p class="muted">
+            Expires {{ created.expires_at.strftime("%Y-%m-%d %H:%M") }}.
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/invites" class="inline-form">
+        <label class="field">
+            <span>Expires in (hours)</span>
+            <input type="number" name="expires_in_hours"
+                   value="{{ default_hours }}" min="1" max="{{ max_hours }}" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Create invite</button>
+    </form>
+
+    <h2>Pending invites</h2>
+    {% if not invites %}
+        <p>No pending invites.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Created by</th>
+                    <th>Created</th>
+                    <th>Age</th>
+                    <th>Expires</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for i in invites %}
+                <tr>
+                    <td><code>{{ i.id }}</code></td>
+                    <td>{{ i.created_by_email or "—" }}</td>
+                    <td>{{ i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "—" }}</td>
+                    <td>{{ i.age or "—" }}</td>
+                    <td>{{ i.expires_at.strftime("%Y-%m-%d %H:%M") if i.expires_at else "—" }}</td>
+                    <td>
+                        <form method="post"
+                              action="/admin/invites/{{ i.id }}/revoke?page={{ page }}&per_page={{ per_page }}"
+                              class="inline-form"
+                              onsubmit="return confirm('Revoke this invite? It will be unusable immediately.');">
+                            <button type="submit" class="btn btn-danger">Revoke</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% set first_idx = (page - 1) * per_page + 1 %}
+        {% set last_idx = first_idx + invites|length - 1 %}
+        {% set has_prev = page > 1 %}
+        {% set has_next = last_idx < total %}
+        <nav class="pagination" aria-label="Invite list pagination">
+            <p class="muted">
+                Showing {{ first_idx }}–{{ last_idx }} of
+                {{ total }} pending invite{{ "" if total == 1 else "s" }}.
+            </p>
+            {% if has_prev or has_next %}
+            <p>
+                {% if has_prev %}
+                <a class="btn"
+                   href="/admin/invites?page={{ page - 1 }}&per_page={{ per_page }}"
+                   rel="prev">&larr; Previous</a>
+                {% endif %}
+                <span class="muted">Page {{ page }}</span>
+                {% if has_next %}
+                <a class="btn"
+                   href="/admin/invites?page={{ page + 1 }}&per_page={{ per_page }}"
+                   rel="next">Next &rarr;</a>
+                {% endif %}
+            </p>
+            {% endif %}
+        </nav>
+    {% endif %}
+</section>
+{% endblock %}

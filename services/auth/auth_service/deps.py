@@ -157,6 +157,56 @@ async def require_admin(
     return user
 
 
+# Load-bearing convention: ``users.id == 1`` is the original installer
+# admin (the row that ``bootstrap_admin`` mints on first startup). It
+# is the only account permitted to flip cluster-global settings whose
+# blast radius spans every user — currently the registration-mode
+# toggle (W3.6 sub-item 3); future toggles will reuse this gate. Other
+# admins can read these settings but cannot change them. The
+# convention rests on the auto-increment PK starting at 1 and the
+# bootstrap path always running first; ``001_auth_tables.py`` defines
+# both. If we ever migrate off integer PKs or seed the table out-of-
+# order, this gate must move with the convention.
+ROOT_ADMIN_USER_ID = 1
+
+
+async def require_root_admin(
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Gate: caller must be the original installer admin (UID=1, role=admin).
+
+    Same 401-vs-403 split as :func:`require_admin`: an unauthenticated
+    caller already 401'd inside ``get_current_user``; this wrapper adds
+    a 403 ``not_root_admin`` for any authenticated caller who isn't
+    UID=1 with role=admin.
+    """
+    if user.user_id != ROOT_ADMIN_USER_ID or user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "not_root_admin"},
+        )
+    return user
+
+
+async def require_user_role(
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Gate: caller must be authenticated AND NOT be an admin.
+
+    Self-service mutation routes (PATCH /auth/me, POST
+    /auth/me/agents/{id}/revoke, POST /auth/agent/registration-code)
+    are off-limits to admins under the W3.6 hard role split. Read
+    routes (GET /auth/me, GET /auth/me/agents) are still allowed —
+    admin needs them for the admin panel and self-introspection.
+    """
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "admin_self_service_disabled"},
+        )
+    return user
+
+
 async def get_current_agent(
     request: Request,
     db: AsyncSession = Depends(get_session),

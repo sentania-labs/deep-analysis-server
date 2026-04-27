@@ -36,7 +36,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 metadata = MetaData(schema="auth")
@@ -123,4 +123,82 @@ class AgentRegistration(Base):
     __table_args__ = (
         UniqueConstraint("api_token_hash", name="uq_agent_registrations_api_token_hash"),
         Index("ix_agent_registrations_user_id", "user_id"),
+    )
+
+
+class ServerSetting(Base):
+    """Key/value store for global server settings.
+
+    Single-row-per-key shape (PK on ``key``) so admin endpoints can
+    UPSERT without ordering games. ``value`` is JSONB so future
+    settings can hold structured payloads without a schema migration
+    each time. ``updated_by_user_id`` is nullable + ON DELETE SET NULL
+    so deleting an old admin doesn't strand audit-trail rows.
+
+    Introduced for W3.6 sub-item 3 (registration_mode). Sub-item 4
+    persists invite tokens in their own table (``invite_tokens``) — see
+    that model for why Redis was the wrong shape there. This table
+    starts with the one row.
+    """
+
+    __tablename__ = "server_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
+class InviteToken(Base):
+    """Single-use, hashed-at-rest user-invite token.
+
+    Pattern mirrors :class:`AgentRegistration`'s api token: the issuing
+    endpoint returns plaintext once and persists only a SHA-256 hex
+    digest in ``token_hash``. The /auth/register endpoint hashes its
+    inbound token and looks it up here.
+
+    ``created_by_user_id`` and ``used_by_user_id`` use ``ON DELETE SET
+    NULL`` so deleting an admin (issuer) or a user (consumer) doesn't
+    cascade-wipe the invite history.
+
+    A row is "pending" when ``used_at IS NULL AND expires_at > now()``;
+    revocation is implemented by stamping ``expires_at = now()`` rather
+    than deleting the row, so the audit trail of who-minted-what
+    survives. The ``ix_invite_tokens_pending`` composite index covers
+    the pending-list query.
+    """
+
+    __tablename__ = "invite_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_by_user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("auth.users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_invite_tokens_token_hash"),
+        Index("ix_invite_tokens_pending", "used_at", "expires_at"),
     )

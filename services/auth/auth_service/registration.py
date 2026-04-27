@@ -66,3 +66,24 @@ def hash_api_token(token: str) -> str:
     directly.
     """
     return _shared_hash_api_token(token)
+
+
+# ---------------------------------------------------------------------------
+# User invite tokens — W3.6 sub-item 4
+# ---------------------------------------------------------------------------
+
+
+def generate_invite_token() -> str:
+    """Return a long opaque invite token (URL-safe).
+
+    32 bytes of entropy → 43 chars after base64url; comfortably above
+    the registration-code's 8 chars because invite URLs may sit in
+    inboxes for up to 720 hours and a brute-force window that long
+    deserves real entropy.
+    """
+    return secrets.token_urlsafe(32)
+
+
+def hash_invite_token(token: str) -> str:
+    """SHA-256 hex of an invite token. Mirrors :func:`hash_api_token`."""
+    return _shared_hash_api_token(token)

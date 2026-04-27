@@ -140,3 +140,69 @@ class StaleCleanupResponse(BaseModel):
 
 class RevokeSessionsResponse(BaseModel):
     revoked_count: int
+
+
+RegistrationMode = Literal["open", "invite_only"]
+
+
+class RegistrationModeView(BaseModel):
+    mode: RegistrationMode
+    updated_at: datetime
+    updated_by_user_id: int | None
+
+
+class SetRegistrationModeRequest(BaseModel):
+    mode: RegistrationMode
+
+
+# ---------------------------------------------------------------------------
+# Invite tokens — W3.6 sub-item 4
+# ---------------------------------------------------------------------------
+
+
+# Caps come from the spec: 168h default (7 days), 720h max (30 days).
+# Anything beyond a month would render the audit trail meaningless and
+# encourage stale tokens leaking.
+INVITE_TOKEN_DEFAULT_HOURS = 168
+INVITE_TOKEN_MAX_HOURS = 720
+
+
+class CreateInviteRequest(BaseModel):
+    expires_in_hours: int = Field(
+        default=INVITE_TOKEN_DEFAULT_HOURS,
+        ge=1,
+        le=INVITE_TOKEN_MAX_HOURS,
+    )
+
+
+class CreateInviteResponse(BaseModel):
+    """Response from POST /admin/invites — plaintext token shown once."""
+
+    id: uuid.UUID
+    token: str
+    expires_at: datetime
+    created_at: datetime
+
+
+class InviteView(BaseModel):
+    id: uuid.UUID
+    created_by_user_id: int | None
+    created_by_email: str | None
+    created_at: datetime
+    expires_at: datetime
+
+
+class InviteListView(BaseModel):
+    invites: list[InviteView]
+    total: int
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1)
+    token: str | None = Field(default=None, max_length=128)
+
+
+class RegisterResponse(BaseModel):
+    user_id: int
+    email: str

@@ -113,8 +113,9 @@ post_head=$(curl -sk -D - -o /dev/null \
 post_status=$(echo "$post_head" | head -n1 | awk '{print $2}')
 # 303 See Other — spec-preferred for POST→GET redirect after form submit.
 check "POST /login → 303" "303" "$post_status"
-# Location may be absolute (https://host/dashboard) or relative (/dashboard).
-check_contains "POST /login redirects to /dashboard" "/dashboard" "$post_head"
+# W3.6: admin sessions land on the admin panel landing, not /dashboard.
+# Location may be absolute (https://host/admin/users) or relative (/admin/users).
+check_contains "POST /login (admin) redirects to /admin/users" "/admin/users" "$post_head"
 
 if jar_has_live_session "$COOKIE_JAR"; then
     check "da_session cookie set" "ok" "ok"
@@ -129,16 +130,15 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. GET /dashboard with cookie → 200 + "Welcome"
+# 3. GET /dashboard with admin cookie → 302 to /admin/users (W3.6)
 # --------------------------------------------------------------------------
 echo ""
-echo "--- 3. GET /dashboard (authenticated) ---"
+echo "--- 3. GET /dashboard (admin authenticated) ---"
 
-dash_out=$(curl -sk -b "$COOKIE_JAR" -o - -w "\n%{http_code}" "$BASE_URL/dashboard")
-dash_status=$(echo "$dash_out" | tail -n1)
-dash_html=$(echo "$dash_out" | sed '$d')
-check "GET /dashboard (with cookie) → 200" "200" "$dash_status"
-check_contains "GET /dashboard contains 'Welcome'" "Welcome" "$dash_html"
+dash_head=$(curl -sk -D - -o /dev/null -b "$COOKIE_JAR" "$BASE_URL/dashboard")
+dash_status=$(echo "$dash_head" | head -n1 | awk '{print $2}')
+check "GET /dashboard (admin cookie) → 302" "302" "$dash_status"
+check_contains "GET /dashboard (admin) redirects to /admin/users" "/admin/users" "$dash_head"
 
 # --------------------------------------------------------------------------
 # 4. GET /dashboard without cookie → 302 to /login?next=/dashboard
@@ -192,40 +192,31 @@ restore_status=$(curl -sk -o /dev/null -w "%{http_code}" \
 check "Restore bootstrap password → 303" "303" "$restore_status"
 
 # --------------------------------------------------------------------------
-# 6. Self-service /profile surface (GET/POST)
+# 6. /profile* off-limits to admin (W3.6 hard role split)
 # --------------------------------------------------------------------------
 echo ""
-echo "--- 6. /profile self-service ---"
+echo "--- 6. /profile* admin bounce ---"
 
 # Step 5's password rotation revoked the cookie in $COOKIE_JAR. Log in fresh
-# so /profile checks are independent of the rotation flow.
+# so the bounce checks are independent of the rotation flow.
 curl -sk -o /dev/null -c "$PROFILE_COOKIE" \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
     --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
 
-profile_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile")
-profile_status=$(echo "$profile_out" | tail -n1)
-profile_html=$(echo "$profile_out" | sed '$d')
-check "GET /profile (with cookie) → 200" "200" "$profile_status"
-check_contains "GET /profile contains 'Edit email'" "Edit email" "$profile_html"
-check_contains "GET /profile links to /profile/agents" "/profile/agents" "$profile_html"
+# Each /profile* GET as an admin redirects (302) to /admin/users.
+for path in "/profile" "/profile/edit" "/profile/agents"; do
+    bounce_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" "$BASE_URL$path")
+    bounce_status=$(echo "$bounce_head" | head -n1 | awk '{print $2}')
+    check "GET $path (admin cookie) → 302" "302" "$bounce_status"
+    check_contains "GET $path (admin) → /admin/users" "/admin/users" "$bounce_head"
+done
 
-edit_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile/edit")
-edit_status=$(echo "$edit_out" | tail -n1)
-edit_html=$(echo "$edit_out" | sed '$d')
-check "GET /profile/edit (with cookie) → 200" "200" "$edit_status"
-check_contains "GET /profile/edit contains email field" 'name="email"' "$edit_html"
-
-agents_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/profile/agents")
-agents_status=$(echo "$agents_out" | tail -n1)
-check "GET /profile/agents (with cookie) → 200" "200" "$agents_status"
-
-# Unauthenticated must redirect to /login.
+# Unauthenticated /profile must still redirect to /login (not /admin/users).
 noauth_profile=$(curl -sk -D - -o /dev/null "$BASE_URL/profile")
 noauth_profile_status=$(echo "$noauth_profile" | head -n1 | awk '{print $2}')
 check "GET /profile (no cookie) → 302" "302" "$noauth_profile_status"
-check_contains "/profile redirect targets /login" "/login" "$noauth_profile"
+check_contains "/profile (no cookie) redirect targets /login" "/login" "$noauth_profile"
 
 # --------------------------------------------------------------------------
 # 7. /admin/users — admin panel surface (W3.5-C)
@@ -254,14 +245,31 @@ check_contains "/admin/users redirect targets /login" "/login" "$noauth_admin"
 # web admin UI, then delete it. Skip seeding gracefully when docker
 # compose isn't reachable (e.g. running this script against a remote
 # stack manually) — the GET-only checks above still gate the build.
-ADMIN_JWT=$(awk -F'\t' '$0 !~ /^# / && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE")
+ADMIN_JWT=$(awk -F'\t' '$0 !~ /^# / && $0 !~ /^$/ && $6 == "da_session" { print $7; exit }' "$PROFILE_COOKIE" || true)
 if [ -z "$ADMIN_JWT" ]; then
     check "Extracted admin JWT from session cookie" "ok" "FAILED (cookie jar missing da_session)"
 fi
 
-if command -v docker >/dev/null 2>&1 \
-   && [ -n "$ADMIN_JWT" ] \
-   && docker compose ps auth >/dev/null 2>&1; then
+# Be explicit about why CRUD might be skipped — silent gates have
+# burned us before. Each gate logs its own SKIP reason.
+RUN_CRUD=1
+if ! command -v docker >/dev/null 2>&1; then
+    echo "  SKIP-REASON: docker CLI not found on PATH"
+    RUN_CRUD=0
+elif [ -z "$ADMIN_JWT" ]; then
+    echo "  SKIP-REASON: no admin JWT in session cookie jar"
+    RUN_CRUD=0
+elif ! docker compose ps auth >/dev/null 2>&1; then
+    echo "  SKIP-REASON: docker compose project not reachable from $(pwd)"
+    RUN_CRUD=0
+fi
+
+if [ "$RUN_CRUD" = "1" ]; then
+    # Inside the CRUD block we relax `errexit` so a single curl/grep
+    # blip cannot silently kill the script and skip section 8 (logout).
+    # Each step still asserts via `check`, so real failures are still
+    # visible in the PASS/FAIL tally.
+    set +e
 
     # Seed testuser@local via auth's internal JSON API. Idempotent:
     # if the row already exists from a prior run we look up its id.
@@ -291,6 +299,144 @@ for u in d.get("users", []):
         check "Seeded testuser@local via auth admin API" "ok" "FAILED (no id captured)"
     else
         check_contains "Seeded testuser@local via auth admin API" "ok" "ok (id=$TEST_USER_ID)"
+
+        # ------------------------------------------------------------------
+        # W3.6.2 — /admin/agents reachable, expected columns, revoke action.
+        # We check this before deleting testuser@local so the agents view
+        # has at least the migrated agent row to render against.
+        # ------------------------------------------------------------------
+        agents_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/agents")
+        agents_status=$(echo "$agents_out" | tail -n1)
+        agents_html=$(echo "$agents_out" | sed '$d')
+        check "GET /admin/agents (admin cookie) → 200" "200" "$agents_status"
+        check_contains "GET /admin/agents heading" "Agents" "$agents_html"
+        check_contains "GET /admin/agents has Owner column" "Owner" "$agents_html"
+        check_contains "GET /admin/agents has Machine column" "Machine" "$agents_html"
+        check_contains "GET /admin/agents has Last seen column" "Last seen" "$agents_html"
+
+        # /admin/agents must be admin-only — unauth bounces to /login.
+        noauth_agents=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/agents")
+        noauth_agents_status=$(echo "$noauth_agents" | head -n1 | awk '{print $2}')
+        check "GET /admin/agents (no cookie) → 302" "302" "$noauth_agents_status"
+        check_contains "/admin/agents redirect targets /login" "/login" "$noauth_agents"
+
+        # End-to-end revoke-any: capture the first active agent_id from
+        # the list view, POST revoke through the web layer, then assert
+        # the row's revoke action is gone on refresh. Skips silently if
+        # there are no agents in the rendered list (smoke runs against
+        # a freshly migrated DB may have zero agents).
+        AGENT_ID=$(echo "$agents_html" \
+            | grep -oE '/admin/agents/[0-9a-f-]{36}/revoke' \
+            | head -n1 \
+            | sed -E 's|/admin/agents/([0-9a-f-]+)/revoke|\1|' || true)
+        if [ -n "$AGENT_ID" ]; then
+            revoke_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
+                -X POST "$BASE_URL/admin/agents/${AGENT_ID}/revoke")
+            revoke_status=$(echo "$revoke_head" | head -n1 | awk '{print $2}')
+            check "POST /admin/agents/{id}/revoke → 303" "303" "$revoke_status"
+            check_contains "Revoke redirects back to /admin/agents" \
+                "/admin/agents" "$revoke_head"
+
+            post_revoke_html=$(curl -sk -b "$PROFILE_COOKIE" "$BASE_URL/admin/agents")
+            if echo "$post_revoke_html" | grep -q "/admin/agents/${AGENT_ID}/revoke"; then
+                check "Revoke action removed from refreshed list" "ok" \
+                    "FAILED (revoke action still rendered)"
+            else
+                check "Revoke action removed from refreshed list" "ok" "ok"
+            fi
+        else
+            echo "  SKIP: revoke-any end-to-end (no active agents in list)"
+        fi
+
+        # ------------------------------------------------------------------
+        # W3.6.3 — /admin/settings reachable, registration mode toggle.
+        # ------------------------------------------------------------------
+        settings_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/settings")
+        settings_status=$(echo "$settings_out" | tail -n1)
+        settings_html=$(echo "$settings_out" | sed '$d')
+        check "GET /admin/settings (admin cookie) → 200" "200" "$settings_status"
+        check_contains "GET /admin/settings has Registration mode" "Registration mode" "$settings_html"
+        # Bootstrap admin is always UID=1 — toggle should be enabled
+        # (no `disabled` attribute on the <select>).
+        if echo "$settings_html" | grep -qE 'select[^>]*name="mode"[^>]*disabled'; then
+            check "Bootstrap admin sees enabled toggle" "ok" "FAILED (select is disabled)"
+        else
+            check "Bootstrap admin sees enabled toggle" "ok" "ok"
+        fi
+
+        # /admin/settings must be admin-only — unauth bounces to /login.
+        noauth_settings=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/settings")
+        noauth_settings_status=$(echo "$noauth_settings" | head -n1 | awk '{print $2}')
+        check "GET /admin/settings (no cookie) → 302" "302" "$noauth_settings_status"
+        check_contains "/admin/settings redirect targets /login" "/login" "$noauth_settings"
+
+        # Toggle to open and back to invite_only — full round-trip.
+        toggle_open_head=$(curl -sk -D - -o /dev/null -b "$PROFILE_COOKIE" \
+            -X POST "$BASE_URL/admin/settings/registration-mode" \
+            --data-urlencode "mode=open")
+        toggle_open_status=$(echo "$toggle_open_head" | head -n1 | awk '{print $2}')
+        check "POST /admin/settings/registration-mode (mode=open) → 303" "303" "$toggle_open_status"
+
+        post_toggle_html=$(curl -sk -b "$PROFILE_COOKIE" "$BASE_URL/admin/settings")
+        check_contains "Settings page reflects mode=open" "<strong>open</strong>" "$post_toggle_html"
+
+        toggle_back_status=$(curl -sk -o /dev/null -w "%{http_code}" -b "$PROFILE_COOKIE" \
+            -X POST "$BASE_URL/admin/settings/registration-mode" \
+            --data-urlencode "mode=invite_only")
+        check "POST /admin/settings/registration-mode (mode=invite_only) → 303" "303" "$toggle_back_status"
+
+        # ------------------------------------------------------------------
+        # W3.6.4 — /admin/invites reachable + create + token rendered;
+        # /register?token=... happy path in invite_only mode;
+        # /register without token blocked in invite_only mode.
+        # ------------------------------------------------------------------
+        invites_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/invites")
+        invites_status=$(echo "$invites_out" | tail -n1)
+        invites_html=$(echo "$invites_out" | sed '$d')
+        check "GET /admin/invites (admin cookie) → 200" "200" "$invites_status"
+        check_contains "GET /admin/invites has Pending invites heading" "Pending invites" "$invites_html"
+
+        # /admin/invites must be admin-only — unauth bounces to /login.
+        noauth_invites=$(curl -sk -D - -o /dev/null "$BASE_URL/admin/invites")
+        noauth_invites_status=$(echo "$noauth_invites" | head -n1 | awk '{print $2}')
+        check "GET /admin/invites (no cookie) → 302" "302" "$noauth_invites_status"
+        check_contains "/admin/invites redirect targets /login" "/login" "$noauth_invites"
+
+        # Create an invite — response page renders the plaintext token.
+        create_invite_out=$(curl -sk -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
+            -X POST "$BASE_URL/admin/invites" \
+            --data-urlencode "expires_in_hours=168")
+        create_invite_status=$(echo "$create_invite_out" | tail -n1)
+        create_invite_html=$(echo "$create_invite_out" | sed '$d')
+        check "POST /admin/invites → 200" "200" "$create_invite_status"
+        check_contains "Invite create page mentions one-time token" "shown" "$create_invite_html"
+        # Pull the plaintext token out of the rendered invite URL so the
+        # /register flow can use it.
+        SMOKE_INVITE_TOKEN=$(echo "$create_invite_html" \
+            | grep -oE '/register\?token=[^"<]+' \
+            | head -n1 \
+            | sed -E 's|/register\?token=||' || true)
+        if [ -n "$SMOKE_INVITE_TOKEN" ]; then
+            check "Captured plaintext invite token from rendered HTML" "ok" "ok"
+        else
+            check "Captured plaintext invite token from rendered HTML" "ok" "FAILED (no token in HTML)"
+        fi
+
+        # /register?token=<plaintext> renders the form (invite_only default).
+        register_form_out=$(curl -sk -o - -w "\n%{http_code}" \
+            "$BASE_URL/register?token=${SMOKE_INVITE_TOKEN}")
+        register_form_status=$(echo "$register_form_out" | tail -n1)
+        register_form_html=$(echo "$register_form_out" | sed '$d')
+        check "GET /register?token=... → 200" "200" "$register_form_status"
+        check_contains "Register form renders email input" 'name="email"' "$register_form_html"
+
+        # /register without a token in invite_only mode renders the
+        # "registration is invite-only" page.
+        register_blocked_out=$(curl -sk -o - -w "\n%{http_code}" "$BASE_URL/register")
+        register_blocked_status=$(echo "$register_blocked_out" | tail -n1)
+        register_blocked_html=$(echo "$register_blocked_out" | sed '$d')
+        check "GET /register (no token, invite_only) → 200" "200" "$register_blocked_status"
+        check_contains "Blocked /register page mentions invite-only" "invite-only" "$register_blocked_html"
 
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
@@ -327,15 +473,18 @@ for u in d.get("users", []):
             check "testuser@local removed from list" "ok" "ok"
         fi
     fi
+    # Re-enable errexit now that the CRUD block is done — section 8
+    # (logout) needs the same strictness as the rest of the script.
+    set -e
 else
-    echo "  SKIP: admin CRUD end-to-end (docker compose not reachable; GET-only checks still gate)"
+    echo "  SKIP: admin CRUD end-to-end (see SKIP-REASON above; GET-only checks still gate)"
 fi
 
 # --------------------------------------------------------------------------
 # 8. POST /logout → 303 to /login, cookie cleared
 # --------------------------------------------------------------------------
 echo ""
-echo "--- 6. POST /logout ---"
+echo "--- 8. POST /logout ---"
 
 # First log in fresh so we have a live cookie to logout with.
 curl -sk -o /dev/null -c "$LOGOUT_COOKIE" \

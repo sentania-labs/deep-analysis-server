@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service import models as _models  # noqa: F401 — ensure Base.metadata loaded
@@ -19,13 +20,14 @@ from auth_service.deps import (
     get_current_agent,
     get_current_user,
     get_current_user_any_scope,
+    require_user_role,
 )
 from auth_service.jwt_issue import (
     hash_refresh_token,
     issue_access_token,
     issue_refresh_token,
 )
-from auth_service.models import AgentRegistration, User
+from auth_service.models import AgentRegistration, InviteToken, ServerSetting, User
 from auth_service.models import Session as SessionRow
 from auth_service.passwords import hash_password, verify_password
 from auth_service.registration import (
@@ -33,6 +35,7 @@ from auth_service.registration import (
     generate_api_token,
     generate_registration_code,
     hash_api_token,
+    hash_invite_token,
     store_registration_code,
 )
 from auth_service.schemas import (
@@ -47,6 +50,8 @@ from auth_service.schemas import (
     MeResponse,
     PasswordChangeRequest,
     RefreshRequest,
+    RegisterRequest,
+    RegisterResponse,
     TokenResponse,
     UpdateMeRequest,
     UpdateMeResponse,
@@ -283,7 +288,7 @@ _ME_AGENTS_MAX_LIMIT = 200
 @app.patch("/auth/me", response_model=UpdateMeResponse)
 async def update_me(
     body: UpdateMeRequest,
-    caller: AuthenticatedUser = Depends(get_current_user),
+    caller: AuthenticatedUser = Depends(require_user_role),
     db: AsyncSession = Depends(get_session),
 ) -> UpdateMeResponse:
     new_email = body.email.strip().lower()
@@ -389,7 +394,7 @@ async def list_my_agents(
 @app.post("/auth/me/agents/{agent_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_my_agent(
     agent_id: uuid.UUID,
-    caller: AuthenticatedUser = Depends(get_current_user),
+    caller: AuthenticatedUser = Depends(require_user_role),
     db: AsyncSession = Depends(get_session),
 ) -> Response:
     agent = (
@@ -473,7 +478,7 @@ async def change_password(
     status_code=status.HTTP_201_CREATED,
 )
 async def mint_registration_code(
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(require_user_role),
     redis: Redis = Depends(get_redis),
 ) -> AgentRegistrationCodeResponse:
     # Rate limiting deferred to gateway W7.
@@ -499,6 +504,17 @@ async def register_agent(
     if user_id is None:
         raise _INVALID_REGISTRATION_CODE
 
+    # Defense-in-depth: a code minted before W3.6.1's hard role split
+    # could still be live in Redis and was minted by a then-allowed
+    # admin. After the split, admins are not agent owners, so reject
+    # the consume rather than create an admin-owned agent row.
+    owner = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if owner is None or owner.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "admin_cannot_register_agent"},
+        )
+
     api_token = generate_api_token()
     now = datetime.now(UTC)
     agent = AgentRegistration(
@@ -518,6 +534,149 @@ async def register_agent(
         api_token=api_token,
         user_id=user_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Public user registration — W3.6 sub-item 4
+# ---------------------------------------------------------------------------
+
+
+_REGISTRATION_MODE_KEY = "registration_mode"
+
+
+async def _read_registration_mode(db: AsyncSession) -> str:
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == _REGISTRATION_MODE_KEY))
+    ).scalar_one_or_none()
+    if row is None:
+        # Migration 003 seeds the row; absence means a deployment skew
+        # we shouldn't paper over. 503 is the same surface admin.py uses
+        # so the failure mode stays consistent.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "registration_mode_unconfigured"},
+        )
+    mode = row.value if isinstance(row.value, str) else "invite_only"
+    return mode if mode in ("open", "invite_only") else "invite_only"
+
+
+@app.get("/auth/registration-mode")
+async def public_registration_mode(
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Public read of the current registration mode.
+
+    The /admin/settings/registration-mode endpoint requires admin so
+    audit metadata stays internal; this companion route exposes only
+    the mode value so the public /register page can render the right
+    copy + gate without the user being logged in. Non-sensitive — the
+    same value is observable by any unauthenticated POST /auth/register.
+    """
+    return {"mode": await _read_registration_mode(db)}
+
+
+@app.post(
+    "/auth/register",
+    response_model=RegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register(
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_session),
+) -> RegisterResponse:
+    """Public user registration.
+
+    ``invite_only`` mode requires a valid token; ``open`` mode accepts
+    a token if provided (and consumes it for audit) but doesn't require
+    one. Email uniqueness and password complexity are enforced in both
+    modes — token presence never short-circuits those checks.
+    """
+    mode = await _read_registration_mode(db)
+    submitted_email = body.email.strip().lower()
+    if not submitted_email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_email"},
+        )
+    if len(body.password) < _MIN_PASSWORD_LEN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "weak_password"},
+        )
+
+    raw_token = (body.token or "").strip()
+
+    if mode == "invite_only" and not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "invite_required"},
+        )
+
+    invite: InviteToken | None = None
+    if raw_token:
+        # Lock the row for the duration of the transaction so two
+        # concurrent /auth/register calls racing the same token can't
+        # both observe used_at IS NULL — the second waits, then sees
+        # the stamped row and is rejected.
+        invite = (
+            await db.execute(
+                select(InviteToken)
+                .where(InviteToken.token_hash == hash_invite_token(raw_token))
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        now = datetime.now(UTC)
+        if invite is None or invite.used_at is not None or invite.expires_at <= now:
+            code = "invalid_invite_token"
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": code},
+            )
+
+    # Email uniqueness check (case-insensitive). Done after token
+    # validation so a stranger probing for taken emails can't bypass
+    # the invite gate.
+    clash = (
+        await db.execute(select(User).where(func.lower(User.email) == submitted_email))
+    ).scalar_one_or_none()
+    if clash is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "email_already_exists"},
+        )
+
+    user = User(
+        email=submitted_email,
+        password_hash=hash_password(body.password),
+        role="user",
+        must_change_password=False,
+    )
+    db.add(user)
+    # Flush to get user.id before stamping the invite consumption.
+    # The pre-insert SELECT above is the happy-path check, but a second
+    # registration racing into the same email between SELECT and INSERT
+    # will land on the unique index. Catch that and translate to 409.
+    try:
+        await db.flush()
+
+        if invite is not None:
+            invite.used_at = datetime.now(UTC)
+            invite.used_by_user_id = user.id
+
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        msg = str(exc.orig if exc.orig is not None else exc).lower()
+        if "ix_users_email_lower" in msg or ("unique" in msg and "email" in msg):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "email_already_taken"},
+            ) from exc
+        raise
+    await db.refresh(user)
+
+    _log.info("auth.register.success", extra={"user_id": user.id, "mode": mode})
+    return RegisterResponse(user_id=user.id, email=user.email)
 
 
 @app.post("/auth/agent/heartbeat", response_model=AgentHeartbeatResponse)
