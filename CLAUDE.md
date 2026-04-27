@@ -13,6 +13,14 @@ This is the server half of a three-repo split:
 
 **Origin:** v0.4.0 is a clean greenfield rewrite. The predecessor (`manalog` through v0.3.8) was a proof-of-concept. No code from manalog is ported. You may read manalog source at `workspaces/manalog/` for design patterns, but do not copy it wholesale.
 
+## Charter
+
+This workspace is software. The "What this is" / product
+scope above is the charter. Software authors don't touch
+infrastructure outside their charter — even with credentials
+available. For work that needs out-of-charter access, use a
+sanctioned cross-system channel.
+
 ## Tech stack
 
 - **Language:** Python 3.12+
