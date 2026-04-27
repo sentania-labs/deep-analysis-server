@@ -59,8 +59,9 @@
                         {% if not a.revoked_at %}
                         <form method="post"
                               action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}"
-                              class="inline-form"
-                              onsubmit="return confirm('Revoke agent {{ a.machine_name }} owned by {{ a.user_email }}? The agent will lose access immediately.');">
+                              class="inline-form revoke-form"
+                              data-machine-name="{{ a.machine_name }}"
+                              data-user-email="{{ a.user_email }}">
                             <button type="submit" class="btn btn-danger">Revoke</button>
                         </form>
                         {% else %}
@@ -100,4 +101,17 @@
         </nav>
     {% endif %}
 </section>
+<script>
+    document.querySelectorAll('.revoke-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var mn = form.dataset.machineName || '';
+            var ue = form.dataset.userEmail || '';
+            var msg = 'Revoke agent ' + mn + ' owned by ' + ue +
+                '? The agent will lose access immediately.';
+            if (!window.confirm(msg)) {
+                e.preventDefault();
+            }
+        });
+    });
+</script>
 {% endblock %}

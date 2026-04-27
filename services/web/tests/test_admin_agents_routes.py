@@ -206,6 +206,104 @@ async def test_get_admin_agents_admin_forbidden_renders_403(
 
 
 # ---------------------------------------------------------------------------
+# XSS regression — machine_name / user_email are user-controlled and must
+# never reach a JS string context unescaped (PR #10 codex round 4 item 4).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_admin_agents_escapes_malicious_machine_name(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    payload = "');alert(1);//"
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return (
+            [
+                auth_client.AdminAgentItem(
+                    agent_id="11111111-1111-1111-1111-111111111111",
+                    user_id=2,
+                    user_email="alice@example.com",
+                    machine_name=payload,
+                    client_version="0.4.0",
+                    created_at=datetime(2026, 4, 26, 12, 0, tzinfo=UTC),
+                    last_seen_at=None,
+                    revoked_at=None,
+                ),
+            ],
+            1,
+        )
+
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # The raw payload must not appear unescaped in any JS-string context.
+    # Jinja autoescape must turn the apostrophe into &#39; (HTML entity)
+    # before it lands in the data-machine-name attribute, and the inline
+    # onsubmit attribute must be gone entirely.
+    assert "onsubmit=" not in r.text
+    assert payload not in r.text
+    # The escaped form is what we expect to find on the data attribute.
+    assert "&#39;);alert(1);//" in r.text
+
+
+@pytest.mark.asyncio
+async def test_get_admin_agents_escapes_malicious_user_email(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    payload = "</script><script>alert(1)</script>"
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return (
+            [
+                auth_client.AdminAgentItem(
+                    agent_id="11111111-1111-1111-1111-111111111111",
+                    user_id=2,
+                    user_email=payload,
+                    machine_name="alice-laptop",
+                    client_version="0.4.0",
+                    created_at=datetime(2026, 4, 26, 12, 0, tzinfo=UTC),
+                    last_seen_at=None,
+                    revoked_at=None,
+                ),
+            ],
+            1,
+        )
+
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # The raw payload (with literal <script> tags) must never appear.
+    assert payload not in r.text
+
+
+# ---------------------------------------------------------------------------
 # Pagination — same shape as /admin/users (?page= & per_page=)
 # ---------------------------------------------------------------------------
 
