@@ -77,27 +77,3 @@ members = [
     "services/analytics",
     "services/web",
 ]
-
-[tool.semantic_release]
-version_toml = ["pyproject.toml:project.version"]
-commit_parser = "conventional"
-major_on_zero = false
-allow_zero_version = true
-tag_format = "v{version}"
-commit_message = "chore(release): {version} [skip ci]"
-build_command = ""
-
-[tool.semantic_release.branches.main]
-match = "^(main)$"
-prerelease = false
-
-[tool.semantic_release.commit_parser_options]
-allowed_tags = ["feat", "fix", "perf", "build", "ci", "docs", "refactor", "style", "test", "chore"]
-minor_tags = ["feat"]
-patch_tags = ["fix", "perf"]
-default_bump_level = 0
-parse_squash_commits = true
-ignore_merge_commits = true
-
-[tool.semantic_release.publish]
-upload_to_vcs_release = false

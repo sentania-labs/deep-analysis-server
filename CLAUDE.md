@@ -21,6 +21,10 @@ infrastructure outside their charter — even with credentials
 available. For work that needs out-of-charter access, use a
 sanctioned cross-system channel.
 
+## Roadmap
+
+`ROADMAP.md` at the repo root is authoritative for active outcomes, priority order, dependencies, and operational blockers. When picking up new work, start there. Shipped releases are recorded in `CHANGELOG.md`; tactical bugs live in GitHub Issues.
+
 ## Tech stack
 
 - **Language:** Python 3.12+
@@ -80,6 +84,7 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 - **Tests per service.** Each service has its own `tests/` directory. Integration tests use a real Postgres + Redis (not mocks).
 - **Self-review protocol.** For non-trivial changes, spawn a subagent to review before committing. Catch your own bugs.
 - **Post-v0.4.2 PR discipline.** `main` is protected by the compose-smoke E2E gate (full stack + `ci/smoke_e2e.sh`). Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are for urgent fixes only and still need CI green on the follow-up run.
+- **Releases are tag-based.** To cut a release, merge work to `main` via PR (CI green), then `git tag vX.Y.Z && git push origin vX.Y.Z` from `main`. The release workflow builds the 5 service images, publishes them to GHCR (tagged with the semver and `:latest`), and creates a GitHub Release. The version is baked into the images at build time as the `VERSION` build arg. No version-bump commit is required — the tag is the source of truth.
 
 ## Directory layout
 
@@ -101,6 +106,8 @@ deep-analysis-server/
 
 ## PKA integration
 
-- Status marker: `agents/riker/status/deep-analysis-server.md` in the PKA repo
-- Updates: write `.pka/updates/current.md` at session end per the pka-workspace-updates skill convention
-- Full delegation: Scott has granted full delegation on Deep Analysis (inherited from manalog posture)
+- **Source of truth lives in this repo.** `ROADMAP.md` owns active outcomes, priority, and operational blockers. `CHANGELOG.md` owns shipped releases. `.pka/updates/current.md` reports session activity.
+- **Riker reads, does not direct.** Riker (the project-liaison agent in PKA) reads `ROADMAP.md`, `CHANGELOG.md`, and `.pka/updates/current.md` to surface status in Scott's daily briefing. He does not author "next steps," "attention needed," or "blockers" sections of his own — those decisions live in this repo.
+- Status marker (Riker's): `agents/riker/status/deep-analysis-server.md` in the PKA repo. It is a derived view, not a source of truth.
+- Session updates: write `.pka/updates/current.md` at session end per the `pka-workspace-updates` skill convention.
+- Full delegation: Scott has granted full delegation on Deep Analysis (inherited from manalog posture).
