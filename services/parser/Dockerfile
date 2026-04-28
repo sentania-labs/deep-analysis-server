@@ -1,5 +1,13 @@
 FROM python:3.12-slim
 
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+
+ENV APP_VERSION=${VERSION}
+
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}"
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
