@@ -1,0 +1,48 @@
+Match: M-12345
+Format: Modern
+Event: League
+Players: Alice, Bob
+
+--- Game 1 ---
+Turn 1 (Alice)
+Alice's life: 20
+Bob's life: 20
+Alice plays Mountain
+Alice casts Lightning Bolt targeting Bob
+Lightning Bolt deals 3 damage to Bob.
+Bob's life: 17
+
+Turn 2 (Bob)
+Bob's life: 17
+Bob plays Forest
+Bob casts Llanowar Elves
+Llanowar Elves is moved to Bob's battlefield
+
+Turn 3 (Alice)
+Alice's life: 20
+Alice plays Mountain
+Alice casts Goblin Guide
+Goblin Guide is moved to Alice's battlefield
+Alice now has R in mana pool
+Stack: Goblin Guide
+
+Turn 4 (Bob)
+Bob's life: 17
+Bob discards Forest
+Forest is put into Bob's graveyard
+
+Alice wins game 1
+
+--- Game 2 ---
+Turn 1 (Bob)
+Bob's life: 20
+Alice's life: 20
+
+Turn 2 (Alice)
+Alice plays Mountain
+Alice casts Lightning Bolt targeting Bob
+Bob loses 3 life
+
+Alice wins game 2
+
+Alice wins the match 2-0

@@ -1,0 +1,119 @@
+"""SQLAlchemy models for the parser service.
+
+Three tables in the ``parser`` schema:
+
+- ``matches`` — one row per parsed match. Carries match metadata
+  (format, event, players, result) plus attribution to the source
+  upload (sha256, user_id).
+- ``games`` — one row per game inside a match. Game-level result.
+- ``game_states`` — one row per turn snapshot per game. JSONB columns
+  hold the per-player zone contents, life totals, mana pool, and the
+  stack at the start of that turn.
+
+Cross-schema columns (``sha256``, ``user_id``) are stored as plain
+columns rather than foreign keys: parser is built from the root
+alembic head which runs before auth/ingest tables exist, so a hard
+FK can't be declared at table-create time. The values are still
+trustworthy because they originate from the ``file.ingested`` event
+emitted by the ingest service after a successful upload commit.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+metadata = MetaData(schema="parser")
+
+
+class Base(DeclarativeBase):
+    metadata = metadata
+
+
+class Match(Base):
+    __tablename__ = "matches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    players: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    match_result: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    winner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    game_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    parsed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
+        Index("ix_matches_user_id_parsed_at", "user_id", "parsed_at"),
+        Index("ix_matches_sha256", "sha256"),
+    )
+
+
+class Game(Base):
+    __tablename__ = "games"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    match_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.matches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    game_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    winner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    result: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "game_number", name="uq_games_match_game_number"),
+        Index("ix_games_match_id", "match_id"),
+    )
+
+
+class GameState(Base):
+    __tablename__ = "game_states"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_player: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Per-player snapshot: {"<player_name>": {"life": int, "zones": {...}, "mana_pool": {...}}}
+    player_states: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+    # Ordered list of stack entries at the start of the turn.
+    stack: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "turn_number", name="uq_game_states_game_turn"),
+        Index("ix_game_states_game_id", "game_id"),
+    )

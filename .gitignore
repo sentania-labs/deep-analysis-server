@@ -20,6 +20,7 @@ coverage.xml
 
 # Docker
 *.log
+!services/*/tests/fixtures/*.log
 
 # OS
 .DS_Store
