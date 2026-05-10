@@ -2,9 +2,9 @@
 
 The :class:`LogParser` orchestrator picks the right
 :class:`LogFormatStrategy` for a given payload and returns a
-:class:`ParsedMatch`. The text-log strategy is the only one shipped
-today; a binary ``.dat`` strategy will be slotted in here once the
-format is reverse-engineered.
+:class:`ParsedMatch`. Today both the binary ``.dat`` and plaintext
+log formats are supported via :class:`MTGODatStrategy` and
+:class:`MTGOTextLogStrategy` respectively.
 """
 
 from parser_service.parsing.models import (

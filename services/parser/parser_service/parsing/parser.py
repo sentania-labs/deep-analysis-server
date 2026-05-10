@@ -4,14 +4,13 @@ Two layers:
 
 * :class:`LogFormatStrategy` — protocol/abstract. Implementations
   decide whether they can parse a given payload and produce a
-  :class:`ParsedMatch`. Today: :class:`MTGOTextLogStrategy` (best-
-  effort regex over MTGO's plaintext logs) plus a stubbed
-  :class:`MTGODatStrategy` placeholder for the binary format that
-  ships once it's reverse-engineered.
+  :class:`ParsedMatch`. Today: :class:`MTGODatStrategy` for MTGO's
+  binary-framed ``Match_GameLog_*.dat`` files plus
+  :class:`MTGOTextLogStrategy` for plaintext logs.
 * :class:`LogParser` — orchestrator. Walks its strategy list, picks
   the first one that claims it can handle the payload, and runs it.
 
-The text-log strategy is intentionally forgiving: MTGO's log format
+Both strategies are intentionally forgiving: MTGO's log format
 varies and best-effort extraction is more useful than exceptions.
 Missing data shows up as ``None`` / empty rather than parse failures.
 """
@@ -148,18 +147,206 @@ class LogFormatStrategy(ABC):
 
 
 class MTGODatStrategy(LogFormatStrategy):
-    """Placeholder for the binary ``.dat`` format.
+    """Parser for MTGO ``Match_GameLog_<uuid>.dat`` game logs.
 
-    Returns ``can_parse=False`` until the format is reverse-engineered.
-    The slot exists so the orchestrator's strategy list is the single
-    source of truth for "what can parser handle today".
+    The format is text with binary framing: each log line is preceded
+    by an ~8-byte binary header (timestamp + length) and the literal
+    bytes ``@P`` (or ``@P@P`` for join lines). After stripping bytes
+    outside printable ASCII (plus newline/CR), the result is roughly
+    ``junk@PLINE@PLINE...`` where each LINE is real log text and the
+    ``junk`` between is whatever printable bytes survived from the
+    next frame's binary header.
+
+    The strategy works by scanning the filtered text for ``@P``-anchored
+    patterns (joins, turn headers, game/match wins, plays, casts). The
+    join and turn-header patterns establish canonical player names,
+    which are then used as a closed alternation in the more permissive
+    patterns to keep trailing junk bytes out of captures.
     """
 
+    _CAN_PARSE_HINTS: tuple[bytes, ...] = (
+        b"joined the game.",
+        b"@[",
+    )
+    _CAN_PARSE_UUID_RE = re.compile(rb"\$[0-9a-f-]{36}", re.IGNORECASE)
+
+    # Header for the dollar-prefixed match-id record. Anchored at line
+    # start because the file opens with ``$<uuid>$<uuid>...`` before any
+    # binary frames begin.
+    _UUID_RE = re.compile(r"\$([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+
+    # Join lines are double-prefixed with ``@P@P``. Distinguishing them
+    # is what gives us a reliable list of canonical player names.
+    _JOIN_RE = re.compile(r"@P@P([A-Za-z0-9_][A-Za-z0-9_-]*) joined the game\.")
+
+    _CARD_RE = re.compile(r"@\[([^@\[\]]+?)@:\d+,\d+:@\]")
+
     def can_parse(self, content: bytes, filename: str | None = None) -> bool:
-        return False
+        if not content:
+            return False
+        sample = content[: 64 * 1024]
+        if self._CAN_PARSE_UUID_RE.search(sample):
+            return True
+        return any(hint in sample for hint in self._CAN_PARSE_HINTS)
 
     def parse(self, content: bytes) -> ParsedMatch:
-        raise NotImplementedError("MTGO .dat format support is not yet implemented")
+        text = self._strip_binary(content)
+        match = ParsedMatch()
+
+        if (m := self._UUID_RE.search(text)) is not None:
+            match.raw_match_id = m.group(1)
+
+        # Canonical players: ordered by first appearance in joins.
+        seen_order: list[str] = []
+        seen_set: set[str] = set()
+        for m in self._JOIN_RE.finditer(text):
+            name = m.group(1)
+            if name not in seen_set:
+                seen_set.add(name)
+                seen_order.append(name)
+        match.players = seen_order
+
+        match_winner, match_score, match_tied = self._extract_match_result(text, seen_order)
+        match.match_result = match_score
+        match.winner = None if match_tied else match_winner
+
+        match.games = self._parse_games(text, seen_order)
+        return match
+
+    @staticmethod
+    def _strip_binary(content: bytes) -> str:
+        """Drop bytes outside printable ASCII (plus newline/CR) and decode.
+
+        High-bit bytes (0x80+) are part of the binary framing and never
+        contain real log content; dropping them leaves clean ASCII the
+        regexes can anchor against.
+        """
+        cleaned = bytes(b for b in content if 0x20 <= b <= 0x7E or b in (0x0A, 0x0D))
+        return cleaned.decode("ascii", errors="replace")
+
+    @staticmethod
+    def _player_alt(players: list[str]) -> str:
+        """Build a regex alternation matching any canonical player name.
+
+        Sorted longest-first so prefix names don't shadow longer ones
+        (e.g. ``foo`` shouldn't win over ``foobar``).
+        """
+        if not players:
+            # Fallback that still terminates on whitespace/punctuation —
+            # used when joins didn't yield any player names.
+            return r"[A-Za-z0-9_][A-Za-z0-9_-]*"
+        alts = sorted(players, key=len, reverse=True)
+        return "|".join(re.escape(p) for p in alts)
+
+    def _extract_match_result(
+        self, text: str, players: list[str]
+    ) -> tuple[str | None, str | None, bool]:
+        """Return ``(winner, score, tied)`` extracted from the match-result line.
+
+        Score components are bound to single digits to stop the regex
+        from greedily eating trailing binary-header bytes that decoded
+        to digits.
+        """
+        alt = self._player_alt(players)
+        win_re = re.compile(rf"@P({alt}) wins the match (\d)-(\d)")
+        if (m := win_re.search(text)) is not None:
+            score = f"{m.group(2)}-{m.group(3)}"
+            return m.group(1), score, False
+        # ``Match Tied`` lines are not @P-prefixed in the raw stream.
+        tie_re = re.compile(r"Match Tied (\d)-(\d)")
+        if (m := tie_re.search(text)) is not None:
+            return None, f"{m.group(1)}-{m.group(2)}", True
+        return None, None, False
+
+    def _parse_games(self, text: str, players: list[str]) -> list[ParsedGame]:
+        """Split text by join-pair boundaries, parse each game block.
+
+        Each game opens with a fresh pair of ``@P@P<player> joined``
+        lines, so a game block runs from the first join of pair N to
+        the first join of pair N+1 (or EOF for the last game).
+        """
+        if not players:
+            return []
+
+        join_positions = [m.start() for m in self._JOIN_RE.finditer(text)]
+        if not join_positions:
+            return []
+
+        # Pair joins: pair k = positions[2k], positions[2k+1].
+        pair_count = len(join_positions) // 2
+        if pair_count == 0:
+            return []
+
+        games: list[ParsedGame] = []
+        for game_idx in range(pair_count):
+            block_start = join_positions[game_idx * 2]
+            if game_idx + 1 < pair_count:
+                block_end = join_positions[(game_idx + 1) * 2]
+            else:
+                block_end = len(text)
+            block = text[block_start:block_end]
+            games.append(self._parse_game_block(game_idx + 1, block, players))
+        return games
+
+    def _parse_game_block(self, game_number: int, block: str, players: list[str]) -> ParsedGame:
+        game = ParsedGame(game_number=game_number)
+        alt = self._player_alt(players)
+
+        win_game_re = re.compile(rf"@P({alt}) wins the game\.")
+        concede_re = re.compile(rf"@P({alt}) has conceded from the game\.")
+
+        if (m := win_game_re.search(block)) is not None:
+            game.winner = m.group(1)
+            game.result = "win"
+        elif (m := concede_re.search(block)) is not None:
+            conceder = m.group(1)
+            opp = next((p for p in players if p != conceder), None)
+            game.winner = opp
+            game.result = "concede"
+
+        game.turns = self._parse_turns(block, players)
+        return game
+
+    def _parse_turns(self, block: str, players: list[str]) -> list[TurnSnapshot]:
+        alt = self._player_alt(players)
+        turn_re = re.compile(rf"@PTurn (\d+): ({alt})")
+        marks = [(m.start(), int(m.group(1)), m.group(2)) for m in turn_re.finditer(block)]
+        if not marks:
+            return []
+
+        carry: dict[str, PlayerSnapshot] = {p: PlayerSnapshot(name=p) for p in players}
+        play_re = re.compile(rf"@P({alt}) plays {self._CARD_RE.pattern}")
+        cast_re = re.compile(rf"@P({alt}) casts {self._CARD_RE.pattern}")
+
+        turns: list[TurnSnapshot] = []
+        for idx, (start, num, active) in enumerate(marks):
+            end = marks[idx + 1][0] if idx + 1 < len(marks) else len(block)
+            window = block[start:end]
+
+            for pm in play_re.finditer(window):
+                snap = carry.setdefault(pm.group(1), PlayerSnapshot(name=pm.group(1)))
+                snap.zones.battlefield.append(pm.group(2).strip())
+            for cm in cast_re.finditer(window):
+                snap = carry.setdefault(cm.group(1), PlayerSnapshot(name=cm.group(1)))
+                snap.zones.battlefield.append(cm.group(2).strip())
+
+            snapshot_players = {
+                name: PlayerSnapshot(
+                    name=snap.name,
+                    life=snap.life,
+                    zones=PlayerZones(**snap.zones.model_dump()),
+                    mana_pool=ManaPool(**snap.mana_pool.model_dump()),
+                )
+                for name, snap in carry.items()
+            }
+            turns.append(
+                TurnSnapshot(
+                    turn_number=num,
+                    active_player=active,
+                    players=snapshot_players,
+                )
+            )
+        return turns
 
 
 class MTGOTextLogStrategy(LogFormatStrategy):
