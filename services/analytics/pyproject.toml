@@ -11,6 +11,9 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "structlog>=24.2",
     "prometheus-client>=0.20",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "psycopg[binary]>=3.1",
 ]
 
 [tool.hatch.build.targets.wheel]
