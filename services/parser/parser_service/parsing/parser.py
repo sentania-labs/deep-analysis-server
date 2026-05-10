@@ -179,7 +179,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             return False
         # Heuristic: looks like text and contains at least one MTGO marker.
         try:
-            sample = content[:64 * 1024].decode("utf-8", errors="ignore")
+            sample = content[: 64 * 1024].decode("utf-8", errors="ignore")
         except UnicodeDecodeError:
             return False
         if not sample:
@@ -228,12 +228,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
 
         # Synthesize "wins-losses" if we have per-game winners and know the
         # player set but the log never spelled out the score.
-        if (
-            not match.match_result
-            and match.games
-            and match.winner
-            and match.players
-        ):
+        if not match.match_result and match.games and match.winner and match.players:
             opp = next((p for p in match.players if p != match.winner), None)
             wins = sum(1 for g in match.games if g.winner == match.winner)
             losses = sum(1 for g in match.games if g.winner == opp) if opp else 0
@@ -267,9 +262,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
     ) -> ParsedGame:
         game = ParsedGame(game_number=game_number)
 
-        if (m := _GAME_WIN_RE.search(block)) is not None and int(
-            m.group("num")
-        ) == game_number:
+        if (m := _GAME_WIN_RE.search(block)) is not None and int(m.group("num")) == game_number:
             game.winner = _normalize_player(m.group("player"))
             game.result = "win"
         if not game.result and (m := _GAME_RESULT_RE.search(block)) is not None:
@@ -280,8 +273,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
 
     def _parse_turns(self, block: str, players: list[str]) -> list[TurnSnapshot]:
         turn_marks = [
-            (m.start(), int(m.group("num")), m.group("player"))
-            for m in _TURN_RE.finditer(block)
+            (m.start(), int(m.group("num")), m.group("player")) for m in _TURN_RE.finditer(block)
         ]
         if not turn_marks:
             return []
@@ -317,13 +309,9 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             life_events.append((m.start(), f"set:{m.group('player')}:{m.group('life')}"))
         for m in _LIFE_DELTA_RE.finditer(window):
             sign = "+" if m.group("verb").lower().startswith("gain") else "-"
-            life_events.append(
-                (m.start(), f"delta:{m.group('player')}:{sign}{m.group('amt')}")
-            )
+            life_events.append((m.start(), f"delta:{m.group('player')}:{sign}{m.group('amt')}"))
         for m in _DAMAGE_RE.finditer(window):
-            life_events.append(
-                (m.start(), f"dmg:{m.group('target')}:{m.group('amt')}")
-            )
+            life_events.append((m.start(), f"dmg:{m.group('target')}:{m.group('amt')}"))
         life_events.sort(key=lambda e: e[0])
         for _, encoded in life_events:
             kind, who, value = encoded.split(":", 2)

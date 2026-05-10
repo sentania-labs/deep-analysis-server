@@ -31,7 +31,7 @@ from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, Matc
 from common.redis_client import EventPublisher
 from parser_service.parsing import LogParser, ParsedMatch
 from parser_service.persistence import persist_match
-from parser_service.storage import RawFileNotFoundError, read_raw
+from parser_service.storage import RawFileNotFoundError, RawFileTooLargeError, read_raw
 
 _log = logging.getLogger("parser.consumer")
 
@@ -44,12 +44,14 @@ class ParserConsumer:
         raw_root: Path,
         parser: LogParser | None = None,
         publisher: EventPublisher | None = None,
+        max_log_bytes: int | None = None,
     ) -> None:
         self._redis = redis_client
         self._sessionmaker = sessionmaker
         self._raw_root = raw_root
         self._parser = parser or LogParser()
         self._publisher = publisher or EventPublisher(redis_client)
+        self._max_log_bytes = max_log_bytes
         self._stop_event = asyncio.Event()
 
     def stop(self) -> None:
@@ -116,9 +118,12 @@ class ParserConsumer:
     async def handle_event(self, sha256: str, user_id: int) -> ParsedMatch | None:
         """Test-friendly entry point — reads, parses, persists, publishes."""
         try:
-            content = read_raw(sha256, self._raw_root)
+            content = read_raw(sha256, self._raw_root, max_bytes=self._max_log_bytes)
         except RawFileNotFoundError:
             _log.warning("raw file missing for sha=%s; skipping", sha256)
+            return None
+        except RawFileTooLargeError:
+            _log.warning("raw file exceeds size ceiling sha=%s; skipping", sha256)
             return None
         except OSError:
             _log.exception("failed to read raw file sha=%s", sha256)
