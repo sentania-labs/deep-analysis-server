@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 import pytest
-from auth_service.bootstrap import bootstrap_admin
+from auth_service.bootstrap import bootstrap_admin, force_reset_admin
 from auth_service.models import User
 from auth_service.passwords import hash_password, verify_password
 from auth_service.settings import AuthSettings
@@ -18,6 +19,7 @@ def _fresh_settings(
     tmp_path: Path,
     email: str | None = None,
     pw: str | None = None,
+    force_admin_reset: bool = False,
 ) -> AuthSettings:
     return AuthSettings(
         service_name="auth",
@@ -27,6 +29,7 @@ def _fresh_settings(
         jwt_private_key_path=Path(os.environ["DA_JWT_PRIVATE_KEY_PATH"]),
         bootstrap_admin_email=email,
         bootstrap_admin_password=pw,
+        force_admin_reset=force_admin_reset,
         initial_admin_secret_path=tmp_path / "initial_admin.txt",
     )
 
@@ -151,3 +154,130 @@ async def test_bootstrap_env_var_path_idempotent_on_restart(
 
     count = (await db_session.execute(select(func.count()).select_from(User))).scalar_one()
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_force_reset_replaces_existing_admin(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """force_admin_reset=True with valid env credentials deletes the existing
+    user with that email and recreates from env."""
+    existing = User(
+        email="admin@local",
+        password_hash=hash_password("garbled-old-hash"),
+        role="admin",
+        disabled=False,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    old_id = existing.id
+
+    settings = _fresh_settings(
+        tmp_path,
+        email="admin@local",
+        pw="freshpassword456y",
+        force_admin_reset=True,
+    )
+    result = await force_reset_admin(db_session, settings)
+    assert result is True
+
+    admins = (
+        (await db_session.execute(select(User).where(User.email == "admin@local"))).scalars().all()
+    )
+    assert len(admins) == 1
+    admin = admins[0]
+    assert admin.id != old_id
+    assert admin.role == "admin"
+    assert admin.disabled is False
+    assert admin.must_change_password is False
+    assert verify_password("freshpassword456y", admin.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_force_reset_creates_admin_when_none_exists(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """force_admin_reset=True with no pre-existing user still creates the admin."""
+    settings = _fresh_settings(
+        tmp_path,
+        email="admin@local",
+        pw="brandnewpassword789z",
+        force_admin_reset=True,
+    )
+    result = await force_reset_admin(db_session, settings)
+    assert result is True
+
+    admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
+    assert admin.role == "admin"
+    assert verify_password("brandnewpassword789z", admin.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_force_reset_skips_when_credentials_missing(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """force_admin_reset=True without bootstrap email/password logs an error
+    and returns False without touching any users."""
+    existing = User(
+        email="admin@local",
+        password_hash=hash_password("untouched"),
+        role="admin",
+        disabled=False,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+
+    settings = _fresh_settings(tmp_path, email=None, pw=None, force_admin_reset=True)
+    with caplog.at_level(logging.ERROR, logger="auth.bootstrap"):
+        result = await force_reset_admin(db_session, settings)
+    assert result is False
+    assert any("FORCE_ADMIN_RESET" in rec.message for rec in caplog.records)
+
+    admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
+    assert verify_password("untouched", admin.password_hash)
+
+
+@pytest.mark.asyncio
+async def test_force_reset_disabled_by_default(db_session: AsyncSession, tmp_path: Path) -> None:
+    """force_admin_reset defaults to False; force_reset_admin returns False
+    and bootstrap_admin falls through to the normal idempotent path."""
+    settings = _fresh_settings(tmp_path, email="admin@local", pw="somepassword123x")
+    assert settings.force_admin_reset is False
+
+    result = await force_reset_admin(db_session, settings)
+    assert result is False
+
+    count = (await db_session.execute(select(func.count()).select_from(User))).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_admin_invokes_force_reset_first(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """When force_admin_reset is set, bootstrap_admin replaces the existing
+    admin instead of treating it as already-bootstrapped."""
+    existing = User(
+        email="admin@local",
+        password_hash=hash_password("garbled"),
+        role="admin",
+        disabled=False,
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    old_id = existing.id
+
+    settings = _fresh_settings(
+        tmp_path,
+        email="admin@local",
+        pw="resetviabootstrap",
+        force_admin_reset=True,
+    )
+    await bootstrap_admin(db_session, settings)
+
+    admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
+    assert admin.id != old_id
+    assert verify_password("resetviabootstrap", admin.password_hash)
+    assert not settings.initial_admin_secret_path.exists()
