@@ -6,11 +6,11 @@ import os
 from pathlib import Path
 
 import pytest
-from auth_service.bootstrap import bootstrap_admin, force_reset_admin
+from auth_service.bootstrap import bootstrap_admin, force_reset_admin, reclaim_uid1
 from auth_service.models import User
 from auth_service.passwords import hash_password, verify_password
 from auth_service.settings import AuthSettings
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -156,11 +156,11 @@ async def test_bootstrap_env_var_path_idempotent_on_restart(
 
 
 @pytest.mark.asyncio
-async def test_force_reset_replaces_existing_admin(
+async def test_force_reset_updates_password_in_place(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """force_admin_reset=True with valid env credentials deletes the existing
-    user with that email and recreates from env."""
+    """force_admin_reset=True with valid env credentials updates the
+    existing user's password hash in place — preserving their id."""
     existing = User(
         email="admin@local",
         password_hash=hash_password("garbled-old-hash"),
@@ -185,7 +185,7 @@ async def test_force_reset_replaces_existing_admin(
     )
     assert len(admins) == 1
     admin = admins[0]
-    assert admin.id != old_id
+    assert admin.id == old_id
     assert admin.role == "admin"
     assert admin.disabled is False
     assert admin.must_change_password is False
@@ -260,8 +260,8 @@ async def test_force_reset_disabled_by_default(db_session: AsyncSession, tmp_pat
 async def test_bootstrap_admin_invokes_force_reset_first(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
-    """When force_admin_reset is set, bootstrap_admin replaces the existing
-    admin instead of treating it as already-bootstrapped."""
+    """When force_admin_reset is set, bootstrap_admin updates the existing
+    admin's password instead of treating it as already-bootstrapped."""
     existing = User(
         email="admin@local",
         password_hash=hash_password("garbled"),
@@ -281,6 +281,267 @@ async def test_bootstrap_admin_invokes_force_reset_first(
     await bootstrap_admin(db_session, settings)
 
     admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
-    assert admin.id != old_id
+    assert admin.id == old_id
     assert verify_password("resetviabootstrap", admin.password_hash)
     assert not settings.initial_admin_secret_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_creates_admin_at_id_1(db_session: AsyncSession, tmp_path: Path) -> None:
+    """Empty-table bootstrap pins the admin to UID 1, not the next
+    sequence value."""
+    settings = _fresh_settings(tmp_path)
+    await bootstrap_admin(db_session, settings)
+
+    admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
+    assert admin.id == 1
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_id_1_pin_does_not_break_next_insert(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """After explicit-id=1 insert, the users sequence is resynced so the
+    next user-driven insert does not collide on id=1."""
+    settings = _fresh_settings(tmp_path)
+    await bootstrap_admin(db_session, settings)
+
+    other = User(
+        email="someone-else@example.com",
+        password_hash=hash_password("pw"),
+        role="user",
+    )
+    db_session.add(other)
+    await db_session.commit()
+    await db_session.refresh(other)
+    assert other.id > 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_uid1_moves_admin_when_id_1_is_free(
+    db_session: AsyncSession,
+) -> None:
+    """admin@local sitting at id != 1 with UID 1 free is reclaimed to id=1."""
+    placeholder = User(
+        email="placeholder@example.com",
+        password_hash=hash_password("pw"),
+        role="user",
+    )
+    db_session.add(placeholder)
+    await db_session.commit()
+
+    admin = User(
+        email="admin@local",
+        password_hash=hash_password("pw"),
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    assert admin.id != 1
+
+    await db_session.execute(text("DELETE FROM auth.users WHERE email = 'placeholder@example.com'"))
+    await db_session.commit()
+
+    await reclaim_uid1(db_session)
+
+    reclaimed = (
+        await db_session.execute(select(User).where(User.email == "admin@local"))
+    ).scalar_one()
+    assert reclaimed.id == 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_uid1_cascades_to_sessions_and_agents(
+    db_session: AsyncSession,
+) -> None:
+    """When admin@local has child rows pointing at the old id, the
+    ON UPDATE CASCADE FK propagates the new id=1 to sessions and
+    agent_registrations. No FK violation, no data loss."""
+    from datetime import UTC, datetime, timedelta
+
+    from auth_service.models import AgentRegistration, Session
+
+    placeholder = User(
+        email="placeholder@example.com",
+        password_hash=hash_password("pw"),
+        role="user",
+    )
+    db_session.add(placeholder)
+    await db_session.commit()
+
+    admin = User(
+        email="admin@local",
+        password_hash=hash_password("pw"),
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+    old_admin_id = admin.id
+    assert old_admin_id != 1
+
+    session = Session(
+        user_id=old_admin_id,
+        refresh_token_hash="hash-for-reclaim-test",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    agent = AgentRegistration(
+        user_id=old_admin_id,
+        machine_name="reclaim-test-host",
+        api_token_hash="agent-hash-for-reclaim-test",
+    )
+    db_session.add(session)
+    db_session.add(agent)
+    await db_session.commit()
+
+    await db_session.execute(text("DELETE FROM auth.users WHERE email = 'placeholder@example.com'"))
+    await db_session.commit()
+
+    await reclaim_uid1(db_session)
+
+    reclaimed = (
+        await db_session.execute(select(User).where(User.email == "admin@local"))
+    ).scalar_one()
+    assert reclaimed.id == 1
+
+    refreshed_session = (
+        await db_session.execute(
+            select(Session).where(Session.refresh_token_hash == "hash-for-reclaim-test")
+        )
+    ).scalar_one()
+    refreshed_agent = (
+        await db_session.execute(
+            select(AgentRegistration).where(
+                AgentRegistration.api_token_hash == "agent-hash-for-reclaim-test"
+            )
+        )
+    ).scalar_one()
+    assert refreshed_session.user_id == 1
+    assert refreshed_agent.user_id == 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_uid1_noop_when_admin_already_at_id_1(
+    db_session: AsyncSession,
+) -> None:
+    """admin@local already at id=1 — reclaim is a no-op."""
+    admin = User(
+        id=1,
+        email="admin@local",
+        password_hash=hash_password("pw"),
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+
+    await reclaim_uid1(db_session)
+
+    fetched = (
+        await db_session.execute(select(User).where(User.email == "admin@local"))
+    ).scalar_one()
+    assert fetched.id == 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_uid1_noop_when_admin_missing(db_session: AsyncSession) -> None:
+    """No admin@local user — reclaim is a no-op (no rows touched)."""
+    other = User(
+        email="someone@example.com",
+        password_hash=hash_password("pw"),
+        role="user",
+    )
+    db_session.add(other)
+    await db_session.commit()
+    other_id = other.id
+
+    await reclaim_uid1(db_session)
+
+    fetched = (
+        await db_session.execute(select(User).where(User.email == "someone@example.com"))
+    ).scalar_one()
+    assert fetched.id == other_id
+
+
+@pytest.mark.asyncio
+async def test_reclaim_uid1_refuses_when_id_1_taken(db_session: AsyncSession) -> None:
+    """admin@local at id != 1 with UID 1 held by another account — refuse
+    to clobber. Both rows remain at their original ids."""
+    squatter = User(
+        id=1,
+        email="squatter@example.com",
+        password_hash=hash_password("pw"),
+        role="user",
+    )
+    db_session.add(squatter)
+    await db_session.commit()
+
+    admin = User(
+        id=42,
+        email="admin@local",
+        password_hash=hash_password("pw"),
+        role="admin",
+    )
+    db_session.add(admin)
+    await db_session.commit()
+
+    await reclaim_uid1(db_session)
+
+    fetched_admin = (
+        await db_session.execute(select(User).where(User.email == "admin@local"))
+    ).scalar_one()
+    fetched_squatter = (
+        await db_session.execute(select(User).where(User.email == "squatter@example.com"))
+    ).scalar_one()
+    assert fetched_admin.id == 42
+    assert fetched_squatter.id == 1
+
+
+@pytest.mark.asyncio
+async def test_force_reset_refuses_when_id_1_held_by_other(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """force_admin_reset with no env_email user and UID 1 held by someone
+    else: return False, no modifications."""
+    squatter = User(
+        id=1,
+        email="squatter@example.com",
+        password_hash=hash_password("untouched"),
+        role="user",
+    )
+    db_session.add(squatter)
+    await db_session.commit()
+
+    settings = _fresh_settings(
+        tmp_path,
+        email="admin@local",
+        pw="ignored",
+        force_admin_reset=True,
+    )
+    result = await force_reset_admin(db_session, settings)
+    assert result is False
+
+    fetched = (
+        await db_session.execute(select(User).where(User.email == "squatter@example.com"))
+    ).scalar_one()
+    assert verify_password("untouched", fetched.password_hash)
+    assert fetched.id == 1
+    count = (await db_session.execute(select(func.count()).select_from(User))).scalar_one()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_force_reset_inserts_at_id_1_when_free(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """force_admin_reset with no env_email user and UID 1 free: insert
+    with explicit id=1."""
+    settings = _fresh_settings(
+        tmp_path,
+        email="admin@local",
+        pw="freshpw1234567",
+        force_admin_reset=True,
+    )
+    result = await force_reset_admin(db_session, settings)
+    assert result is True
+
+    admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
+    assert admin.id == 1

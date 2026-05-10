@@ -12,9 +12,10 @@ import contextlib
 import logging
 import os
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service.models import User
@@ -24,6 +25,53 @@ from auth_service.settings import AuthSettings
 logger = logging.getLogger("auth.bootstrap")
 
 _DEFAULT_ADMIN_EMAIL = "admin@local"
+
+
+async def _resync_users_id_sequence(db: AsyncSession) -> None:
+    """Resync auth.users id sequence to MAX(id) after an explicit-id insert.
+
+    PostgreSQL serial sequences are not advanced by inserts with explicit
+    values; without this, the next sequence-driven insert collides.
+    """
+    await db.execute(
+        text(
+            "SELECT setval(pg_get_serial_sequence('auth.users', 'id'), "
+            "GREATEST(1, (SELECT COALESCE(MAX(id), 1) FROM auth.users)), true)"
+        )
+    )
+    await db.commit()
+
+
+async def reclaim_uid1(db: AsyncSession) -> None:
+    """Reclaim UID 1 for admin@local if it has drifted to another id.
+
+    Runs on every startup before any other admin bootstrap step. No-op
+    unless admin@local exists at id != 1 AND UID 1 is currently free.
+    If UID 1 is held by a different account, logs an error and leaves
+    state untouched — manual intervention required.
+    """
+    admin = (
+        await db.execute(select(User).where(User.email == _DEFAULT_ADMIN_EMAIL))
+    ).scalar_one_or_none()
+    if admin is None or admin.id == 1:
+        return
+
+    uid1_holder = (await db.execute(select(User).where(User.id == 1))).scalar_one_or_none()
+    if uid1_holder is None:
+        old_id = admin.id
+        await db.execute(
+            text("UPDATE auth.users SET id = 1 WHERE email = :email"),
+            {"email": _DEFAULT_ADMIN_EMAIL},
+        )
+        await db.commit()
+        await _resync_users_id_sequence(db)
+        logger.warning("admin@local was at id=%s; reclaimed id=1", old_id)
+        return
+
+    logger.error(
+        "admin@local has id=%s but id=1 is taken — manual intervention required",
+        admin.id,
+    )
 
 
 def _write_initial_password(path: Path, password: str) -> None:
@@ -40,7 +88,14 @@ def _write_initial_password(path: Path, password: str) -> None:
 
 
 async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
-    """Delete and recreate the admin user when DEEP_ANALYSIS_FORCE_ADMIN_RESET is set.
+    """Reset the admin password when DEEP_ANALYSIS_FORCE_ADMIN_RESET is set.
+
+    Behavior depends on current state:
+    - If a user with ``env_email`` already exists, update their
+      ``password_hash`` in place. Their id is preserved.
+    - Else if UID 1 is held by a different account, log an error and
+      return False — refuse to clobber UID 1.
+    - Else insert a fresh admin with explicit ``id=1``.
 
     Returns True if a reset was performed, False otherwise.
     """
@@ -59,10 +114,31 @@ async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
 
     existing = (await db.execute(select(User).where(User.email == env_email))).scalar_one_or_none()
     if existing is not None:
-        await db.delete(existing)
+        existing.password_hash = hash_password(env_password)
+        existing.must_change_password = False
+        existing.disabled = False
+        existing.role = "admin"
+        existing.updated_at = datetime.now(UTC)
         await db.commit()
+        logger.warning(
+            "Admin password reset in place for %s (DEEP_ANALYSIS_FORCE_ADMIN_RESET was set — "
+            "remove this env var after verifying login)",
+            env_email,
+        )
+        return True
+
+    uid1_holder = (await db.execute(select(User).where(User.id == 1))).scalar_one_or_none()
+    if uid1_holder is not None:
+        logger.error(
+            "DEEP_ANALYSIS_FORCE_ADMIN_RESET: no user with email=%s but id=1 is "
+            "held by %s — refusing to clobber UID 1",
+            env_email,
+            uid1_holder.email,
+        )
+        return False
 
     user = User(
+        id=1,
         email=env_email,
         password_hash=hash_password(env_password),
         role="admin",
@@ -71,9 +147,10 @@ async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
     )
     db.add(user)
     await db.commit()
+    await _resync_users_id_sequence(db)
 
     logger.warning(
-        "Admin user reset: %s (DEEP_ANALYSIS_FORCE_ADMIN_RESET was set — "
+        "Admin user created at id=1: %s (DEEP_ANALYSIS_FORCE_ADMIN_RESET was set — "
         "remove this env var after verifying login)",
         env_email,
     )
@@ -81,6 +158,8 @@ async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
 
 
 async def bootstrap_admin(db: AsyncSession, settings: AuthSettings) -> None:
+    await reclaim_uid1(db)
+
     if await force_reset_admin(db, settings):
         return
 
@@ -108,6 +187,7 @@ async def bootstrap_admin(db: AsyncSession, settings: AuthSettings) -> None:
         must_change = True
 
     user = User(
+        id=1,
         email=email,
         password_hash=hash_password(password),
         role="admin",
@@ -116,6 +196,7 @@ async def bootstrap_admin(db: AsyncSession, settings: AuthSettings) -> None:
     )
     db.add(user)
     await db.commit()
+    await _resync_users_id_sequence(db)
 
     if scripted:
         logger.warning(
