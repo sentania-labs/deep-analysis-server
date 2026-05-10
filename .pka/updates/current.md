@@ -1,3 +1,9 @@
+## 2026-05-09 22:30 — deploy-slot-model-fix  [batch]
+
+**Type:** status
+
+Rewrote `deploy/deploy.sh` on `fix/deploy-slot-model` (off main `79b4efd`) to fit the docker.int slot model per lab-admin response `28f2a67c-5945-4700-af71-bc2262835213`. Slot was provisioned at `/srv/services/deep-analysis-server/` but the prior deploy script used commands the deploy-wrapper allowlist rejects. Five wrapper-allowlist violations fixed: `DEPLOY_PATH` default moved from `/opt/deep-analysis` to `/srv/services/deep-analysis-server`; raw `docker pull` for the 5 service images replaced with a single `docker compose --project-directory $DEPLOY_PATH pull` (compose pulls the tags pinned in compose.yml); `--force-recreate` dropped (plain `up -d` recreates services whose digest changed, which is what we want in CI anyway); `docker compose exec` for Alembic migrations removed entirely with a header comment noting migrations now must be baked into the stack (one-shot `auth-migrate` service or `alembic upgrade head` in the auth entrypoint, gated by env flag) — that wiring is a follow-up; per-service `compose exec curl /healthz` smoke-loop replaced with a single `docker compose ... ps` (matches dashboard slot pattern). Added `scp -O` push of the repo-root `docker-compose.yml` to `$DEPLOY_PATH/docker-compose.yml` before pull/up (mirrors dashboard's `SCRIPT_DIR/../docker-compose.yml` resolution). `DEPLOY_TAG` env var preserved (consumed by compose.yml image tag pins). No fleet-caddy snippet push, no `BRIDGE_API_TOKEN` generation — deep-analysis runs its own gateway+secrets. Bash `-n` syntax-clean; verified no remaining `docker pull` / `--force-recreate` / `compose exec` invocations (only mentions are in the explanatory header comment). PR open + `/self-review` next.
+
 ## 2026-05-09 21:45 — ci-auto-deploy  [batch]
 
 **Type:** status
