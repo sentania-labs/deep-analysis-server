@@ -97,7 +97,10 @@ async def test_bootstrap_noop_when_admin_exists(db_session: AsyncSession, tmp_pa
 async def test_bootstrap_noop_when_disabled_admin_has_other_active(
     db_session: AsyncSession, tmp_path: Path
 ) -> None:
+    # Pin the disabled admin to id=2 so UID 1 stays free for the
+    # admin@local bootstrap insert (which pins to id=1).
     disabled_admin = User(
+        id=2,
         email="old-admin@example.com",
         password_hash=hash_password("pw"),
         role="admin",
@@ -397,6 +400,11 @@ async def test_reclaim_uid1_cascades_to_sessions_and_agents(
     await db_session.commit()
 
     await reclaim_uid1(db_session)
+
+    # CASCADE happens in the database; clear the ORM identity map so the
+    # next selects re-read user_id from the DB rather than returning the
+    # cached pre-update objects.
+    db_session.expire_all()
 
     reclaimed = (
         await db_session.execute(select(User).where(User.email == "admin@local"))
