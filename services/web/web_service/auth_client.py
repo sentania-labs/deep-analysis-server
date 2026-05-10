@@ -475,6 +475,39 @@ async def admin_revoke_agent(
 
 
 @dataclass
+class RegistrationCodeResult:
+    code: str
+    expires_at: datetime
+
+
+async def mint_registration_code(base_url: str, token: str) -> RegistrationCodeResult:
+    """POST /auth/agent/registration-code. Returns code + expires_at.
+
+    401/403 raise :class:`AuthForbidden`; transport / 5xx / other
+    non-2xx raise :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/auth/agent/registration-code",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /agent/registration-code transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /agent/registration-code returned {resp.status_code}")
+    if resp.status_code != 201:
+        raise AuthClientError(
+            f"auth /agent/registration-code returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    expires_at = _parse_dt(data.get("expires_at"))
+    if expires_at is None:
+        raise AuthClientError("auth /agent/registration-code response missing parseable expires_at")
+    return RegistrationCodeResult(code=str(data["code"]), expires_at=expires_at)
+
+
+@dataclass
 class RegistrationMode:
     mode: str  # "open" | "invite_only"
     updated_at: datetime | None

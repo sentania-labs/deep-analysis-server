@@ -206,3 +206,10 @@ class RegisterRequest(BaseModel):
 class RegisterResponse(BaseModel):
     user_id: int
     email: str
+
+
+class AgentRegisterWithCredentialsRequest(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1)
+    agent_name: str = Field(min_length=1, max_length=255)
+    client_version: str = Field(min_length=1, max_length=64)
