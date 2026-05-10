@@ -21,4 +21,139 @@
         {% endif %}
     </ul>
 </section>
+
+{% if stats_error|default(false) or stats_summary is not defined or stats_summary is none %}
+{% if stats_summary is defined %}
+<section class="panel">
+    <div class="alert alert-error" role="alert">
+        Stats unavailable — analytics service could not be reached.
+    </div>
+</section>
+{% endif %}
+{% else %}
+<section class="panel">
+    <h2>Your stats</h2>
+    {% if stats_summary.total_matches == 0 %}
+        <p>No matches yet. Upload a game log to get started.</p>
+    {% else %}
+        <ul class="stats-summary">
+            <li><strong>Total matches:</strong> {{ stats_summary.total_matches }}</li>
+            <li><strong>Record:</strong>
+                {{ stats_summary.wins }}W / {{ stats_summary.losses }}L / {{ stats_summary.draws }}D
+            </li>
+            <li><strong>Win rate:</strong> {{ "%.1f"|format(stats_summary.win_rate) }}%</li>
+        </ul>
+
+        <h3>Recent matches</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Opponent</th>
+                    <th>Format</th>
+                    <th>Result</th>
+                    <th>Score</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for match in stats_summary.recent_matches %}
+                <tr>
+                    <td>{{ match.played_at.strftime("%Y-%m-%d") if match.played_at else "—" }}</td>
+                    <td>{{ match.opponent or "—" }}</td>
+                    <td>{{ match.format_ or "—" }}</td>
+                    <td>
+                        {% if match.result == "W" %}
+                            <span class="result-badge result-win">W</span>
+                        {% elif match.result == "L" %}
+                            <span class="result-badge result-loss">L</span>
+                        {% elif match.result == "D" %}
+                            <span class="result-badge result-draw">D</span>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{{ match.player_wins }}-{{ match.player_losses }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+</section>
+
+{% if format_stats|default([]) %}
+<section class="panel">
+    <h2>By format</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Format</th>
+                <th>Matches</th>
+                <th>Wins</th>
+                <th>Losses</th>
+                <th>Draws</th>
+                <th>Win rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in format_stats %}
+            <tr>
+                <td>{{ row.format_ }}</td>
+                <td>{{ row.matches }}</td>
+                <td>{{ row.wins }}</td>
+                <td>{{ row.losses }}</td>
+                <td>{{ row.draws }}</td>
+                <td>{{ "%.1f"|format(row.win_rate) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if opponent_stats|default([]) %}
+<section class="panel">
+    <h2>By opponent</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Opponent</th>
+                <th>Matches</th>
+                <th>Wins</th>
+                <th>Losses</th>
+                <th>Draws</th>
+                <th>Win rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in opponent_stats %}
+            <tr>
+                <td>{{ row.opponent }}</td>
+                <td>{{ row.matches }}</td>
+                <td>{{ row.wins }}</td>
+                <td>{{ row.losses }}</td>
+                <td>{{ row.draws }}</td>
+                <td>{{ "%.1f"|format(row.win_rate) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endif %}
+
+<style>
+.stats-summary { list-style: none; padding: 0; display: flex; gap: 2rem; flex-wrap: wrap; }
+.stats-summary li { padding: 0.5rem 0; }
+.result-badge {
+    display: inline-block;
+    min-width: 1.5rem;
+    padding: 0.1rem 0.4rem;
+    text-align: center;
+    font-weight: bold;
+    border-radius: 3px;
+}
+.result-win { background: #d4edda; color: #155724; }
+.result-loss { background: #f8d7da; color: #721c24; }
+.result-draw { background: #fff3cd; color: #856404; }
+</style>
 {% endblock %}

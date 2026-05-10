@@ -2,14 +2,14 @@
 
 The web service calls analytics directly over the backend compose
 network (``http://analytics:8000``) for the admin archetype-catalog
-CRUD pages. Mirrors the structure of :mod:`web_service.auth_client` —
-same exception types so handlers can keep their existing
-AuthForbidden / AuthClientError branches.
+CRUD pages and the user stats dashboard. Mirrors the structure of
+:mod:`web_service.auth_client` — same exception types so handlers can
+keep their existing AuthForbidden / AuthClientError branches.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -203,3 +203,152 @@ async def admin_delete_archetype(
     raise AnalyticsClientError(
         f"analytics DELETE /archetypes/{{id}} returned {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# User stats dashboard
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RecentMatchItem:
+    match_id: str
+    played_at: datetime | None
+    opponent: str | None
+    result: str
+    format_: str | None
+    player_wins: int
+    player_losses: int
+
+
+@dataclass
+class StatsSummary:
+    total_matches: int
+    wins: int
+    losses: int
+    draws: int
+    win_rate: float
+    recent_matches: list[RecentMatchItem] = field(default_factory=list)
+
+
+@dataclass
+class FormatStatItem:
+    format_: str
+    matches: int
+    wins: int
+    losses: int
+    draws: int
+    win_rate: float
+
+
+@dataclass
+class OpponentStatItem:
+    opponent: str
+    matches: int
+    wins: int
+    losses: int
+    draws: int
+    win_rate: float
+
+
+def _to_recent(payload: dict[str, Any]) -> RecentMatchItem:
+    return RecentMatchItem(
+        match_id=str(payload.get("match_id", "")),
+        played_at=_parse_dt(payload.get("played_at")),
+        opponent=payload.get("opponent"),
+        result=str(payload.get("result") or ""),
+        format_=payload.get("format"),
+        player_wins=int(payload.get("player_wins") or 0),
+        player_losses=int(payload.get("player_losses") or 0),
+    )
+
+
+def _to_summary(payload: dict[str, Any]) -> StatsSummary:
+    return StatsSummary(
+        total_matches=int(payload.get("total_matches") or 0),
+        wins=int(payload.get("wins") or 0),
+        losses=int(payload.get("losses") or 0),
+        draws=int(payload.get("draws") or 0),
+        win_rate=float(payload.get("win_rate") or 0.0),
+        recent_matches=[_to_recent(m) for m in payload.get("recent_matches", [])],
+    )
+
+
+def _to_format_stat(payload: dict[str, Any]) -> FormatStatItem:
+    return FormatStatItem(
+        format_=str(payload.get("format") or "Unknown"),
+        matches=int(payload.get("matches") or 0),
+        wins=int(payload.get("wins") or 0),
+        losses=int(payload.get("losses") or 0),
+        draws=int(payload.get("draws") or 0),
+        win_rate=float(payload.get("win_rate") or 0.0),
+    )
+
+
+def _to_opponent_stat(payload: dict[str, Any]) -> OpponentStatItem:
+    return OpponentStatItem(
+        opponent=str(payload.get("opponent") or ""),
+        matches=int(payload.get("matches") or 0),
+        wins=int(payload.get("wins") or 0),
+        losses=int(payload.get("losses") or 0),
+        draws=int(payload.get("draws") or 0),
+        win_rate=float(payload.get("win_rate") or 0.0),
+    )
+
+
+async def get_stats_summary(base_url: str, token: str) -> StatsSummary:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/summary",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /stats/summary transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/summary returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/summary returned {resp.status_code}: {resp.text}"
+        )
+    return _to_summary(resp.json())
+
+
+async def get_stats_by_format(base_url: str, token: str) -> list[FormatStatItem]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/by-format",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/by-format transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/by-format returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/by-format returned {resp.status_code}: {resp.text}"
+        )
+    return [_to_format_stat(row) for row in resp.json()]
+
+
+async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatItem]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/by-opponent",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/by-opponent transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/by-opponent returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/by-opponent returned {resp.status_code}: {resp.text}"
+        )
+    return [_to_opponent_stat(row) for row in resp.json()]

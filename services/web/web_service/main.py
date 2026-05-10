@@ -186,13 +186,42 @@ async def login_submit(
 async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    stats_summary: Any = None
+    format_stats: list[Any] = []
+    opponent_stats: list[Any] = []
+    stats_error = False
+    try:
+        stats_summary = await analytics_client.get_stats_summary(
+            settings.analytics_service_url, user.token
+        )
+        format_stats = await analytics_client.get_stats_by_format(
+            settings.analytics_service_url, user.token
+        )
+        opponent_stats = await analytics_client.get_stats_by_opponent(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        # Treat as logged-out: bounce to /login so the user can re-auth.
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics stats call failed; rendering dashboard with error banner")
+        stats_error = True
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"user": user},
+        {
+            "user": user,
+            "stats_summary": stats_summary,
+            "format_stats": format_stats,
+            "opponent_stats": opponent_stats,
+            "stats_error": stats_error,
+        },
     )
 
 
