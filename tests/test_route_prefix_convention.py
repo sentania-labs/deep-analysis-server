@@ -33,11 +33,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
-# Services that run as HTTP apps (parser is a worker-in-waiting; web is a UI
-# shell that currently exposes only /healthz + /metrics).
+# Services that run as HTTP apps. Parser is primarily a Redis worker but
+# still exposes /parser/healthz + /metrics for the docker healthcheck and
+# scrape; web is a UI shell with its own browser-routes carve-out below.
 _SERVICES: dict[str, tuple[str, ...]] = {
     "auth": ("/auth/", "/admin/"),
     "ingest": ("/ingest/",),
+    "parser": ("/parser/",),
     "analytics": ("/analytics/",),
     "web": ("/web/",),
 }

@@ -12,7 +12,10 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" structlog prometheus-client
+RUN pip install --no-cache-dir \
+    fastapi "uvicorn[standard]" structlog prometheus-client \
+    "sqlalchemy[asyncio]" alembic "psycopg[binary]" asyncpg \
+    pydantic pydantic-settings redis
 
 COPY common/ ./common/
 RUN pip install --no-cache-dir ./common/

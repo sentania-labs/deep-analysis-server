@@ -112,7 +112,10 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
+      DA_INGEST_RAW_PATH: /data/raw
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    volumes:
+      - raw_archive:/data/raw
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,7 +140,11 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
+      DA_PARSER_RAW_PATH: /data/raw
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    volumes:
+      # Read-only mount of the shared raw archive ingest writes to.
+      - raw_archive:/data/raw:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -209,3 +216,4 @@ volumes:
   postgres_data:
   caddy_data:
   auth_secrets:
+  raw_archive:
