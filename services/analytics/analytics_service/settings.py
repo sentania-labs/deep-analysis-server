@@ -15,6 +15,7 @@ class AnalyticsSettings(BaseServiceSettings):
     )
 
     scryfall_sync_interval_days: int = 7
+    mtgo_scrape_interval_hours: int = 24
 
 
 _settings: AnalyticsSettings | None = None
