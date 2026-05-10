@@ -1,0 +1,4 @@
+reverse_proxy deep-analysis-server-gateway:8080 {
+    health_uri /healthz
+    health_interval 30s
+}

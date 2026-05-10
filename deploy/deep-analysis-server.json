@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "slot": "deep-analysis-server",
+  "mode": "l7-reverse-proxy",
+  "sni": "deepanalysis.int.sentania.net",
+  "upstream_host": "deep-analysis-gateway",
+  "upstream_port": 443,
+  "health_uri": "/health",
+  "auth_required": false,
+  "tls_upstream_skip_verify": true
+}
