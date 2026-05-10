@@ -40,6 +40,35 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot job: applies the auth schema migrations and exits 0. The deploy
+  # wrapper on docker.int rejects `compose exec`, so migrations have to run
+  # as part of `compose up`. The auth service waits for this to complete
+  # successfully (service_completed_successfully) before starting.
+  #
+  # PREREQUISITE: the root alembic head (creates the `auth` schema and the
+  # service roles) must already be applied against this database. There is
+  # no `root-migrate` service yet; that is a follow-up. On a brand-new
+  # database, run `alembic upgrade head` from the repo root once before
+  # `compose up`, or auth-migrate will fail with "schema auth does not exist".
+  #
+  # DATABASE_URL must be a sync psycopg URL (alembic env.py uses the sync
+  # engine), e.g. postgresql+psycopg://USER:PASS@postgres:5432/deep_analysis.
+  # The async asyncpg URL used by the running services (DA_DATABASE_URL) is
+  # not interchangeable here.
+  auth-migrate:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    command: ["alembic", "-c", "/app/service/alembic.ini", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   gateway:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -93,6 +122,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 15s

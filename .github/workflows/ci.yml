@@ -147,6 +147,10 @@ jobs:
           echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
           echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
+          # auth-migrate runs inside the compose network, so postgres is
+          # reachable as `postgres`, not `localhost`. Override .env.example's
+          # host-side default.
+          echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
       - name: docker compose up
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
       - name: Wait for gateway
@@ -255,6 +259,10 @@ jobs:
           echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
           echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
+          # auth-migrate runs inside the compose network. The job-level
+          # DATABASE_URL above (localhost:5432) is for host-side alembic;
+          # the .env value is what the container reads.
+          echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
       - name: Generate JWT keypair for CI
