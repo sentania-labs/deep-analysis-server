@@ -58,6 +58,7 @@ _WEB_BROWSER_PATHS = frozenset(
         "/profile",
         "/profile/edit",
         "/profile/agents",
+        "/profile/agents/registration-code",
         "/profile/agents/{agent_id}/revoke",
         "/admin/users",
         "/admin/users/{user_id}/delete",
