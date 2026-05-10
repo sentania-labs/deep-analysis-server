@@ -20,6 +20,12 @@ RUN pip install --no-cache-dir ./common/
 COPY services/auth/ ./service/
 RUN pip install --no-cache-dir ./service/
 
+# Root alembic tree (creates the four logical schemas + service roles).
+# Baked in so this image can also run as the one-shot root-migrate container
+# in docker-compose.yml. The auth service itself does not import from these.
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
+
 EXPOSE 8000
 
 CMD ["uvicorn", "auth_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
