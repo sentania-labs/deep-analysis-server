@@ -14,6 +14,8 @@ class AnalyticsSettings(BaseServiceSettings):
         populate_by_name=True,
     )
 
+    scryfall_sync_interval_days: int = 7
+
 
 _settings: AnalyticsSettings | None = None
 

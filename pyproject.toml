@@ -56,6 +56,7 @@ ignore = []
 "services/web/web_service/deps.py" = ["B008"]
 "services/analytics/analytics_service/archetypes.py" = ["B008"]
 "services/analytics/analytics_service/stats.py" = ["B008"]
+"services/analytics/analytics_service/main.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
