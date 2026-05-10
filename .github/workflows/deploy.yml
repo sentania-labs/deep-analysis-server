@@ -1,0 +1,46 @@
+name: deploy
+
+# Triggered when the Release workflow finishes for a tag push. Pulls the
+# 5 service images at the released tag, force-recreates the compose stack
+# on the docker host, runs Alembic migrations, and smoke-checks /healthz
+# on every service.
+#
+# Skips silently when DOCKER_DEPLOY_KEY is not configured (e.g. forks),
+# so the workflow file is safe to ship in the open-source repo.
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+concurrency:
+  group: deploy-deep-analysis
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, docker]
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      secrets.DOCKER_DEPLOY_KEY != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write deploy key
+        env:
+          DEPLOY_KEY_CONTENT: ${{ secrets.DOCKER_DEPLOY_KEY }}
+        run: |
+          install -m 0600 /dev/null /tmp/da_deploy_key
+          printf '%s\n' "$DEPLOY_KEY_CONTENT" > /tmp/da_deploy_key
+          chmod 0600 /tmp/da_deploy_key
+      - name: Run deploy
+        env:
+          DOCKER_DEPLOY_KEY: /tmp/da_deploy_key
+          DOCKER_DEPLOY_HOST: ${{ vars.DOCKER_DEPLOY_HOST }}
+          DEPLOY_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: deploy/deploy.sh
+      - name: Clean up deploy key
+        if: always()
+        run: rm -f /tmp/da_deploy_key
