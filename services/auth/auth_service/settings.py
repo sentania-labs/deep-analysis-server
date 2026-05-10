@@ -39,6 +39,14 @@ class AuthSettings(BaseServiceSettings):
             "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD",
         ),
     )
+    force_admin_reset: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "force_admin_reset",
+            "DA_FORCE_ADMIN_RESET",
+            "DEEP_ANALYSIS_FORCE_ADMIN_RESET",
+        ),
+    )
     initial_admin_secret_path: Path = Path("/data/secrets/initial_admin.txt")
 
 
