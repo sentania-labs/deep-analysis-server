@@ -6,6 +6,59 @@
 <section class="panel">
     <h1>My agents</h1>
     <p><a href="/profile">&larr; Back to profile</a></p>
+
+    <section class="register-agent">
+        <h2>Register New Agent</h2>
+        <p class="muted">
+            Generate a one-time code, then enter it in your Deep Analysis
+            agent to link it to your account.
+        </p>
+        <form method="post" action="/profile/agents/registration-code">
+            <button type="submit" class="btn btn-primary">Generate Registration Code</button>
+        </form>
+        {% if registration_code %}
+        <div class="registration-code-card" role="status">
+            <p class="muted">Your registration code:</p>
+            <pre id="registration-code-block"><code>{{ registration_code }}</code></pre>
+            <p>
+                <button type="button"
+                        class="btn"
+                        onclick="copyRegistrationCode()"
+                        id="copy-registration-code-btn">Copy</button>
+            </p>
+            <p class="muted">
+                Expires {{ registration_code_expires_at.strftime("%H:%M UTC") }}.
+                Enter this code in your Deep Analysis agent to register it.
+                The code expires in 10 minutes.
+            </p>
+        </div>
+        <script>
+        function copyRegistrationCode() {
+            var code = {{ registration_code | tojson }};
+            var btn = document.getElementById("copy-registration-code-btn");
+            var done = function () {
+                if (btn) {
+                    var original = btn.textContent;
+                    btn.textContent = "Copied";
+                    setTimeout(function () { btn.textContent = original; }, 1500);
+                }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(code).then(done, done);
+                return;
+            }
+            var ta = document.createElement("textarea");
+            ta.value = code;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+            document.body.removeChild(ta);
+            done();
+        }
+        </script>
+        {% endif %}
+    </section>
+
     {% if not agents %}
         <p>No agents registered yet.</p>
     {% else %}

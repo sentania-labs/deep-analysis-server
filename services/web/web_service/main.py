@@ -473,6 +473,51 @@ async def profile_agents(
     )
 
 
+@app.post("/profile/agents/registration-code")
+async def profile_agents_generate_code(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+    try:
+        result = await auth_client.mint_registration_code(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("profile.agents.registration_code.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except auth_client.AuthClientError:
+        _log.exception("auth /agent/registration-code call failed")
+        return _service_unavailable(request, user)
+
+    # Re-render the agents page with the freshly minted code. List
+    # fetch is best-effort — surfacing the code matters more than the
+    # list, so we tolerate an empty list if auth is mid-glitch.
+    offset = 0
+    per_page = _PROFILE_AGENTS_DEFAULT_PER_PAGE
+    try:
+        agents, total = await auth_client.list_my_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        agents, total = [], 0
+
+    return templates.TemplateResponse(
+        request,
+        "profile_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": 1,
+            "per_page": per_page,
+            "registration_code": result.code,
+            "registration_code_expires_at": result.expires_at,
+        },
+    )
+
+
 @app.post("/profile/agents/{agent_id}/revoke")
 async def profile_agents_revoke(
     # Typed UUID rejects malformed IDs at the route boundary with 422,

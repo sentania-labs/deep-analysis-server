@@ -5,6 +5,21 @@ project follows [Semantic Versioning](https://semver.org/) loosely while
 in pre-1.0; expect minor versions to introduce breaking changes until the
 API surface stabilizes.
 
+## v0.7.12 — 2026-05-10
+
+### Added
+
+- **Agent registration code UI.** Profile agents page (`/profile/agents`) now
+  has a "Register New Agent" section with a "Generate Registration Code" button.
+  On click, the code is displayed prominently with its 10-minute expiry and
+  copy instructions.
+
+- **`POST /auth/agent/register-with-credentials`.** One-step agent registration
+  endpoint: accepts `{email, password, agent_name, client_version}`, authenticates
+  the user, and returns `{agent_id, api_token, user_id}` — same response as the
+  code-based flow. Allows agents to offer username/password registration without
+  a separate UI step. Rejects admin users (same guard as existing register endpoint).
+
 ## v0.7.5 — 2026-05-10
 
 ### Fixed

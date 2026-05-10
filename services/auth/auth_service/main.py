@@ -44,6 +44,7 @@ from auth_service.schemas import (
     AgentListView,
     AgentRegisterRequest,
     AgentRegisterResponse,
+    AgentRegisterWithCredentialsRequest,
     AgentRegistrationCodeResponse,
     AgentView,
     LoginRequest,
@@ -529,6 +530,83 @@ async def register_agent(
     await db.commit()
     await db.refresh(agent)
 
+    return AgentRegisterResponse(
+        agent_id=agent.id,
+        api_token=api_token,
+        user_id=user_id,
+    )
+
+
+@app.post(
+    "/auth/agent/register-with-credentials",
+    response_model=AgentRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_agent_with_credentials(
+    body: AgentRegisterWithCredentialsRequest,
+    redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_session),
+) -> AgentRegisterResponse:
+    """One-step agent registration: authenticate + register in a single call.
+
+    Accepts {email, password, agent_name, client_version}. Authenticates the
+    user with the same logic as /auth/login, auto-mints a registration code,
+    immediately consumes it, and returns {agent_id, api_token, user_id} —
+    the same payload as the code-based flow.
+
+    Rejects admin users (matches the role split that /auth/agent/register
+    enforces at consume time). Does not create a browser session, so no
+    refresh token is issued.
+    """
+    user = (
+        await db.execute(select(User).where(func.lower(User.email) == body.email.lower()))
+    ).scalar_one_or_none()
+    if user is None or user.disabled:
+        raise _INVALID_CREDENTIALS
+    if not verify_password(body.password, user.password_hash):
+        raise _INVALID_CREDENTIALS
+
+    if user.role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "admin_cannot_register_agent"},
+        )
+
+    # Mint + consume immediately. Going through the existing helpers
+    # keeps this flow symmetric with the code-based one — same Redis
+    # primitive, same atomic GETDEL — so a future change to either
+    # flow lands in one place. The 30s TTL is paranoia padding; in
+    # practice the consume happens microseconds after the store.
+    code = generate_registration_code()
+    await store_registration_code(redis, code, user.id, ttl_seconds=30)
+    user_id = await consume_registration_code(redis, code)
+    if user_id is None:
+        # Implies a Redis flush or eviction within microseconds of our
+        # own store — operationally exceptional, but worth surfacing
+        # rather than papering over with a silent retry.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "registration_code_race"},
+        )
+
+    api_token = generate_api_token()
+    now = datetime.now(UTC)
+    agent = AgentRegistration(
+        user_id=user_id,
+        machine_name=body.agent_name,
+        api_token_hash=hash_api_token(api_token),
+        created_at=now,
+        last_seen_at=now,
+        client_version=body.client_version,
+    )
+    db.add(agent)
+    await db.commit()
+    await db.refresh(agent)
+
+    _log.info(
+        "auth.agent.register_with_credentials.success",
+        extra={"agent_id": str(agent.id), "user_id": user_id},
+    )
     return AgentRegisterResponse(
         agent_id=agent.id,
         api_token=api_token,
