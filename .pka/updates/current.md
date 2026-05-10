@@ -1,3 +1,9 @@
+## 2026-05-09 21:45 — ci-auto-deploy  [batch]
+
+**Type:** status
+
+Built CI auto-deploy on `feat/ci-auto-deploy` (off main `16bd7c0`). New `.github/workflows/deploy.yml` triggers on `workflow_run` of the Release workflow (`types: [completed]`, no branch filter — Release only fires on `v*.*.*` tags), gates with `github.event.workflow_run.conclusion == 'success' && secrets.DOCKER_DEPLOY_KEY != ''` so the job is skipped silently in forks/repos without the secret, runs on `[self-hosted, linux, docker]`, writes the deploy key to `/tmp/da_deploy_key` mode 0600, runs `deploy/deploy.sh` with `DEPLOY_TAG=${{ github.event.workflow_run.head_branch }}` (head_branch carries the tag name for tag-triggered upstream runs), cleans up the key on `if: always()`. New `deploy/deploy.sh` (executable bit set): SSHes to `$DOCKER_DEPLOY_HOST` with `IdentitiesOnly=yes` + `StrictHostKeyChecking=accept-new`, pulls all 5 service images at `$DEPLOY_TAG`, `docker compose --project-directory /opt/deep-analysis pull && up -d --force-recreate`, runs `alembic upgrade head` via the auth container, then loops `auth ingest parser analytics web` smoke-checking `http://localhost:8000/healthz` inside each container with `curl -sf` (fail-loud on any non-200). YAML and bash both syntax-clean. PR opening + `/self-review` next.
+
 ## 2026-04-26 12:50 — release-v0.4.3  [batch]
 
 **Type:** status
