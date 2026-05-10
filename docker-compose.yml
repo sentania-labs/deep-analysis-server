@@ -126,16 +126,13 @@ services:
       DA_SERVICE_NAME: auth
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
-      # JWT keys live on the `auth_secrets` named volume mounted at /data/secrets.
-      # Do NOT use /run/secrets/* — that's Docker secrets syntax and requires a
-      # top-level `secrets:` block, which this stack does not use.
       DA_JWT_PRIVATE_KEY_PATH: ${DA_JWT_PRIVATE_KEY_PATH:-/data/secrets/jwt_private.pem}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL:-}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD:-}
     volumes:
-      - auth_secrets:/data/secrets
+      - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -166,6 +163,7 @@ services:
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     volumes:
       - raw_archive:/data/raw
+      - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,8 +191,8 @@ services:
       DA_PARSER_RAW_PATH: /data/raw
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     volumes:
-      # Read-only mount of the shared raw archive ingest writes to.
       - raw_archive:/data/raw:ro
+      - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -220,6 +218,8 @@ services:
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    volumes:
+      - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -246,6 +246,8 @@ services:
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    volumes:
+      - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -265,5 +267,4 @@ networks:
 volumes:
   postgres_data:
   caddy_data:
-  auth_secrets:
   raw_archive:
