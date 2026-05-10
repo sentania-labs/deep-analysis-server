@@ -40,6 +40,54 @@ services:
       timeout: 5s
       retries: 5
 
+  # One-shot jobs: apply alembic migrations on `compose up` and exit 0. The
+  # deploy wrapper on docker.int rejects `compose exec`, so migrations have
+  # to run as part of `compose up`. Ordering is enforced by depends_on with
+  # `service_completed_successfully`:
+  #   postgres healthy → root-migrate → auth-migrate → auth.
+  #
+  # `root-migrate` runs the root alembic head, which creates the four
+  # logical schemas (auth/ingest/parser/analytics) and the unprivileged
+  # service roles. `auth-migrate` then applies the auth.* tables.
+  #
+  # Both reuse the auth image, which bakes in both alembic trees. The
+  # ingest/parser schemas still need their own migrate services — that is
+  # a follow-up; today only the auth service writes its head from compose.
+  #
+  # DATABASE_URL must be a sync psycopg URL (alembic env.py uses the sync
+  # engine), e.g. postgresql+psycopg://USER:PASS@postgres:5432/deep_analysis.
+  # The async asyncpg URL used by the running services (DA_DATABASE_URL) is
+  # not interchangeable here.
+  root-migrate:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    command: ["alembic", "-c", "/app/alembic.ini", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  auth-migrate:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    command: ["alembic", "-c", "/app/service/alembic.ini", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      root-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   gateway:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -93,6 +141,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 15s
