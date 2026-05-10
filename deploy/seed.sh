@@ -107,6 +107,7 @@ DEEP_ANALYSIS_ACME_EMAIL=ops@sentania.net
 DEPLOY_TAG=latest
 DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=admin@local
 DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=$BOOTSTRAP_ADMIN_PASSWORD
+DEEP_ANALYSIS_FORCE_ADMIN_RESET=true
 EOF
 chmod 0600 "$ENV_FILE"
 
@@ -147,8 +148,10 @@ echo ">> ADMIN BOOTSTRAP CREDENTIALS (save these now):"
 echo "   email:    admin@local"
 echo "   password: $BOOTSTRAP_ADMIN_PASSWORD"
 echo ""
-echo "   The admin user will be created on first 'compose up -d'."
-echo "   Change the password immediately after first login."
+echo "   DEEP_ANALYSIS_FORCE_ADMIN_RESET=true is set in .env."
+echo "   On first 'compose up -d', the auth service will delete any"
+echo "   existing admin@local user and recreate it with the password above."
+echo "   Remove DEEP_ANALYSIS_FORCE_ADMIN_RESET from .env after verifying login."
 echo ""
 echo "NOTE: JWT keys were pushed to $DEPLOY_PATH/.secrets/ but will not"
 echo "be picked up until docker-compose.yml's auth_secrets volume is"

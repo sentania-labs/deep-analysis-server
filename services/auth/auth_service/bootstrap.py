@@ -39,7 +39,51 @@ def _write_initial_password(path: Path, password: str) -> None:
     os.chmod(path, 0o600)
 
 
+async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
+    """Delete and recreate the admin user when DEEP_ANALYSIS_FORCE_ADMIN_RESET is set.
+
+    Returns True if a reset was performed, False otherwise.
+    """
+    if not settings.force_admin_reset:
+        return False
+
+    env_email = settings.bootstrap_admin_email
+    env_password = settings.bootstrap_admin_password
+    if not env_email or not env_password:
+        logger.error(
+            "DEEP_ANALYSIS_FORCE_ADMIN_RESET is set but "
+            "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL or "
+            "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD is missing — skipping reset"
+        )
+        return False
+
+    existing = (await db.execute(select(User).where(User.email == env_email))).scalar_one_or_none()
+    if existing is not None:
+        await db.delete(existing)
+        await db.commit()
+
+    user = User(
+        email=env_email,
+        password_hash=hash_password(env_password),
+        role="admin",
+        must_change_password=False,
+        disabled=False,
+    )
+    db.add(user)
+    await db.commit()
+
+    logger.warning(
+        "Admin user reset: %s (DEEP_ANALYSIS_FORCE_ADMIN_RESET was set — "
+        "remove this env var after verifying login)",
+        env_email,
+    )
+    return True
+
+
 async def bootstrap_admin(db: AsyncSession, settings: AuthSettings) -> None:
+    if await force_reset_admin(db, settings):
+        return
+
     existing = (
         await db.execute(
             select(User.id).where(User.role == "admin", User.disabled.is_(False)).limit(1)
