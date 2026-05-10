@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from parser_service.storage import RawFileNotFoundError, read_raw, resolve_path
+from parser_service.storage import (
+    RawFileNotFoundError,
+    RawFileTooLargeError,
+    read_raw,
+    resolve_path,
+)
 
 
 def _write_shard(root: Path, sha: str, ext: str, content: bytes) -> Path:
@@ -43,3 +48,16 @@ def test_read_raw_returns_bytes(tmp_path: Path) -> None:
     sha = "e" * 64
     _write_shard(tmp_path, sha, ".dat", b"hello")
     assert read_raw(sha, tmp_path) == b"hello"
+
+
+def test_read_raw_under_ceiling(tmp_path: Path) -> None:
+    sha = "f" * 64
+    _write_shard(tmp_path, sha, ".dat", b"hello")
+    assert read_raw(sha, tmp_path, max_bytes=1024) == b"hello"
+
+
+def test_read_raw_rejects_oversize(tmp_path: Path) -> None:
+    sha = "0" * 64
+    _write_shard(tmp_path, sha, ".dat", b"x" * 1024)
+    with pytest.raises(RawFileTooLargeError):
+        read_raw(sha, tmp_path, max_bytes=512)

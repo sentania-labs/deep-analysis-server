@@ -20,6 +20,10 @@ class RawFileNotFoundError(FileNotFoundError):
     """Raised when no raw file can be located for a given sha256."""
 
 
+class RawFileTooLargeError(OSError):
+    """Raised when a raw file exceeds the configured in-memory ceiling."""
+
+
 def resolve_path(sha256: str, root: Path, hint_ext: str | None = None) -> Path:
     """Return the on-disk path for ``sha256``, trying common extensions.
 
@@ -35,10 +39,26 @@ def resolve_path(sha256: str, root: Path, hint_ext: str | None = None) -> Path:
         candidate = shard / f"{sha256}{ext}"
         if candidate.exists():
             return candidate
-    raise RawFileNotFoundError(
-        f"no raw file found for sha {sha256} under {shard}"
-    )
+    raise RawFileNotFoundError(f"no raw file found for sha {sha256} under {shard}")
 
 
-def read_raw(sha256: str, root: Path, hint_ext: str | None = None) -> bytes:
-    return resolve_path(sha256, root, hint_ext).read_bytes()
+def read_raw(
+    sha256: str,
+    root: Path,
+    hint_ext: str | None = None,
+    max_bytes: int | None = None,
+) -> bytes:
+    """Read a raw archived file. Refuses to buffer more than ``max_bytes``.
+
+    A ``None`` ceiling means no limit (matches historical behavior). The
+    consumer wires the configured ``parser_max_log_bytes`` so a single
+    pathologically large upload cannot exhaust process memory.
+    """
+    path = resolve_path(sha256, root, hint_ext)
+    if max_bytes is not None:
+        size = path.stat().st_size
+        if size > max_bytes:
+            raise RawFileTooLargeError(
+                f"raw file for sha {sha256} is {size} bytes; exceeds ceiling {max_bytes}"
+            )
+    return path.read_bytes()

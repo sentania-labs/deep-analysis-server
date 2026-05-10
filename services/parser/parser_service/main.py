@@ -51,6 +51,7 @@ async def _start_consumer() -> None:
         raw_root=settings.parser_raw_path,
         parser=LogParser(),
         publisher=EventPublisher(client),
+        max_log_bytes=settings.parser_max_log_bytes,
     )
     _consumer_task = asyncio.create_task(_consumer.run(), name="parser-consumer")
     _log.info("parser consumer task started")
