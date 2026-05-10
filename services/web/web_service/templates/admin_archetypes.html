@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Archetypes · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Archetypes</h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/archetypes" aria-current="page"><strong>Archetypes</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <p>
+        <a class="btn btn-primary" href="/admin/archetypes/new">New archetype</a>
+    </p>
+
+    {% if not archetypes %}
+        <p>No archetypes defined yet.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Format</th>
+                    <th>Defining cards</th>
+                    <th>Updated</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in archetypes %}
+                <tr id="archetype-{{ a.id }}">
+                    <td>{{ a.name }}</td>
+                    <td>{{ a.format }}</td>
+                    <td>{{ a.defining_cards|length }}</td>
+                    <td>{{ a.updated_at.strftime("%Y-%m-%d") if a.updated_at else "—" }}</td>
+                    <td>
+                        <a class="btn" href="/admin/archetypes/{{ a.id }}/edit">Edit</a>
+                        <form method="post"
+                              action="/admin/archetypes/{{ a.id }}/delete"
+                              class="inline-form"
+                              onsubmit="return confirm('Delete archetype {{ a.name }}? Matches tagged with it will be untagged.');">
+                            <button type="submit" class="btn btn-danger">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="muted">
+            {{ total }} archetype{{ "" if total == 1 else "s" }}.
+        </p>
+    {% endif %}
+</section>
+{% endblock %}

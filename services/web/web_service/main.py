@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import mount_metrics
-from web_service import auth_client
+from web_service import analytics_client, auth_client
 from web_service.deps import (
     BrowserAuthRedirect,
     BrowserUser,
@@ -186,13 +186,42 @@ async def login_submit(
 async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    stats_summary: Any = None
+    format_stats: list[Any] = []
+    opponent_stats: list[Any] = []
+    stats_error = False
+    try:
+        stats_summary = await analytics_client.get_stats_summary(
+            settings.analytics_service_url, user.token
+        )
+        format_stats = await analytics_client.get_stats_by_format(
+            settings.analytics_service_url, user.token
+        )
+        opponent_stats = await analytics_client.get_stats_by_opponent(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        # Treat as logged-out: bounce to /login so the user can re-auth.
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics stats call failed; rendering dashboard with error banner")
+        stats_error = True
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
-        {"user": user},
+        {
+            "user": user,
+            "stats_summary": stats_summary,
+            "format_stats": format_stats,
+            "opponent_stats": opponent_stats,
+            "stats_error": stats_error,
+        },
     )
 
 
@@ -1349,6 +1378,310 @@ async def admin_invites_revoke(
         error=message,
         created=None,
         status_code=code,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin archetype catalog
+# ---------------------------------------------------------------------------
+
+
+def _parse_defining_cards(raw: str) -> list[str]:
+    """Split the textarea body into a clean list of card names.
+
+    The form is one card per line; whitespace-only lines are dropped
+    and each entry is stripped. Order is preserved.
+    """
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+@app.get("/admin/archetypes", response_class=HTMLResponse)
+async def admin_archetypes_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        items, total = await analytics_client.admin_list_archetypes(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.archetypes.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /archetypes call failed")
+        return templates.TemplateResponse(
+            request,
+            "admin_archetypes.html",
+            {
+                "user": user,
+                "archetypes": [],
+                "total": 0,
+                "error": "Analytics service unavailable. Please try again.",
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_archetypes.html",
+        {
+            "user": user,
+            "archetypes": items,
+            "total": total,
+            "error": None,
+        },
+    )
+
+
+@app.get("/admin/archetypes/new", response_class=HTMLResponse)
+async def admin_archetypes_new_form(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    return templates.TemplateResponse(
+        request,
+        "admin_archetypes_edit.html",
+        {
+            "user": user,
+            "mode": "create",
+            "archetype_id": None,
+            "name": "",
+            "format": "",
+            "defining_cards_text": "",
+            "error": None,
+        },
+    )
+
+
+@app.post("/admin/archetypes/create")
+async def admin_archetypes_create(
+    request: Request,
+    name: Annotated[str, Form()],
+    format: Annotated[str, Form()],
+    defining_cards: Annotated[str, Form()] = "",
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    submitted_name = name.strip()
+    submitted_format = format.strip()
+    cards = _parse_defining_cards(defining_cards or "")
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "admin_archetypes_edit.html",
+            {
+                "user": user,
+                "mode": "create",
+                "archetype_id": None,
+                "name": submitted_name,
+                "format": submitted_format,
+                "defining_cards_text": (defining_cards or ""),
+                "error": message,
+            },
+            status_code=code,
+        )
+
+    if not submitted_name:
+        return _render_error("Name is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_format:
+        return _render_error("Format is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        item, err = await analytics_client.admin_create_archetype(
+            settings.analytics_service_url,
+            user.token,
+            name=submitted_name,
+            format_=submitted_format,
+            defining_cards=cards,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.archetypes.create.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /archetypes call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if item is None:
+        return _render_error(
+            "Could not create archetype.",
+            status.HTTP_400_BAD_REQUEST if err == "invalid_input" else status.HTTP_400_BAD_REQUEST,
+        )
+    return RedirectResponse(url="/admin/archetypes", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/archetypes/{archetype_id}/edit", response_class=HTMLResponse)
+async def admin_archetypes_edit_form(
+    archetype_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        item = await analytics_client.admin_get_archetype(
+            settings.analytics_service_url, user.token, str(archetype_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.archetypes.edit.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /archetypes/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if item is None:
+        return Response(
+            content="That archetype no longer exists.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_archetypes_edit.html",
+        {
+            "user": user,
+            "mode": "edit",
+            "archetype_id": item.id,
+            "name": item.name,
+            "format": item.format,
+            "defining_cards_text": "\n".join(item.defining_cards),
+            "error": None,
+        },
+    )
+
+
+@app.post("/admin/archetypes/{archetype_id}/edit")
+async def admin_archetypes_edit(
+    archetype_id: uuid.UUID,
+    request: Request,
+    name: Annotated[str, Form()],
+    format: Annotated[str, Form()],
+    defining_cards: Annotated[str, Form()] = "",
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    submitted_name = name.strip()
+    submitted_format = format.strip()
+    cards = _parse_defining_cards(defining_cards or "")
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "admin_archetypes_edit.html",
+            {
+                "user": user,
+                "mode": "edit",
+                "archetype_id": str(archetype_id),
+                "name": submitted_name,
+                "format": submitted_format,
+                "defining_cards_text": (defining_cards or ""),
+                "error": message,
+            },
+            status_code=code,
+        )
+
+    if not submitted_name:
+        return _render_error("Name is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_format:
+        return _render_error("Format is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        item, err = await analytics_client.admin_update_archetype(
+            settings.analytics_service_url,
+            user.token,
+            str(archetype_id),
+            name=submitted_name,
+            format_=submitted_format,
+            defining_cards=cards,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.archetypes.update.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics PUT /archetypes/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if err == "archetype_not_found":
+        return _render_error("That archetype no longer exists.", status.HTTP_404_NOT_FOUND)
+    if item is None:
+        return _render_error("Could not update archetype.", status.HTTP_400_BAD_REQUEST)
+    return RedirectResponse(url="/admin/archetypes", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/archetypes/{archetype_id}/delete")
+async def admin_archetypes_delete(
+    archetype_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, err = await analytics_client.admin_delete_archetype(
+            settings.analytics_service_url, user.token, str(archetype_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.archetypes.delete.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics DELETE /archetypes/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(url="/admin/archetypes", status_code=status.HTTP_303_SEE_OTHER)
+
+    if err == "archetype_not_found":
+        try:
+            items, total = await analytics_client.admin_list_archetypes(
+                settings.analytics_service_url, user.token
+            )
+        except (analytics_client.AnalyticsClientError, analytics_client.AnalyticsForbidden):
+            items, total = [], 0
+        return templates.TemplateResponse(
+            request,
+            "admin_archetypes.html",
+            {
+                "user": user,
+                "archetypes": items,
+                "total": total,
+                "error": "That archetype no longer exists.",
+            },
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(
+        content="Could not delete archetype.",
+        status_code=status.HTTP_400_BAD_REQUEST,
     )
 
 

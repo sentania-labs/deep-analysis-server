@@ -19,6 +19,10 @@ class WebSettings(BaseServiceSettings):
     # does not go through the Caddy gateway.
     auth_service_url: str = "http://auth:8000"
 
+    # Internal compose-network URL for the analytics service. Same
+    # backend-only contract as auth_service_url.
+    analytics_service_url: str = "http://analytics:8000"
+
     # Matches auth.access_token_ttl_seconds default. If auth is
     # reconfigured, set DA_SESSION_COOKIE_TTL_SECONDS to match.
     session_cookie_ttl_seconds: int = 900
