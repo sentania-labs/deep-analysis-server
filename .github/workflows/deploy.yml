@@ -1,12 +1,15 @@
 name: deploy
 
-# Triggered when the Release workflow finishes for a tag push. Pulls the
-# 5 service images at the released tag, force-recreates the compose stack
-# on the docker host, runs Alembic migrations, and smoke-checks /healthz
-# on every service.
+# Triggered when the Release workflow finishes for a tag push. Rewrites
+# docker-compose.yml's `build:` blocks into `image:` refs at the released
+# tag, scp's it to the edge.int slot dir, then runs `compose pull` and
+# `compose up -d`. Migrations are baked into the stack as one-shot
+# services, so they run as part of the bring-up. Verification is via
+# `compose ps`.
 #
-# Skips silently when DOCKER_DEPLOY_KEY is not configured (e.g. forks),
-# so the workflow file is safe to ship in the open-source repo.
+# If DOCKER_DEPLOY_KEY is unset (e.g. forks), the key-write step produces
+# an empty file and deploy.sh fails fast with a clear error message —
+# acceptable skip behavior for the open-source repo.
 
 on:
   workflow_run:
@@ -23,9 +26,12 @@ permissions:
 jobs:
   deploy:
     runs-on: [self-hosted, linux, docker]
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      secrets.DOCKER_DEPLOY_KEY != ''
+    # Note: do NOT add `secrets.DOCKER_DEPLOY_KEY != ''` here. GitHub does
+    # not evaluate `secrets` in job-level `if:` for `workflow_run` triggers
+    # — the condition silently evaluates to false and the job is skipped
+    # with no log. If the secret is unset (e.g. forks), the key-write step
+    # produces an empty file and deploy.sh fails fast with a clear error.
+    if: github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
       - name: Write deploy key
