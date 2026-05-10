@@ -78,6 +78,9 @@ echo ">> seeding deep-analysis-server on $DEPLOY_HOST:$DEPLOY_PATH"
 echo ">> generating Postgres password"
 POSTGRES_PASSWORD="$(openssl rand -hex 32)"
 
+echo ">> generating bootstrap admin password"
+BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+
 echo ">> generating RS256 JWT keypair (RSA-4096) into $TMPDIR"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 \
     -out "$TMPDIR/jwt_private.pem" >/dev/null 2>&1
@@ -102,6 +105,8 @@ DA_REFRESH_TOKEN_TTL_SECONDS=2592000
 GATEWAY_DOMAIN=deepanalysis.sentania.net
 DEEP_ANALYSIS_ACME_EMAIL=ops@sentania.net
 DEPLOY_TAG=latest
+DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=admin@local
+DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=$BOOTSTRAP_ADMIN_PASSWORD
 EOF
 chmod 0600 "$ENV_FILE"
 
@@ -137,6 +142,13 @@ ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
     "docker compose --project-directory $DEPLOY_PATH ps"
 
 echo ">> seed complete — deep-analysis-server"
+echo ""
+echo ">> ADMIN BOOTSTRAP CREDENTIALS (save these now):"
+echo "   email:    admin@local"
+echo "   password: $BOOTSTRAP_ADMIN_PASSWORD"
+echo ""
+echo "   The admin user will be created on first 'compose up -d'."
+echo "   Change the password immediately after first login."
 echo ""
 echo "NOTE: JWT keys were pushed to $DEPLOY_PATH/.secrets/ but will not"
 echo "be picked up until docker-compose.yml's auth_secrets volume is"

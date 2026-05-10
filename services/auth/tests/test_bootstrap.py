@@ -135,3 +135,19 @@ async def test_bootstrap_env_var_path_no_file_written(
     assert admin.must_change_password is False
     assert verify_password("scripted-password-xyz", admin.password_hash)
     assert not settings.initial_admin_secret_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_env_var_path_idempotent_on_restart(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    """Simulate container restart: env vars present, user already exists.
+    Bootstrap must not create a second admin."""
+    settings = _fresh_settings(tmp_path, email="admin@local", pw="strongpassword123x")
+    # First startup: creates the user
+    await bootstrap_admin(db_session, settings)
+    # Second startup (restart): must be a no-op
+    await bootstrap_admin(db_session, settings)
+
+    count = (await db_session.execute(select(func.count()).select_from(User))).scalar_one()
+    assert count == 1
