@@ -1,6 +1,6 @@
 """First-boot admin bootstrap.
 
-Runs once at auth-service startup. Idempotent: if any enabled admin
+Runs at auth-service startup. Idempotent: if any enabled admin
 already exists, it is a no-op. Otherwise creates an admin account and
 (for the auto-generate path) writes the plaintext password to
 ``/data/secrets/initial_admin.txt`` on the ``auth_secrets`` volume.
