@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Archetypes ·
+    {% if mode == "create" %}New{% else %}Edit{% endif %} ·
+    Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>
+        {% if mode == "create" %}New archetype{% else %}Edit archetype{% endif %}
+    </h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/archetypes" aria-current="page"><strong>Archetypes</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="post"
+          action="{% if mode == 'create' %}/admin/archetypes/create{% else %}/admin/archetypes/{{ archetype_id }}/edit{% endif %}">
+        <label class="field">
+            <span>Name</span>
+            <input type="text" name="name" value="{{ name }}" required maxlength="200">
+        </label>
+        <label class="field">
+            <span>Format</span>
+            <input type="text" name="format" value="{{ format }}" required maxlength="64"
+                   placeholder="e.g. Modern, Legacy, Pioneer">
+        </label>
+        <label class="field">
+            <span>Defining cards (one per line)</span>
+            <textarea name="defining_cards" rows="12" cols="60"
+                      placeholder="Lightning Bolt&#10;Goblin Guide&#10;...">{{ defining_cards_text }}</textarea>
+        </label>
+        <p>
+            <button type="submit" class="btn btn-primary">
+                {% if mode == "create" %}Create{% else %}Save changes{% endif %}
+            </button>
+            <a class="btn" href="/admin/archetypes">Cancel</a>
+        </p>
+    </form>
+</section>
+{% endblock %}

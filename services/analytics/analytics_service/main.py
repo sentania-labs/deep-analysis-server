@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from analytics_service.archetypes import router as archetypes_router
 from common.logging import configure_logging
 from common.metrics import mount_metrics
 
@@ -7,6 +8,7 @@ SERVICE_NAME = "analytics"
 configure_logging(SERVICE_NAME)
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
 mount_metrics(app, SERVICE_NAME)
+app.include_router(archetypes_router)
 
 
 @app.get("/healthz")
