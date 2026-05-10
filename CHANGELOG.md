@@ -5,6 +5,18 @@ project follows [Semantic Versioning](https://semver.org/) loosely while
 in pre-1.0; expect minor versions to introduce breaking changes until the
 API surface stabilizes.
 
+## v0.7.5 — 2026-05-10
+
+### Fixed
+
+- **fleet-caddy networking: 503 after CI deploy.** Added `edge-slots` as an
+  external network in `docker-compose.yml` and attached `web`, `auth`, `ingest`,
+  and `analytics` services to it. Rewrote the fleet-caddy caddy snippet to route
+  directly to service containers (`deep-analysis-<svc>-1`) instead of through the
+  internal gateway — fleet-caddy handles TLS, so routing two Caddy instances in
+  series was unnecessary. The fix is permanent: `compose up -d` now attaches
+  services to `edge-slots` automatically on every deploy.
+
 ## v0.5.0 — 2026-04-26
 
 ### Added

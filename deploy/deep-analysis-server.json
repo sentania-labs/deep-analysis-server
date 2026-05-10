@@ -3,8 +3,8 @@
   "slot": "deep-analysis-server",
   "mode": "l7-reverse-proxy",
   "sni": "deepanalysis.sentania.net",
-  "upstream_host": "deep-analysis-server-gateway",
-  "upstream_port": 8080,
+  "upstream_host": "deep-analysis-web-1",
+  "upstream_port": 8000,
   "health_uri": "/healthz",
   "auth_required": false,
   "tls_upstream_skip_verify": false

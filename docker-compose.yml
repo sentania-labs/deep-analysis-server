@@ -122,6 +122,7 @@ services:
     restart: unless-stopped
     networks:
       - backend
+      - edge-slots
     environment:
       DA_SERVICE_NAME: auth
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -154,6 +155,7 @@ services:
     restart: unless-stopped
     networks:
       - backend
+      - edge-slots
     environment:
       DA_SERVICE_NAME: ingest
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -212,6 +214,7 @@ services:
     restart: unless-stopped
     networks:
       - backend
+      - edge-slots
     environment:
       DA_SERVICE_NAME: analytics
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -240,6 +243,7 @@ services:
     networks:
       - frontend
       - backend
+      - edge-slots
     environment:
       DA_SERVICE_NAME: web
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -263,6 +267,8 @@ services:
 networks:
   frontend:
   backend:
+  edge-slots:
+    external: true
 
 volumes:
   postgres_data:
