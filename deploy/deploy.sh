@@ -1,56 +1,64 @@
 #!/usr/bin/env bash
-# Deploy the deep-analysis stack to the docker host on a tagged release.
+# Deploy the deep-analysis stack to the docker.int slot on a tagged release.
 #
-# Pulls the 5 service images at $DEPLOY_TAG, force-recreates the compose
-# stack at $DEPLOY_PATH on $DEPLOY_HOST, runs Alembic migrations through
-# the auth container, and smoke-checks /healthz on each service.
+# Pushes the repo-root docker-compose.yml to the slot dir on $DEPLOY_HOST,
+# pulls the 5 service images at $DEPLOY_TAG via compose, and brings the
+# stack up. Verification is via `compose ps` (matches the dashboard slot
+# pattern). The deploy-wrapper allowlist on docker.int rejects raw
+# `docker pull`, `--force-recreate`, and `compose exec`, so this script
+# uses only allowlisted verbs.
+#
+# Migrations are NOT run from this script. The wrapper does not allow
+# `compose exec`, so Alembic migrations must be baked into the compose
+# stack (one-shot `auth-migrate` service, or `alembic upgrade head` in
+# the auth container's entrypoint gated by an env flag). Until that is
+# wired up, the first deploy after a schema change requires a manual
+# admin step on docker.int.
 #
 # Requires DOCKER_DEPLOY_HOST and DOCKER_DEPLOY_KEY env vars, set by the
 # deploy workflow from repo variables/secrets. DEPLOY_TAG defaults to
-# "latest" but is normally passed the upstream tag (e.g. v0.6.0).
+# "latest" but is normally passed the upstream tag (e.g. v0.6.0); the
+# tag is consumed by docker-compose.yml via image: ${DEPLOY_TAG} pins.
 
 set -euo pipefail
 
 DEPLOY_HOST="${DOCKER_DEPLOY_HOST:?DOCKER_DEPLOY_HOST not set}"
 DEPLOY_KEY="${DOCKER_DEPLOY_KEY:?DOCKER_DEPLOY_KEY not set}"
 DEPLOY_TAG="${DEPLOY_TAG:-latest}"
-DEPLOY_PATH="${DEPLOY_PATH:-/opt/deep-analysis}"
+DEPLOY_PATH="${DEPLOY_PATH:-/srv/services/deep-analysis-server}"
 
 if [[ ! -r "$DEPLOY_KEY" ]]; then
     echo "deploy key not found or unreadable: $DEPLOY_KEY" >&2
-    echo "set DOCKER_DEPLOY_KEY to the deploy private key path" >&2
+    echo "set DOCKER_DEPLOY_KEY to the slot deploy private key path" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.yml"
+
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+    echo "missing compose file: $COMPOSE_FILE" >&2
     exit 1
 fi
 
 SSH_OPTS=(-i "$DEPLOY_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new)
+SCP_OPTS=(-O "${SSH_OPTS[@]}")
 
-SERVICES=(auth ingest parser analytics web)
+echo ">> deploying deep-analysis $DEPLOY_TAG to $DEPLOY_HOST:$DEPLOY_PATH"
 
-echo ">> deploying deep-analysis $DEPLOY_TAG to $DEPLOY_HOST"
+echo ">> pushing compose file to $DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
+scp "${SCP_OPTS[@]}" "$COMPOSE_FILE" "$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
 
 echo ">> pulling service images at $DEPLOY_TAG"
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
-    "docker pull ghcr.io/sentania-labs/deep-analysis-auth:${DEPLOY_TAG} && \
-     docker pull ghcr.io/sentania-labs/deep-analysis-ingest:${DEPLOY_TAG} && \
-     docker pull ghcr.io/sentania-labs/deep-analysis-parser:${DEPLOY_TAG} && \
-     docker pull ghcr.io/sentania-labs/deep-analysis-analytics:${DEPLOY_TAG} && \
-     docker pull ghcr.io/sentania-labs/deep-analysis-web:${DEPLOY_TAG}"
+    "docker compose --project-directory $DEPLOY_PATH pull"
 
-echo ">> bringing stack up (force-recreate) at $DEPLOY_PATH"
+echo ">> bringing stack up"
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
-    "docker compose --project-directory $DEPLOY_PATH pull && \
-     docker compose --project-directory $DEPLOY_PATH up -d --force-recreate"
+    "docker compose --project-directory $DEPLOY_PATH up -d"
 
-echo ">> running alembic migrations via auth container"
+echo ">> verifying stack"
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
-    "docker compose --project-directory $DEPLOY_PATH exec -T auth alembic upgrade head"
-
-echo ">> smoke-checking /healthz on all services"
-ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
-    "for svc in ${SERVICES[*]}; do \
-        echo \">> smoke check: \$svc\"; \
-        docker compose --project-directory $DEPLOY_PATH exec -T \$svc curl -sf http://localhost:8000/healthz \
-            || { echo \"FAIL: \$svc /healthz\" >&2; exit 1; }; \
-     done"
+    "docker compose --project-directory $DEPLOY_PATH ps"
 
 echo ">> deploy complete — deep-analysis $DEPLOY_TAG"
