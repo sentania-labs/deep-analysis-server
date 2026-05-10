@@ -41,7 +41,7 @@ _SERVICES: dict[str, tuple[str, ...]] = {
     "ingest": ("/ingest/",),
     "parser": ("/parser/",),
     "analytics": ("/analytics/",),
-    "web": ("/web/",),
+    "web": ("/web/", "/admin/"),
 }
 
 _INFRA_PATHS = frozenset({"/healthz", "/metrics"})

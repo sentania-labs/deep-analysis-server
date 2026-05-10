@@ -74,10 +74,7 @@ def upgrade() -> None:
     # the cards table. ALTER DEFAULT PRIVILEGES so any future catalog
     # tables created by the analytics role inherit the grant.
     op.execute("GRANT USAGE ON SCHEMA catalog TO deep_analysis_analytics;")
-    op.execute(
-        "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog "
-        "TO deep_analysis_analytics;"
-    )
+    op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog TO deep_analysis_analytics;")
     op.execute(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA catalog "
         "GRANT ALL PRIVILEGES ON TABLES TO deep_analysis_analytics;"
@@ -85,13 +82,9 @@ def upgrade() -> None:
 
     # Parser reads cards opportunistically for match enrichment.
     op.execute("GRANT USAGE ON SCHEMA catalog TO deep_analysis_parser;")
+    op.execute("GRANT SELECT ON ALL TABLES IN SCHEMA catalog TO deep_analysis_parser;")
     op.execute(
-        "GRANT SELECT ON ALL TABLES IN SCHEMA catalog "
-        "TO deep_analysis_parser;"
-    )
-    op.execute(
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA catalog "
-        "GRANT SELECT ON TABLES TO deep_analysis_parser;"
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA catalog GRANT SELECT ON TABLES TO deep_analysis_parser;"
     )
 
 
@@ -100,10 +93,7 @@ def downgrade() -> None:
         "ALTER DEFAULT PRIVILEGES IN SCHEMA catalog "
         "REVOKE SELECT ON TABLES FROM deep_analysis_parser;"
     )
-    op.execute(
-        "REVOKE SELECT ON ALL TABLES IN SCHEMA catalog "
-        "FROM deep_analysis_parser;"
-    )
+    op.execute("REVOKE SELECT ON ALL TABLES IN SCHEMA catalog FROM deep_analysis_parser;")
     op.execute("REVOKE USAGE ON SCHEMA catalog FROM deep_analysis_parser;")
 
     op.execute(
@@ -111,8 +101,7 @@ def downgrade() -> None:
         "REVOKE ALL PRIVILEGES ON TABLES FROM deep_analysis_analytics;"
     )
     op.execute(
-        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog "
-        "FROM deep_analysis_analytics;"
+        "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA catalog FROM deep_analysis_analytics;"
     )
     op.execute("REVOKE USAGE ON SCHEMA catalog FROM deep_analysis_analytics;")
 

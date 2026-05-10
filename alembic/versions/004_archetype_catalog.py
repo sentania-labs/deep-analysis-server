@@ -83,18 +83,10 @@ def upgrade() -> None:
     # privileges. The base 001 migration only grants SELECT on analytics
     # because at that point the schema had no tables; this catalog is
     # the first analytics-owned table and needs ALL.
-    op.execute(
-        "GRANT ALL PRIVILEGES ON TABLE analytics.archetypes "
-        "TO deep_analysis_analytics;"
-    )
+    op.execute("GRANT ALL PRIVILEGES ON TABLE analytics.archetypes TO deep_analysis_analytics;")
 
 
 def downgrade() -> None:
-    op.execute(
-        "REVOKE ALL PRIVILEGES ON TABLE analytics.archetypes "
-        "FROM deep_analysis_analytics;"
-    )
-    op.drop_index(
-        "ix_archetypes_format", table_name="archetypes", schema="analytics"
-    )
+    op.execute("REVOKE ALL PRIVILEGES ON TABLE analytics.archetypes FROM deep_analysis_analytics;")
+    op.drop_index("ix_archetypes_format", table_name="archetypes", schema="analytics")
     op.drop_table("archetypes", schema="analytics")

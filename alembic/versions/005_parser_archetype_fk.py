@@ -40,8 +40,7 @@ def upgrade() -> None:
     # at FK-validate time, and REFERENCES to declare the constraint.
     op.execute("GRANT USAGE ON SCHEMA analytics TO deep_analysis_parser;")
     op.execute(
-        "GRANT SELECT, REFERENCES ON ALL TABLES IN SCHEMA analytics "
-        "TO deep_analysis_parser;"
+        "GRANT SELECT, REFERENCES ON ALL TABLES IN SCHEMA analytics TO deep_analysis_parser;"
     )
     op.execute(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA analytics "
@@ -76,9 +75,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_matches_archetype_id", table_name="matches", schema="parser"
-    )
+    op.drop_index("ix_matches_archetype_id", table_name="matches", schema="parser")
     op.drop_constraint(
         "fk_matches_archetype_id",
         "matches",
@@ -92,7 +89,6 @@ def downgrade() -> None:
         "REVOKE SELECT, REFERENCES ON TABLES FROM deep_analysis_parser;"
     )
     op.execute(
-        "REVOKE SELECT, REFERENCES ON ALL TABLES IN SCHEMA analytics "
-        "FROM deep_analysis_parser;"
+        "REVOKE SELECT, REFERENCES ON ALL TABLES IN SCHEMA analytics FROM deep_analysis_parser;"
     )
     op.execute("REVOKE USAGE ON SCHEMA analytics FROM deep_analysis_parser;")
