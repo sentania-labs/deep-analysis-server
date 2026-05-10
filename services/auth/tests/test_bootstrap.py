@@ -233,7 +233,7 @@ async def test_force_reset_skips_when_credentials_missing(
     with caplog.at_level(logging.ERROR, logger="auth.bootstrap"):
         result = await force_reset_admin(db_session, settings)
     assert result is False
-    assert any("FORCE_ADMIN_RESET" in rec.message for rec in caplog.records)
+    assert any("FORCE_ADMIN_RESET" in rec.getMessage() for rec in caplog.records)
 
     admin = (await db_session.execute(select(User).where(User.email == "admin@local"))).scalar_one()
     assert verify_password("untouched", admin.password_hash)
