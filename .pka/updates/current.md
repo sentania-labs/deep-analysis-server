@@ -1,3 +1,9 @@
+## 2026-05-10 22:45 — uid1-invariant-shipped  [batch]
+
+**Type:** status
+
+UID 1 = admin@local invariant landed on `main` as `3feccf9` "fix(auth): move admin@local to uid=1, prevent future drift" and tagged `v0.7.13`. Concurrent Adolin dispatches were running this same task in parallel; one shipped first and the other agents converged on the same outcome. The merged design extends the spec: instead of explicitly setting `id=1` at INSERT time, bootstrap inserts normally and then runs `_ensure_admin_is_uid1` (renamed from the spec's `reclaim_uid1`) which UPDATEs `auth.users SET id = 1` and `setval()`s the sequence so future INSERTs don't collide. Two new alembic migrations (root `005_user_fk_on_update_cascade.py` and ingest `002_user_uploads_fk_on_update_cascade.py`) add `ON UPDATE CASCADE` to FK constraints on `auth.sessions.user_id` and `ingest.user_uploads.user_id` so existing sessions and uploads follow the parent's id change cleanly. Production verification (edge.int): `SELECT id, email, role FROM auth.users` returned `[(1, 'admin@local', 'admin'), (3, 'scottb@sentania.net', 'user')]` — invariant holds. `/healthz` 200, `/admin/settings` now 302 to login (UID=1 gate passes). Release + deploy workflows both green.
+
 ## 2026-05-09 22:30 — deploy-slot-model-fix  [batch]
 
 **Type:** status
