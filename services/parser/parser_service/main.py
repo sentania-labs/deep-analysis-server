@@ -19,6 +19,7 @@ from common.logging import configure_logging
 from common.metrics import mount_metrics
 from common.redis_client import EventPublisher, get_redis
 from parser_service import models as _models  # noqa: F401 — load Base.metadata
+from parser_service.backfill import backfill_loop
 from parser_service.consumer import ParserConsumer
 from parser_service.db import get_sessionmaker
 from parser_service.parsing import LogParser
@@ -31,17 +32,21 @@ _log = logging.getLogger("parser.main")
 
 _consumer: ParserConsumer | None = None
 _consumer_task: asyncio.Task[None] | None = None
+_backfill_task: asyncio.Task[None] | None = None
+_backfill_stop: asyncio.Event | None = None
 
 
 def reset_consumer() -> None:
     """Test hook."""
-    global _consumer, _consumer_task
+    global _consumer, _consumer_task, _backfill_task, _backfill_stop
     _consumer = None
     _consumer_task = None
+    _backfill_task = None
+    _backfill_stop = None
 
 
 async def _start_consumer() -> None:
-    global _consumer, _consumer_task
+    global _consumer, _consumer_task, _backfill_task, _backfill_stop
     settings = get_settings()
     client = await get_redis(settings.redis_url)
     sm = get_sessionmaker()
@@ -56,9 +61,29 @@ async def _start_consumer() -> None:
     _consumer_task = asyncio.create_task(_consumer.run(), name="parser-consumer")
     _log.info("parser consumer task started")
 
+    _backfill_stop = asyncio.Event()
+    _backfill_task = asyncio.create_task(
+        backfill_loop(sm, _consumer, settings.backfill_interval_seconds, _backfill_stop),
+        name="parser-backfill",
+    )
+
 
 async def _stop_consumer() -> None:
-    global _consumer, _consumer_task
+    global _consumer, _consumer_task, _backfill_task, _backfill_stop
+    if _backfill_stop is not None:
+        _backfill_stop.set()
+    if _backfill_task is not None:
+        try:
+            await asyncio.wait_for(_backfill_task, timeout=5.0)
+        except TimeoutError:
+            _backfill_task.cancel()
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            _log.exception("backfill task raised on shutdown")
+    _backfill_task = None
+    _backfill_stop = None
+
     if _consumer is not None:
         _consumer.stop()
     if _consumer_task is not None:
