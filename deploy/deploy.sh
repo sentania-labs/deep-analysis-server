@@ -73,6 +73,7 @@ IMAGES = {
     "root-migrate": "ghcr.io/sentania-labs/deep-analysis-auth",
     "auth-migrate": "ghcr.io/sentania-labs/deep-analysis-auth",
     "auth": "ghcr.io/sentania-labs/deep-analysis-auth",
+    "ingest-migrate": "ghcr.io/sentania-labs/deep-analysis-ingest",
     "ingest": "ghcr.io/sentania-labs/deep-analysis-ingest",
     "parser": "ghcr.io/sentania-labs/deep-analysis-parser",
     "analytics": "ghcr.io/sentania-labs/deep-analysis-analytics",
