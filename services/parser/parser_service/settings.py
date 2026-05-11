@@ -23,6 +23,8 @@ class ParserSettings(BaseServiceSettings):
     parser_raw_path: Path = Path("/data/raw/")
     # Hard ceiling on log size we'll buffer in memory while parsing.
     parser_max_log_bytes: int = 50 * 1024 * 1024
+    # Interval (seconds) between backfill scans for ingested-but-not-parsed files.
+    backfill_interval_seconds: int = 300
 
 
 _settings: ParserSettings | None = None
