@@ -70,16 +70,29 @@ async def persist_match(
         session.add(game)
         await session.flush()  # populate game.id
 
-        for turn in parsed_game.turns:
-            session.add(
-                GameState(
-                    game_id=game.id,
-                    turn_number=turn.turn_number,
-                    active_player=turn.active_player,
-                    player_states={name: snap.model_dump() for name, snap in turn.players.items()},
-                    stack=[entry.model_dump() for entry in turn.stack],
-                )
+        if parsed_game.turns:
+            turn_values = [
+                {
+                    "game_id": game.id,
+                    "turn_number": turn.turn_number,
+                    "active_player": turn.active_player,
+                    "player_states": {
+                        name: snap.model_dump() for name, snap in turn.players.items()
+                    },
+                    "stack": [entry.model_dump() for entry in turn.stack],
+                }
+                for turn in parsed_game.turns
+            ]
+            gs_stmt = pg_insert(GameState).values(turn_values)
+            gs_stmt = gs_stmt.on_conflict_do_update(
+                constraint="uq_game_states_game_turn",
+                set_={
+                    "active_player": gs_stmt.excluded.active_player,
+                    "player_states": gs_stmt.excluded.player_states,
+                    "stack": gs_stmt.excluded.stack,
+                },
             )
+            await session.execute(gs_stmt)
 
     await session.commit()
     match = (await session.execute(select(Match).where(Match.id == inserted_id))).scalar_one()
