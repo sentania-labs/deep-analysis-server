@@ -42,6 +42,7 @@ async def persist_match(
             winner=parsed.winner,
             game_count=parsed.game_count,
             parsed_at=datetime.now(UTC),
+            played_at=parsed.played_at,
         )
         .on_conflict_do_nothing(constraint="uq_matches_sha256_user")
         .returning(Match.id)

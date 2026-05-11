@@ -64,6 +64,7 @@ class Match(Base):
     parsed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
@@ -114,6 +115,8 @@ class GameState(Base):
     stack: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     __table_args__ = (
-        UniqueConstraint("game_id", "turn_number", name="uq_game_states_game_turn"),
+        UniqueConstraint(
+            "game_id", "turn_number", "active_player", name="uq_game_states_game_turn"
+        ),
         Index("ix_game_states_game_id", "game_id"),
     )

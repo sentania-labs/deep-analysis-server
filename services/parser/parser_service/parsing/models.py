@@ -8,6 +8,7 @@ and SQLAlchemy layer translate them into rows in ``parser.matches``,
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -80,6 +81,7 @@ class ParsedMatch(BaseModel):
     match_result: str | None = None  # "2-0", "2-1", etc.
     winner: str | None = None
     games: list[ParsedGame] = Field(default_factory=list)
+    played_at: datetime | None = None
 
     @property
     def game_count(self) -> int:

@@ -48,7 +48,7 @@ async def get_match(
         await db.execute(
             text(
                 """
-                SELECT id, format, players, parsed_at
+                SELECT id, format, players, played_at
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
                 """
@@ -61,7 +61,7 @@ async def get_match(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "match_not_found"},
         )
-    row_id, fmt, players, parsed_at = match_row
+    row_id, fmt, players, played_at = match_row
     game_rows = (
         await db.execute(
             text(
@@ -91,6 +91,6 @@ async def get_match(
         match_id=str(row_id),
         format=fmt,
         players=[str(p) for p in raw_players],
-        played_at=parsed_at,
+        played_at=played_at,
         games=games,
     )
