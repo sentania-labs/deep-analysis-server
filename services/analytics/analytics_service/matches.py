@@ -48,7 +48,8 @@ async def get_match(
         await db.execute(
             text(
                 """
-                SELECT id, format, players, played_at
+                SELECT id, format, players,
+                       COALESCE(played_at, parsed_at) AS played_at
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
                 """

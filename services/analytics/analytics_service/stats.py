@@ -105,7 +105,8 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
         await db.execute(
             text(
                 """
-                SELECT id, format, players, played_at
+                SELECT id, format, players,
+                       COALESCE(played_at, parsed_at) AS played_at
                 FROM parser.matches
                 WHERE user_id = :user_id
                 ORDER BY COALESCE(played_at, parsed_at) DESC
