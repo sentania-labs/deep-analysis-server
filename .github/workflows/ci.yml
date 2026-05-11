@@ -151,6 +151,8 @@ jobs:
           # reachable as `postgres`, not `localhost`. Override .env.example's
           # host-side default.
           echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
+      - name: Create external networks
+        run: docker network create edge-slots
       - name: docker compose up
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
       - name: Wait for gateway
@@ -271,6 +273,8 @@ jobs:
           uv run python -m auth_service.keygen --out /tmp/ci-jwt-keys
           chmod 644 /tmp/ci-jwt-keys/jwt_public.pem
           chmod 600 /tmp/ci-jwt-keys/jwt_private.pem
+      - name: Create external networks
+        run: docker network create edge-slots
       - name: Start postgres only (pre-migration)
         run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build postgres
       - name: Wait for postgres
@@ -292,7 +296,9 @@ jobs:
       - name: alembic upgrade head (ingest)
         run: uv run alembic -c services/ingest/alembic.ini upgrade head
       - name: docker compose up (full stack)
-        run: docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
+        # Unset DATABASE_URL so compose reads from .env (postgres:5432),
+        # not the job-level DATABASE_URL (localhost:5432 for host alembic).
+        run: env -u DATABASE_URL docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
       - name: Wait for gateway + auth bootstrap
         run: |
           for i in $(seq 1 60); do
