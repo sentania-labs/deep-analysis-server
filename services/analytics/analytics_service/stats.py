@@ -105,10 +105,11 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
         await db.execute(
             text(
                 """
-                SELECT id, format, players, parsed_at
+                SELECT id, format, players,
+                       COALESCE(played_at, parsed_at) AS played_at
                 FROM parser.matches
                 WHERE user_id = :user_id
-                ORDER BY parsed_at DESC
+                ORDER BY COALESCE(played_at, parsed_at) DESC
                 """
             ),
             {"user_id": user_id},
@@ -135,13 +136,13 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
     for match_id, winner, n in game_rows:
         by_match.setdefault(match_id, {})[str(winner)] = int(n)
     out: list[dict[str, Any]] = []
-    for match_id, fmt, players, parsed_at in rows:
+    for match_id, fmt, players, played_at in rows:
         out.append(
             {
                 "id": match_id,
                 "format": fmt,
                 "players": list(players or []),
-                "parsed_at": parsed_at,
+                "played_at": played_at,
                 "wins_by_player": by_match.get(match_id, {}),
             }
         )
@@ -165,7 +166,7 @@ def _summarize(matches: list[dict[str, Any]]) -> StatsSummary:
             recent.append(
                 RecentMatch(
                     match_id=str(m["id"]),
-                    played_at=m["parsed_at"],
+                    played_at=m["played_at"],
                     opponent=opponent,
                     result=result,
                     format=m["format"],

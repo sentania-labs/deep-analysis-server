@@ -18,7 +18,9 @@ Missing data shows up as ``None`` / empty rather than parse failures.
 from __future__ import annotations
 
 import re
+import struct
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 
 from parser_service.parsing.models import (
     ManaPool,
@@ -189,9 +191,35 @@ class MTGODatStrategy(LogFormatStrategy):
             return True
         return any(hint in sample for hint in self._CAN_PARSE_HINTS)
 
+    # .NET epoch offset in 100-ns ticks from Jan 1, 0001 to Unix epoch (Jan 1, 1970).
+    _DOTNET_EPOCH_OFFSET_TICKS: int = 621_355_968_000_000_000
+    # File header size: 2 bytes (01 00) + 37 bytes UUID + 2 bytes (04 00) + 37 bytes UUID = 78
+    _FILE_HEADER_SIZE: int = 78
+
+    @staticmethod
+    def _extract_played_at(content: bytes) -> datetime | None:
+        """Extract the first frame's .NET timestamp and return it as a UTC datetime.
+
+        The binary format after the 78-byte file header is:
+          8-byte LE int64 (.NET ticks) | 2-byte BE uint16 (message length) | message bytes
+
+        .NET ticks are 100-nanosecond intervals since January 1, 0001.
+        """
+        try:
+            offset = MTGODatStrategy._FILE_HEADER_SIZE
+            if len(content) < offset + 8:
+                return None
+            (ticks,) = struct.unpack_from("<q", content, offset)
+            unix_ts = (ticks - MTGODatStrategy._DOTNET_EPOCH_OFFSET_TICKS) / 10_000_000
+            return datetime.fromtimestamp(unix_ts, tz=UTC)
+        except Exception:  # noqa: BLE001
+            return None
+
     def parse(self, content: bytes) -> ParsedMatch:
         text = self._strip_binary(content)
         match = ParsedMatch()
+
+        match.played_at = self._extract_played_at(content)
 
         if (m := self._UUID_RE.search(text)) is not None:
             match.raw_match_id = m.group(1)
