@@ -334,6 +334,190 @@ async def get_stats_by_format(base_url: str, token: str) -> list[FormatStatItem]
     return [_to_format_stat(row) for row in resp.json()]
 
 
+# ---------------------------------------------------------------------------
+# Card search
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CardItem:
+    name: str
+    mana_cost: str | None
+    type_line: str | None
+    oracle_text: str | None
+    image_uri: str | None
+    set_code: str | None
+
+
+def _to_card(payload: dict[str, Any]) -> CardItem:
+    return CardItem(
+        name=str(payload.get("name") or ""),
+        mana_cost=payload.get("mana_cost"),
+        type_line=payload.get("type_line"),
+        oracle_text=payload.get("oracle_text"),
+        image_uri=payload.get("image_uri"),
+        set_code=payload.get("set_code"),
+    )
+
+
+async def search_cards(base_url: str, token: str, q: str) -> list[CardItem]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/cards",
+                params={"q": q},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /cards transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /cards returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(f"analytics GET /cards returned {resp.status_code}: {resp.text}")
+    return [_to_card(row) for row in resp.json()]
+
+
+# ---------------------------------------------------------------------------
+# Admin cards
+# ---------------------------------------------------------------------------
+
+
+async def admin_get_cards_status(base_url: str, token: str) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/cards-status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/cards-status transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /admin/cards-status returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/cards-status returned {resp.status_code}: {resp.text}"
+        )
+    payload = resp.json()
+    return {
+        "card_count": int(payload.get("card_count") or 0),
+        "last_sync_at": _parse_dt(payload.get("last_sync_at")),
+    }
+
+
+async def admin_get_scraper_health(base_url: str, token: str) -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/scraper-health",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scraper-health transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /admin/scraper-health returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scraper-health returned {resp.status_code}: {resp.text}"
+        )
+    payload = resp.json()
+    last_run = _parse_dt(payload.get("last_run_at"))
+    last_success = _parse_dt(payload.get("last_success_at"))
+    return {
+        "scraper_name": payload.get("scraper_name"),
+        "last_run_at": last_run,
+        "last_success_at": last_success,
+        "consecutive_failures": int(payload.get("consecutive_failures") or 0),
+        "is_broken": bool(payload.get("is_broken")),
+        "last_error": payload.get("last_error"),
+    }
+
+
+async def admin_trigger_sync(base_url: str, token: str) -> bool:
+    """Kick off a card sync. Returns True on 202 (sync scheduled)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/admin/sync-cards",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/sync-cards transport error: {exc}"
+        ) from exc
+    if resp.status_code == 202:
+        return True
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics POST /admin/sync-cards returned {resp.status_code}")
+    raise AnalyticsClientError(
+        f"analytics POST /admin/sync-cards returned {resp.status_code}: {resp.text}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Match detail
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GameItem:
+    game_number: int
+    winner: str | None
+    turns: int | None
+
+
+@dataclass
+class MatchDetail:
+    match_id: str
+    format_: str | None
+    players: list[str]
+    played_at: datetime | None
+    games: list[GameItem] = field(default_factory=list)
+
+
+def _to_game(payload: dict[str, Any]) -> GameItem:
+    raw_turns = payload.get("turns")
+    return GameItem(
+        game_number=int(payload.get("game_number") or 0),
+        winner=payload.get("winner"),
+        turns=int(raw_turns) if raw_turns is not None else None,
+    )
+
+
+def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
+    return MatchDetail(
+        match_id=str(payload.get("match_id") or ""),
+        format_=payload.get("format"),
+        players=[str(p) for p in (payload.get("players") or [])],
+        played_at=_parse_dt(payload.get("played_at")),
+        games=[_to_game(g) for g in (payload.get("games") or [])],
+    )
+
+
+async def get_match_detail(base_url: str, token: str, match_id: str) -> MatchDetail | None:
+    """Fetch a single match. Returns None on 404."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/matches/{match_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /matches/{{id}} transport error: {exc}") from exc
+    if resp.status_code == 404:
+        return None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /matches/{{id}} returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /matches/{{id}} returned {resp.status_code}: {resp.text}"
+        )
+    return _to_match_detail(resp.json())
+
+
 async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatItem]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

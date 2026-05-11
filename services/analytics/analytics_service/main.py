@@ -8,10 +8,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI
+from sqlalchemy import text
 
 from analytics_service.archetypes import router as archetypes_router
+from analytics_service.cards import router as cards_router
 from analytics_service.db import get_sessionmaker
 from analytics_service.deps import AuthenticatedUser, require_admin
+from analytics_service.matches import router as matches_router
 from analytics_service.mtgo_scraper import SCRAPER_NAME as MTGO_SCRAPER_NAME
 from analytics_service.mtgo_scraper import get_health as get_mtgo_health
 from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
@@ -161,6 +164,8 @@ app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 app.include_router(archetypes_router)
 app.include_router(stats_router)
+app.include_router(cards_router)
+app.include_router(matches_router)
 
 
 admin_router = APIRouter(prefix="/analytics/admin", tags=["admin"])
@@ -199,6 +204,28 @@ async def scraper_health(
     sm = get_sessionmaker()
     async with sm() as session:
         return await get_mtgo_health(session, MTGO_SCRAPER_NAME)
+
+
+@admin_router.get("/cards-status")
+async def cards_status(
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Card-mirror summary for the admin dashboard.
+
+    ``last_sync_at`` is ``MAX(synced_at)`` over the table rather than a
+    dedicated bookkeeping row — the upsert path stamps every row on
+    each refresh, so the column already tracks the freshest sync.
+    """
+    sm = get_sessionmaker()
+    async with sm() as session:
+        count_row = await session.execute(text("SELECT COUNT(*) FROM catalog.cards"))
+        last_row = await session.execute(text("SELECT MAX(synced_at) FROM catalog.cards"))
+        card_count = int(count_row.scalar_one())
+        last_sync_at: datetime | None = last_row.scalar_one_or_none()
+    return {
+        "card_count": card_count,
+        "last_sync_at": last_sync_at.isoformat() if last_sync_at is not None else None,
+    }
 
 
 app.include_router(admin_router)

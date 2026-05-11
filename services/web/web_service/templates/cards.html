@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Card Search &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Card Search</h1>
+
+    {% if search_error %}
+    <div class="alert alert-error" role="alert">
+        Search unavailable — analytics service could not be reached.
+    </div>
+    {% endif %}
+
+    <form method="get" action="/cards" class="card-search-form">
+        <input
+            type="text"
+            name="q"
+            value="{{ q }}"
+            placeholder="Search card name..."
+            autocomplete="off"
+        >
+        <button type="submit" class="btn btn-primary">Search</button>
+    </form>
+
+    {% if submitted and not search_error %}
+        {% if not results %}
+            <p>No cards found for &ldquo;{{ q }}&rdquo;.</p>
+        {% else %}
+            <table class="data-table card-results">
+                <thead>
+                    <tr>
+                        <th>Image</th>
+                        <th>Name</th>
+                        <th>Mana cost</th>
+                        <th>Type</th>
+                        <th>Oracle text</th>
+                        <th>Set</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for card in results %}
+                    <tr>
+                        <td>
+                            {% if card.image_uri %}
+                                <img src="{{ card.image_uri }}" alt="{{ card.name }}" width="200">
+                            {% else %}
+                                &mdash;
+                            {% endif %}
+                        </td>
+                        <td><strong>{{ card.name }}</strong></td>
+                        <td>{{ card.mana_cost or "—" }}</td>
+                        <td>{{ card.type_line or "—" }}</td>
+                        <td class="card-oracle">{{ card.oracle_text or "—" }}</td>
+                        <td>{{ card.set_code or "—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    {% endif %}
+</section>
+
+<style>
+.card-search-form { margin-bottom: 1rem; display: flex; gap: 0.5rem; }
+.card-search-form input[type="text"] { flex: 1; max-width: 400px; padding: 0.5rem; }
+.card-results td { vertical-align: top; }
+.card-oracle { white-space: pre-line; max-width: 30rem; }
+</style>
+{% endblock %}

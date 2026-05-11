@@ -58,7 +58,11 @@
             <tbody>
                 {% for match in stats_summary.recent_matches %}
                 <tr>
-                    <td>{{ match.played_at.strftime("%Y-%m-%d") if match.played_at else "—" }}</td>
+                    <td>
+                        <a href="/matches/{{ match.match_id }}">
+                            {{ match.played_at.strftime("%Y-%m-%d") if match.played_at else match.match_id[:8] }}
+                        </a>
+                    </td>
                     <td>{{ match.opponent or "—" }}</td>
                     <td>{{ match.format_ or "—" }}</td>
                     <td>
@@ -111,6 +115,30 @@
 {% endif %}
 
 {% if opponent_stats|default([]) %}
+<section class="panel">
+    <h2>Top opponents</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Opponent</th>
+                <th>Matches</th>
+                <th>Record</th>
+                <th>Win rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in opponent_stats[:5] %}
+            <tr>
+                <td>{{ row.opponent }}</td>
+                <td>{{ row.matches }}</td>
+                <td>{{ row.wins }}W / {{ row.losses }}L / {{ row.draws }}D</td>
+                <td>{{ "%.1f"|format(row.win_rate) }}%</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
 <section class="panel">
     <h2>By opponent</h2>
     <table class="data-table">

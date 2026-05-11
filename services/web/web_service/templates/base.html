@@ -12,6 +12,7 @@
             <a class="site-logo" href="/dashboard">Deep Analysis</a>
             <nav class="site-nav">
                 {% if user %}
+                    <a class="nav-link" href="/cards">Cards</a>
                     {% if user.email %}
                         <span class="nav-user">{{ user.email }}</span>
                     {% else %}

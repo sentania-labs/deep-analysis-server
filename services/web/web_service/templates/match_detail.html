@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Match {{ match.match_id[:8] }} &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Match {{ match.match_id[:8] }}</h1>
+
+    <ul class="match-meta">
+        <li><strong>Date:</strong>
+            {{ match.played_at.strftime("%Y-%m-%d %H:%M") if match.played_at else "—" }}
+        </li>
+        <li><strong>Format:</strong> {{ match.format_ or "—" }}</li>
+        <li><strong>Players:</strong>
+            {% if match.players %}
+                {{ match.players|join(", ") }}
+            {% else %}
+                —
+            {% endif %}
+        </li>
+        <li><strong>Result:</strong>
+            {% if overall_result == "W" %}
+                <span class="result-badge result-win">W</span>
+            {% elif overall_result == "L" %}
+                <span class="result-badge result-loss">L</span>
+            {% elif overall_result == "D" %}
+                <span class="result-badge result-draw">D</span>
+            {% else %}
+                —
+            {% endif %}
+        </li>
+    </ul>
+
+    <h2>Games</h2>
+    {% if not match.games %}
+        <p>Game data unavailable.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Game #</th>
+                    <th>Winner</th>
+                    <th>Turns</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for game in match.games %}
+                <tr>
+                    <td>{{ game.game_number }}</td>
+                    <td>{{ game.winner or "—" }}</td>
+                    <td>{{ game.turns if game.turns is not none else "—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+
+    <p><a href="/dashboard">&larr; Back to dashboard</a></p>
+</section>
+
+<style>
+.match-meta { list-style: none; padding: 0; display: flex; gap: 2rem; flex-wrap: wrap; }
+.match-meta li { padding: 0.25rem 0; }
+.result-badge {
+    display: inline-block;
+    min-width: 1.5rem;
+    padding: 0.1rem 0.4rem;
+    text-align: center;
+    font-weight: bold;
+    border-radius: 3px;
+}
+.result-win { background: #d4edda; color: #155724; }
+.result-loss { background: #f8d7da; color: #721c24; }
+.result-draw { background: #fff3cd; color: #856404; }
+</style>
+{% endblock %}
