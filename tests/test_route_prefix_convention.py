@@ -70,6 +70,8 @@ _WEB_BROWSER_PATHS = frozenset(
         "/admin/settings",
         "/admin/settings/registration-mode",
         "/register",
+        "/cards",
+        "/matches/{match_id}",
     }
 )
 
