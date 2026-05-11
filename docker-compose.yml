@@ -44,14 +44,15 @@ services:
   # deploy wrapper on docker.int rejects `compose exec`, so migrations have
   # to run as part of `compose up`. Ordering is enforced by depends_on with
   # `service_completed_successfully`:
-  #   postgres healthy → root-migrate → auth-migrate → auth.
+  #   postgres healthy → root-migrate → auth-migrate → ingest-migrate → services.
   #
   # `root-migrate` runs the root alembic head, which creates the four
   # logical schemas (auth/ingest/parser/analytics) and the unprivileged
-  # service roles. `auth-migrate` and `ingest-migrate` then apply each
-  # service's own tables; both reuse their service's image, which bakes
-  # in the alembic tree at /app/service/alembic. parser still has no
-  # migrate service of its own — that lands when parser grows tables.
+  # service roles. `auth-migrate` then applies auth's own tables (users,
+  # sessions, agent_registrations). `ingest-migrate` must run after
+  # `auth-migrate` because ingest migration 001 FK-references auth.users.
+  # parser still has no migrate service of its own — that lands when parser
+  # grows tables.
   #
   # DATABASE_URL must be a sync psycopg URL (alembic env.py uses the sync
   # engine), e.g. postgresql+psycopg://USER:PASS@postgres:5432/deep_analysis.
@@ -100,6 +101,8 @@ services:
       postgres:
         condition: service_healthy
       root-migrate:
+        condition: service_completed_successfully
+      auth-migrate:
         condition: service_completed_successfully
     restart: "no"
 
