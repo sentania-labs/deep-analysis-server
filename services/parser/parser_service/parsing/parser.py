@@ -314,6 +314,12 @@ class MTGODatStrategy(LogFormatStrategy):
         if not marks:
             return []
 
+        # Deduplicate by turn_number — binary framing can repeat headers.
+        by_turn: dict[int, tuple[int, int, str]] = {}
+        for mark in marks:
+            by_turn.setdefault(mark[1], mark)
+        marks = sorted(by_turn.values())
+
         carry: dict[str, PlayerSnapshot] = {p: PlayerSnapshot(name=p) for p in players}
         play_re = re.compile(rf"@P({alt}) plays {self._CARD_RE.pattern}")
         cast_re = re.compile(rf"@P({alt}) casts {self._CARD_RE.pattern}")
@@ -434,6 +440,11 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             game = self._parse_game_block(1, text, players)
             return [game] if (game.winner or game.turns) else []
 
+        by_num: dict[int, tuple[int, int]] = {}
+        for boundary in boundaries:
+            by_num.setdefault(boundary[1], boundary)
+        boundaries = sorted(by_num.values())
+
         games: list[ParsedGame] = []
         for idx, (start, game_num) in enumerate(boundaries):
             end = boundaries[idx + 1][0] if idx + 1 < len(boundaries) else len(text)
@@ -464,6 +475,11 @@ class MTGOTextLogStrategy(LogFormatStrategy):
         ]
         if not turn_marks:
             return []
+
+        by_turn: dict[int, tuple[int, int, str | None]] = {}
+        for mark in turn_marks:
+            by_turn.setdefault(mark[1], mark)
+        turn_marks = sorted(by_turn.values())
 
         # Carry forward state between turns: zones and life persist
         # turn-over-turn unless the log explicitly resets them.
