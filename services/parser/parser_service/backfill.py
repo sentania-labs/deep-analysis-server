@@ -27,9 +27,11 @@ _UNPARSED_SQL = text(
     """
     SELECT DISTINCT u.sha256, u.user_id
       FROM ingest.user_uploads u
+      JOIN ingest.game_log_files g ON g.sha256 = u.sha256
       LEFT JOIN parser.matches m
         ON m.sha256 = u.sha256 AND m.user_id = u.user_id
      WHERE m.id IS NULL
+       AND g.content_type = 'match-log'
      LIMIT :batch_size
     """
 )
@@ -46,7 +48,7 @@ async def scan_unparsed(
     if not rows:
         return 0
 
-    _log.info("backfill_scan_found", count=len(rows))
+    _log.info("backfill scan found %d unparsed files", len(rows))
     processed = 0
     for sha256, user_id in rows:
         try:
@@ -54,9 +56,9 @@ async def scan_unparsed(
             if result is not None:
                 processed += 1
         except Exception:  # noqa: BLE001
-            _log.exception("backfill_parse_failed", sha256=sha256, user_id=user_id)
+            _log.exception("backfill parse failed sha256=%s user_id=%s", sha256, user_id)
 
-    _log.info("backfill_scan_complete", found=len(rows), processed=processed)
+    _log.info("backfill scan complete found=%d processed=%d", len(rows), processed)
     return processed
 
 
