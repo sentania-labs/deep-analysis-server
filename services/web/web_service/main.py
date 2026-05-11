@@ -550,6 +550,86 @@ async def profile_agents_revoke(
     return RedirectResponse(url="/profile/agents", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/cards", response_class=HTMLResponse)
+async def cards_search_page(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    q: Annotated[str, Query()] = "",
+) -> Response:
+    """Card search page — ILIKE against the Scryfall mirror."""
+    needle = q.strip()
+    results: list[Any] = []
+    search_error = False
+    if needle:
+        try:
+            results = await analytics_client.search_cards(
+                settings.analytics_service_url, user.token, needle
+            )
+        except analytics_client.AnalyticsForbidden:
+            return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+        except analytics_client.AnalyticsClientError:
+            _log.exception("analytics GET /cards call failed")
+            search_error = True
+    return templates.TemplateResponse(
+        request,
+        "cards.html",
+        {
+            "user": user,
+            "q": needle,
+            "submitted": bool(needle),
+            "results": results,
+            "search_error": search_error,
+        },
+    )
+
+
+@app.get("/matches/{match_id}", response_class=HTMLResponse)
+async def match_detail_page(
+    match_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        match = await analytics_client.get_match_detail(
+            settings.analytics_service_url, user.token, str(match_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /matches/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if match is None:
+        return Response(content="Match not found.", status_code=status.HTTP_404_NOT_FOUND)
+
+    # Compute overall W/L/D from the games list using the same
+    # "uploader is players[0]" convention the dashboard uses.
+    overall_result = ""
+    if match.players and match.games:
+        uploader = match.players[0]
+        user_wins = sum(1 for g in match.games if g.winner == uploader)
+        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != uploader)
+        if user_wins > opp_wins:
+            overall_result = "W"
+        elif user_wins < opp_wins:
+            overall_result = "L"
+        elif user_wins or opp_wins:
+            overall_result = "D"
+    return templates.TemplateResponse(
+        request,
+        "match_detail.html",
+        {
+            "user": user,
+            "match": match,
+            "overall_result": overall_result,
+        },
+    )
+
+
 def _service_unavailable(request: Request, user: BrowserUser) -> Response:
     return templates.TemplateResponse(
         request,
@@ -1728,6 +1808,115 @@ async def admin_archetypes_delete(
         content="Could not delete archetype.",
         status_code=status.HTTP_400_BAD_REQUEST,
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin cards — Scryfall mirror status + manual sync
+# ---------------------------------------------------------------------------
+
+
+def _render_admin_cards(
+    request: Request,
+    user: BrowserUser,
+    *,
+    cards_status_view: dict[str, Any] | None,
+    scraper_health: dict[str, Any] | None,
+    error: str | None,
+    synced: bool,
+    status_code: int,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "admin_cards.html",
+        {
+            "user": user,
+            "cards_status": cards_status_view,
+            "scraper_health": scraper_health,
+            "error": error,
+            "synced": synced,
+        },
+        status_code=status_code,
+    )
+
+
+@app.get("/admin/cards", response_class=HTMLResponse)
+async def admin_cards_page(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    synced: Annotated[int, Query(ge=0, le=1)] = 0,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    cards_status_view: dict[str, Any] | None = None
+    scraper_health: dict[str, Any] | None = None
+    error: str | None = None
+    try:
+        cards_status_view = await analytics_client.admin_get_cards_status(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.cards.status.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/cards-status call failed")
+        error = "Analytics service unavailable. Please try again."
+
+    try:
+        scraper_health = await analytics_client.admin_get_scraper_health(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.cards.health.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/scraper-health call failed")
+        # Surface partial data — the status panel is independent of the
+        # scraper-health panel. Avoid overwriting an earlier error.
+        if error is None:
+            error = "Scraper health unavailable. Please try again."
+
+    code = (
+        status.HTTP_503_SERVICE_UNAVAILABLE
+        if error and cards_status_view is None and scraper_health is None
+        else 200
+    )
+    return _render_admin_cards(
+        request,
+        user,
+        cards_status_view=cards_status_view,
+        scraper_health=scraper_health,
+        error=error,
+        synced=synced == 1,
+        status_code=code,
+    )
+
+
+@app.post("/admin/cards/sync")
+async def admin_cards_sync(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        await analytics_client.admin_trigger_sync(settings.analytics_service_url, user.token)
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.cards.sync.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/sync-cards call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    return RedirectResponse(url="/admin/cards?synced=1", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------

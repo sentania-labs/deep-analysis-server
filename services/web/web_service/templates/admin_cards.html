@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Cards · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Cards</h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/archetypes">Archetypes</a>
+        <span class="muted"> · </span>
+        <a href="/admin/cards" aria-current="page"><strong>Cards</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    {% if synced %}
+    <div class="alert alert-info" role="status">
+        Sync started. Card mirror refresh runs in the background; reload in a few minutes to see updated totals.
+    </div>
+    {% endif %}
+
+    <h2>Card mirror</h2>
+    {% if cards_status %}
+    <ul class="stats-summary">
+        <li><strong>Cards in database:</strong> {{ cards_status.card_count }}</li>
+        <li><strong>Last sync:</strong>
+            {% if cards_status.last_sync_at %}
+                {{ cards_status.last_sync_at.strftime("%Y-%m-%d %H:%M UTC") }}
+            {% else %}
+                Never
+            {% endif %}
+        </li>
+    </ul>
+    {% else %}
+        <p class="muted">Card mirror status unavailable.</p>
+    {% endif %}
+
+    <form method="post" action="/admin/cards/sync" class="inline-form">
+        <button type="submit" class="btn btn-primary">Sync Now</button>
+    </form>
+
+    <h2>MTGO scraper health</h2>
+    {% if scraper_health %}
+    <ul class="stats-summary">
+        <li><strong>Last run:</strong>
+            {% if scraper_health.last_run_at %}
+                {{ scraper_health.last_run_at.strftime("%Y-%m-%d %H:%M UTC") }}
+            {% else %}
+                Never
+            {% endif %}
+        </li>
+        <li><strong>Last success:</strong>
+            {% if scraper_health.last_success_at %}
+                {{ scraper_health.last_success_at.strftime("%Y-%m-%d %H:%M UTC") }}
+            {% else %}
+                Never
+            {% endif %}
+        </li>
+        <li><strong>Status:</strong>
+            {% if scraper_health.is_broken %}
+                <span class="result-badge result-loss">Broken</span>
+            {% else %}
+                <span class="result-badge result-win">OK</span>
+            {% endif %}
+        </li>
+        <li><strong>Consecutive failures:</strong> {{ scraper_health.consecutive_failures }}</li>
+    </ul>
+    {% if scraper_health.last_error %}
+    <p class="muted">Last error: {{ scraper_health.last_error }}</p>
+    {% endif %}
+    {% else %}
+        <p class="muted">Scraper health unavailable.</p>
+    {% endif %}
+</section>
+
+<style>
+.stats-summary { list-style: none; padding: 0; display: flex; gap: 2rem; flex-wrap: wrap; }
+.stats-summary li { padding: 0.5rem 0; }
+.result-badge {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    text-align: center;
+    font-weight: bold;
+    border-radius: 3px;
+}
+.result-win { background: #d4edda; color: #155724; }
+.result-loss { background: #f8d7da; color: #721c24; }
+</style>
+{% endblock %}
