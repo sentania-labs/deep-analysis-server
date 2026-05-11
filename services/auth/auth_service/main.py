@@ -145,49 +145,64 @@ async def login(
     db: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
     # Rate limiting deferred to W7 gateway.
-    settings = get_settings()
-    user = (
-        await db.execute(select(User).where(func.lower(User.email) == body.email.lower()))
-    ).scalar_one_or_none()
-    if user is None or user.disabled:
-        raise _INVALID_CREDENTIALS
-    if not verify_password(body.password, user.password_hash):
-        raise _INVALID_CREDENTIALS
+    # Body carries a plaintext password — any unhandled exception escaping
+    # this handler could be logged with the request body by FastAPI/uvicorn,
+    # leaking the password. Catch broadly and re-raise a sanitized 500.
+    try:
+        settings = get_settings()
+        user = (
+            await db.execute(select(User).where(func.lower(User.email) == body.email.lower()))
+        ).scalar_one_or_none()
+        if user is None or user.disabled:
+            raise _INVALID_CREDENTIALS
+        if not verify_password(body.password, user.password_hash):
+            raise _INVALID_CREDENTIALS
 
-    refresh_token = issue_refresh_token()
-    now = datetime.now(UTC)
-    session_row = SessionRow(
-        user_id=user.id,
-        refresh_token_hash=hash_refresh_token(refresh_token),
-        issued_at=now,
-        expires_at=now + timedelta(seconds=settings.refresh_token_ttl_seconds),
-        user_agent=(request.headers.get("user-agent") or None),
-        ip=_client_ip(request),
-    )
-    db.add(session_row)
-    await db.commit()
-    await db.refresh(session_row)
-
-    if user.must_change_password:
-        access = issue_access_token(
-            user.id,
-            user.role,
-            session_row.id,
-            scope=PASSWORD_CHANGE_SCOPE,
-            override_ttl_seconds=settings.password_change_token_ttl_seconds,
-            email=user.email,
+        refresh_token = issue_refresh_token()
+        now = datetime.now(UTC)
+        session_row = SessionRow(
+            user_id=user.id,
+            refresh_token_hash=hash_refresh_token(refresh_token),
+            issued_at=now,
+            expires_at=now + timedelta(seconds=settings.refresh_token_ttl_seconds),
+            user_agent=(request.headers.get("user-agent") or None),
+            ip=_client_ip(request),
         )
-        expires_in = settings.password_change_token_ttl_seconds
-    else:
-        access = issue_access_token(user.id, user.role, session_row.id, email=user.email)
-        expires_in = settings.access_token_ttl_seconds
+        db.add(session_row)
+        await db.commit()
+        await db.refresh(session_row)
 
-    return TokenResponse(
-        access_token=access,
-        refresh_token=refresh_token,
-        expires_in=expires_in,
-        must_change_password=user.must_change_password,
-    )
+        if user.must_change_password:
+            access = issue_access_token(
+                user.id,
+                user.role,
+                session_row.id,
+                scope=PASSWORD_CHANGE_SCOPE,
+                override_ttl_seconds=settings.password_change_token_ttl_seconds,
+                email=user.email,
+            )
+            expires_in = settings.password_change_token_ttl_seconds
+        else:
+            access = issue_access_token(user.id, user.role, session_row.id, email=user.email)
+            expires_in = settings.access_token_ttl_seconds
+
+        return TokenResponse(
+            access_token=access,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+            must_change_password=user.must_change_password,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — sanitize before re-raising
+        _log.error(
+            "auth.login.error",
+            extra={"email": body.email, "exc_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "internal_error"},
+        ) from None
 
 
 @app.post("/auth/refresh", response_model=TokenResponse)
@@ -558,60 +573,75 @@ async def register_agent_with_credentials(
     enforces at consume time). Does not create a browser session, so no
     refresh token is issued.
     """
-    user = (
-        await db.execute(select(User).where(func.lower(User.email) == body.email.lower()))
-    ).scalar_one_or_none()
-    if user is None or user.disabled:
-        raise _INVALID_CREDENTIALS
-    if not verify_password(body.password, user.password_hash):
-        raise _INVALID_CREDENTIALS
+    # Body carries a plaintext password — any unhandled exception escaping
+    # this handler could be logged with the request body by FastAPI/uvicorn,
+    # leaking the password. Catch broadly and re-raise a sanitized 500.
+    try:
+        user = (
+            await db.execute(select(User).where(func.lower(User.email) == body.email.lower()))
+        ).scalar_one_or_none()
+        if user is None or user.disabled:
+            raise _INVALID_CREDENTIALS
+        if not verify_password(body.password, user.password_hash):
+            raise _INVALID_CREDENTIALS
 
-    if user.role != "user":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": "admin_cannot_register_agent"},
+        if user.role != "user":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "admin_cannot_register_agent"},
+            )
+
+        # Mint + consume immediately. Going through the existing helpers
+        # keeps this flow symmetric with the code-based one — same Redis
+        # primitive, same atomic GETDEL — so a future change to either
+        # flow lands in one place. The 30s TTL is paranoia padding; in
+        # practice the consume happens microseconds after the store.
+        code = generate_registration_code()
+        await store_registration_code(redis, code, user.id, ttl_seconds=30)
+        user_id = await consume_registration_code(redis, code)
+        if user_id is None:
+            # Implies a Redis flush or eviction within microseconds of our
+            # own store — operationally exceptional, but worth surfacing
+            # rather than papering over with a silent retry.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "registration_code_race"},
+            )
+
+        api_token = generate_api_token()
+        now = datetime.now(UTC)
+        agent = AgentRegistration(
+            user_id=user_id,
+            machine_name=body.agent_name,
+            api_token_hash=hash_api_token(api_token),
+            created_at=now,
+            last_seen_at=now,
+            client_version=body.client_version,
         )
+        db.add(agent)
+        await db.commit()
+        await db.refresh(agent)
 
-    # Mint + consume immediately. Going through the existing helpers
-    # keeps this flow symmetric with the code-based one — same Redis
-    # primitive, same atomic GETDEL — so a future change to either
-    # flow lands in one place. The 30s TTL is paranoia padding; in
-    # practice the consume happens microseconds after the store.
-    code = generate_registration_code()
-    await store_registration_code(redis, code, user.id, ttl_seconds=30)
-    user_id = await consume_registration_code(redis, code)
-    if user_id is None:
-        # Implies a Redis flush or eviction within microseconds of our
-        # own store — operationally exceptional, but worth surfacing
-        # rather than papering over with a silent retry.
+        _log.info(
+            "auth.agent.register_with_credentials.success",
+            extra={"agent_id": str(agent.id), "user_id": user_id},
+        )
+        return AgentRegisterResponse(
+            agent_id=agent.id,
+            api_token=api_token,
+            user_id=user_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — sanitize before re-raising
+        _log.error(
+            "auth.agent.register_with_credentials.error",
+            extra={"email": body.email, "exc_type": type(exc).__name__},
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "registration_code_race"},
-        )
-
-    api_token = generate_api_token()
-    now = datetime.now(UTC)
-    agent = AgentRegistration(
-        user_id=user_id,
-        machine_name=body.agent_name,
-        api_token_hash=hash_api_token(api_token),
-        created_at=now,
-        last_seen_at=now,
-        client_version=body.client_version,
-    )
-    db.add(agent)
-    await db.commit()
-    await db.refresh(agent)
-
-    _log.info(
-        "auth.agent.register_with_credentials.success",
-        extra={"agent_id": str(agent.id), "user_id": user_id},
-    )
-    return AgentRegisterResponse(
-        agent_id=agent.id,
-        api_token=api_token,
-        user_id=user_id,
-    )
+            detail={"error": "internal_error"},
+        ) from None
 
 
 # ---------------------------------------------------------------------------
