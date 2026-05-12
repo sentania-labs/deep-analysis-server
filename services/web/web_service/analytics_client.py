@@ -518,9 +518,7 @@ async def get_match_detail(base_url: str, token: str, match_id: str) -> MatchDet
     return _to_match_detail(resp.json())
 
 
-async def update_match_format(
-    base_url: str, token: str, match_id: str, format_: str
-) -> bool:
+async def update_match_format(base_url: str, token: str, match_id: str, format_: str) -> bool:
     """PATCH the format on a match. Returns True on success."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -530,19 +528,13 @@ async def update_match_format(
                 json={"format": format_},
             )
     except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics PATCH /matches/{{id}}/format error: {exc}"
-        ) from exc
+        raise AnalyticsClientError(f"analytics PATCH /matches/{{id}}/format error: {exc}") from exc
     if resp.status_code == 204:
         return True
     if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics PATCH format returned {resp.status_code}"
-        )
+        raise AnalyticsForbidden(f"analytics PATCH format returned {resp.status_code}")
     if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics PATCH format returned {resp.status_code}"
-        )
+        raise AnalyticsClientError(f"analytics PATCH format returned {resp.status_code}")
     return True
 
 

@@ -22,11 +22,22 @@ from analytics_service.deps import AuthenticatedUser, require_user
 router = APIRouter(prefix="/analytics/matches", tags=["matches"])
 
 
-_VALID_FORMATS = frozenset({
-    "standard", "pioneer", "modern", "legacy", "vintage",
-    "pauper", "commander", "draft", "sealed", "historic",
-    "premodern", "cube",
-})
+_VALID_FORMATS = frozenset(
+    {
+        "standard",
+        "pioneer",
+        "modern",
+        "legacy",
+        "vintage",
+        "pauper",
+        "commander",
+        "draft",
+        "sealed",
+        "historic",
+        "premodern",
+        "cube",
+    }
+)
 
 
 class GameDetail(BaseModel):

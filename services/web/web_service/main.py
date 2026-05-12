@@ -358,7 +358,10 @@ async def profile_edit_form(
     except auth_client.AuthClientError:
         _log.exception("auth /me call failed")
         return _service_unavailable(
-            request, user, "profile_edit.html", {"email": ""},
+            request,
+            user,
+            "profile_edit.html",
+            {"email": ""},
         )
     return templates.TemplateResponse(
         request,
@@ -464,7 +467,9 @@ async def profile_agents(
     except auth_client.AuthClientError:
         _log.exception("auth /me/agents call failed")
         return _service_unavailable(
-            request, user, "profile_agents.html",
+            request,
+            user,
+            "profile_agents.html",
             {"agents": [], "page": 1, "total_pages": 0, "total": 0},
         )
     return templates.TemplateResponse(
@@ -497,7 +502,9 @@ async def profile_agents_generate_code(
     except auth_client.AuthClientError:
         _log.exception("auth /agent/registration-code call failed")
         return _service_unavailable(
-            request, user, "profile_agents.html",
+            request,
+            user,
+            "profile_agents.html",
             {"agents": [], "page": 1, "total_pages": 0, "total": 0},
         )
 
@@ -637,9 +644,18 @@ async def match_detail_page(
             "match": match,
             "overall_result": overall_result,
             "format_options": [
-                "Standard", "Pioneer", "Modern", "Legacy", "Vintage",
-                "Pauper", "Commander", "Draft", "Sealed", "Historic",
-                "Premodern", "Cube",
+                "Standard",
+                "Pioneer",
+                "Modern",
+                "Legacy",
+                "Vintage",
+                "Pauper",
+                "Commander",
+                "Draft",
+                "Sealed",
+                "Historic",
+                "Premodern",
+                "Cube",
             ],
         },
     )
@@ -655,8 +671,10 @@ async def match_set_format(
 ) -> Response:
     try:
         await analytics_client.update_match_format(
-            settings.analytics_service_url, user.token,
-            str(match_id), format,
+            settings.analytics_service_url,
+            user.token,
+            str(match_id),
+            format,
         )
     except analytics_client.AnalyticsForbidden:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)

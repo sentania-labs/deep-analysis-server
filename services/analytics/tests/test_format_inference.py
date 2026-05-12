@@ -42,10 +42,14 @@ def test_modern_card_pool() -> None:
 def test_legacy_card_pool() -> None:
     cards = {
         "Force of Will": _legs(
-            standard="not_legal", pioneer="not_legal", modern="not_legal",
+            standard="not_legal",
+            pioneer="not_legal",
+            modern="not_legal",
         ),
         "Brainstorm": _legs(
-            standard="not_legal", pioneer="not_legal", modern="not_legal",
+            standard="not_legal",
+            pioneer="not_legal",
+            modern="not_legal",
         ),
     }
     assert infer_format_from_cards(cards) == "legacy"
@@ -54,12 +58,18 @@ def test_legacy_card_pool() -> None:
 def test_vintage_restricted() -> None:
     cards = {
         "Black Lotus": _legs(
-            standard="not_legal", pioneer="not_legal",
-            modern="not_legal", legacy="banned", vintage="restricted",
+            standard="not_legal",
+            pioneer="not_legal",
+            modern="not_legal",
+            legacy="banned",
+            vintage="restricted",
         ),
         "Ancestral Recall": _legs(
-            standard="not_legal", pioneer="not_legal",
-            modern="not_legal", legacy="banned", vintage="restricted",
+            standard="not_legal",
+            pioneer="not_legal",
+            modern="not_legal",
+            legacy="banned",
+            vintage="restricted",
         ),
     }
     assert infer_format_from_cards(cards) == "vintage"
@@ -68,8 +78,11 @@ def test_vintage_restricted() -> None:
 def test_banned_in_all_returns_none() -> None:
     cards = {
         "Fake Broken Card": {
-            "standard": "banned", "pioneer": "banned",
-            "modern": "banned", "legacy": "banned", "vintage": "banned",
+            "standard": "banned",
+            "pioneer": "banned",
+            "modern": "banned",
+            "legacy": "banned",
+            "vintage": "banned",
         },
     }
     assert infer_format_from_cards(cards) is None

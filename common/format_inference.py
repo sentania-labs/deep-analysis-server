@@ -30,12 +30,21 @@ _FORMAT_HIERARCHY: list[str] = [
     "vintage",
 ]
 
-_BASIC_LANDS = frozenset({
-    "Plains", "Island", "Swamp", "Mountain", "Forest",
-    "Snow-Covered Plains", "Snow-Covered Island", "Snow-Covered Swamp",
-    "Snow-Covered Mountain", "Snow-Covered Forest",
-    "Wastes",
-})
+_BASIC_LANDS = frozenset(
+    {
+        "Plains",
+        "Island",
+        "Swamp",
+        "Mountain",
+        "Forest",
+        "Snow-Covered Plains",
+        "Snow-Covered Island",
+        "Snow-Covered Swamp",
+        "Snow-Covered Mountain",
+        "Snow-Covered Forest",
+        "Wastes",
+    }
+)
 
 _LEGALITIES_SQL = text(
     """
@@ -91,9 +100,7 @@ async def infer_format_for_match(
     if not filtered:
         return None
 
-    rows = (
-        await session.execute(_LEGALITIES_SQL, {"names": filtered})
-    ).mappings().all()
+    rows = (await session.execute(_LEGALITIES_SQL, {"names": filtered})).mappings().all()
 
     if not rows:
         _log.debug(
