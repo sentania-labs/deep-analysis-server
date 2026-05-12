@@ -12,7 +12,68 @@ Shipped versions are recorded in [CHANGELOG.md](CHANGELOG.md). Tactical bugs liv
 
 The next 1–3 outcomes to pick up. Priority 1 is current focus.
 
-### 1. Admin user invitation & role management
+### 1. User profile expansion + hero identification
+
+Lets users record MTGO username(s) so the system can distinguish hero from opponent. Without this, the dashboard sometimes shows the user as their own opponent.
+
+- **Design approach:**
+  - **Upload ownership is the access boundary.** MTGO username does not grant access to matches — it's purely for attribution accuracy within a user's own uploads. This holds for future team/sharing features too: sharing carries the username mapping with it, so recipients see correct hero attribution without username-based access control.
+  - **Auto-detection from upload patterns.** After parsing, the system counts player-name frequency across a user's uploads. The name appearing most often is almost certainly the uploader. Surface as a suggestion: "We think your MTGO username is **X** — confirm?" Runs as a post-parse hook so the suggestion improves with each upload.
+  - **User confirms on profile.** User reviews the suggestion and confirms, edits, or adds alt account names. `_classify_match` in `stats.py` uses the confirmed list instead of the current `players[0]` convention.
+  - **Deferred attribution.** Before the user has 2+ uploads or confirms their name, show both players neutrally — don't guess hero/opponent from a single match.
+  - **Display-time resolution.** Hero vs opponent is resolved at query time, not parse time. No re-parsing or backfill needed — existing matches retroactively show correct attribution the moment the user confirms their username.
+- **Acceptance criteria:**
+  - User profile fields: name, contact info, MTGO username(s) (in addition to existing email)
+  - Users can edit their own values via `/profile/edit`
+  - MTGO username has a format-validity check; contact info is free-form
+  - Auto-detection: system suggests MTGO username based on upload frequency analysis
+  - `_classify_match` uses confirmed MTGO username(s) for hero identification
+  - Existing matches show correct hero/opponent after username is confirmed (no re-parse)
+  - New fields surface in the admin user view
+- **Dependencies:** None
+- **Status:** Not started
+
+### 2. Data scraping configuration
+
+Admin UI to define where archetype/decklist data is pulled from. Feeds #3.
+
+- **Acceptance criteria:**
+  - Admin can enable, disable, and configure data sources (MTGGoldfish, Untapped, MTGTop8, others)
+  - Per-source: credentials if needed, scrape frequency, last-run status, last-success timestamp
+  - Data lands in a normalized internal format that the archetype detector consumes
+- **Dependencies:** None
+- **Status:** Not started
+
+### 3. Archetype detection & management
+
+Admin-managed catalog of MTG archetypes plus automatic classification of decks into them.
+
+- **Acceptance criteria:**
+  - Admin-managed archetype catalog: name, format, defining cards, sample decklists
+  - Catalog seeded from scraped sources (#2) and editable/overridable by admin
+  - Auto-classifier: given a decklist, returns the closest archetype + confidence
+  - Surfaces in the match list and per-match detail views
+- **Dependencies:** Depends on #2 when archetype data is sourced externally
+- **Status:** Not started
+
+---
+
+## Next up
+
+In rough priority order. Re-shuffle freely when a different next-pick makes more sense.
+
+### 4. Game state reconstruction from gamelog
+
+The parser walks an MTGO gamelog and produces a structured game-state object per game. This is the foundation for richer match analysis (#7) and the virtual-replay stretch goal.
+
+- **Acceptance criteria:**
+  - Per game: structured state including zones (battlefield, hand, library, graveyard, exile), permanents with attached counters/auras, life totals, mana pool, the stack
+  - State is queryable per turn and per player
+  - Stored alongside the parsed match record
+- **Dependencies:** None
+- **Status:** Not started
+
+### 5. Admin user invitation & role management
 
 Extends the existing invite system so admins can invite other admin users, and gives the original installer (the very first registered user, UID=1) tools to manage them.
 
@@ -24,7 +85,7 @@ Extends the existing invite system so admins can invite other admin users, and g
 - **Dependencies:** None
 - **Status:** Not started
 
-### 2. CI auto-deploy on release
+### 6. CI auto-deploy on release
 
 When the repo has deploy credentials configured, tagging a release automatically updates the running containers on the target host. Silent no-op when credentials are absent so forks still build cleanly.
 
@@ -37,13 +98,18 @@ When the repo has deploy credentials configured, tagging a release automatically
 - **Dependencies:** None — parallel work, can run alongside any other outcome
 - **Status:** Not started
 
----
+### 7. Match analysis (the core product)
 
-## Next up
+Per-user dashboard for what users actually want from the product: how they're performing.
 
-In rough priority order. Re-shuffle freely when a different next-pick makes more sense.
+- **Acceptance criteria:**
+  - Performance breakdowns: win rate by archetype played, by archetype faced, by format, by event type, by opponent
+  - Time-window filtering, sortable tables, basic charts
+  - Read-only API surface so the AI add-on can subscribe and query
+- **Dependencies:** Depends on #4 (game state) and #3 (archetypes)
+- **Status:** Not started
 
-### 3. Extended user account actions
+### 8. Extended user account actions
 
 Admin tooling to manage individual user accounts beyond the current "delete + reset password" surface.
 
@@ -51,10 +117,10 @@ Admin tooling to manage individual user accounts beyond the current "delete + re
   - Admin can disable a user (login refused; existing sessions revoked); ban is the same disable with no expiry
   - Admin can edit any user's name, contact info, and MTGO username
   - Edit and disable actions are recorded in an audit log
-- **Dependencies:** Soft dep on #1 for shared role-management UI patterns
+- **Dependencies:** Soft dep on #5 for shared role-management UI patterns
 - **Status:** Not started
 
-### 4. Cross-user agent management
+### 9. Cross-user agent management
 
 Extends the existing cross-user revoke functionality to also support key rotation and full deletion.
 
@@ -62,22 +128,10 @@ Extends the existing cross-user revoke functionality to also support key rotatio
   - Admin can trigger a key rotation on any user's agent (revoke existing key, issue new one without deleting the agent)
   - Admin can delete any user's agent entirely
   - Both actions surface in the existing cross-user agents view alongside revoke
-- **Dependencies:** None — can run parallel to #3
+- **Dependencies:** None — can run parallel to #8
 - **Status:** Not started
 
-### 5. User profile expansion
-
-Lets users record more about themselves than just their email.
-
-- **Acceptance criteria:**
-  - User profile fields: name, contact info, MTGO username (in addition to existing email)
-  - Users can edit their own values via `/profile/edit`
-  - MTGO username has a format-validity check; contact info is free-form
-  - New fields surface in the admin user view
-- **Dependencies:** None
-- **Status:** Not started
-
-### 6. Server config UI: notifications backend
+### 10. Server config UI: notifications backend
 
 Admin-configurable notification transport, starting with email. Foundation that the future Discord bot ping idea plugs into.
 
@@ -88,60 +142,15 @@ Admin-configurable notification transport, starting with email. Foundation that 
 - **Dependencies:** None
 - **Status:** Not started
 
-### 7. Game state reconstruction from gamelog
-
-The parser walks an MTGO gamelog and produces a structured game-state object per game. This is the foundation for richer match analysis (#10) and the virtual-replay stretch goal.
-
-- **Acceptance criteria:**
-  - Per game: structured state including zones (battlefield, hand, library, graveyard, exile), permanents with attached counters/auras, life totals, mana pool, the stack
-  - State is queryable per turn and per player
-  - Stored alongside the parsed match record
-- **Dependencies:** None
-- **Status:** Not started
-
-### 8. Data scraping configuration
-
-Admin UI to define where archetype/decklist data is pulled from. Feeds #9.
-
-- **Acceptance criteria:**
-  - Admin can enable, disable, and configure data sources (MTGGoldfish, Untapped, MTGTop8, others)
-  - Per-source: credentials if needed, scrape frequency, last-run status, last-success timestamp
-  - Data lands in a normalized internal format that the archetype detector consumes
-- **Dependencies:** None
-- **Status:** Not started
-
-### 9. Archetype detection & management
-
-Admin-managed catalog of MTG archetypes plus automatic classification of decks into them.
-
-- **Acceptance criteria:**
-  - Admin-managed archetype catalog: name, format, defining cards, sample decklists
-  - Catalog seeded from scraped sources (#8) and editable/overridable by admin
-  - Auto-classifier: given a decklist, returns the closest archetype + confidence
-  - Surfaces in the macro match view (#11) and per-match analysis (#10)
-- **Dependencies:** Depends on #8 when archetype data is sourced externally
-- **Status:** Not started
-
-### 10. Match analysis (the core product)
-
-Per-user dashboard for what users actually want from the product: how they're performing.
-
-- **Acceptance criteria:**
-  - Performance breakdowns: win rate by archetype played, by archetype faced, by format, by event type, by opponent
-  - Time-window filtering, sortable tables, basic charts
-  - Read-only API surface so the AI add-on can subscribe and query
-- **Dependencies:** Depends on #7 (game state) and #9 (archetypes)
-- **Status:** Not started
-
 ### 11. Macro match view in admin
 
 System-wide match-and-analysis surface for admins.
 
 - **Acceptance criteria:**
   - All matches across all users, with filtering by user, archetype, format, and date range
-  - Drill into a single match for game-by-game state from #7
+  - Drill into a single match for game-by-game state from #4
   - Read-only — no admin-edit on match data
-- **Dependencies:** Depends on #10
+- **Dependencies:** Depends on #7
 - **Status:** Not started
 
 ---
@@ -150,6 +159,7 @@ System-wide match-and-analysis surface for admins.
 
 Tactical bugs and small tech-debt items. Resolve when convenient or alongside related work.
 
+- **Admin server version display** — show the running server version somewhere in the admin UI (footer, about page, or admin dashboard). Admin-only; users don't need it.
 - **Issue #4** — `change_password` form lost its inline "wrong current password" error after the AuthForbidden refactor. Falls through to a generic banner instead.
 - **Issue #5** — wrong template renders on `/profile` subpages when the auth service is unreachable. Returns a generic 503 instead of the contextual `_service_unavailable` template.
 
