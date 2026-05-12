@@ -12,8 +12,8 @@ format_source tracks whether the match format was inferred from the
 card pool, inherited from a scraped MTGO event, or set by the user.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "009"

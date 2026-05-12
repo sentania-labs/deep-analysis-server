@@ -13,6 +13,7 @@ dependencies = [
     "pyjwt[crypto]>=2.8",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -28,3 +29,4 @@ bypass-selection = true
 "settings.py" = "common/settings.py"
 "agent_auth.py" = "common/agent_auth.py"
 "token_utils.py" = "common/token_utils.py"
+"format_inference.py" = "common/format_inference.py"
