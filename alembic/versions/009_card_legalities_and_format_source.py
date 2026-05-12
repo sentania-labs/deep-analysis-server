@@ -13,8 +13,9 @@ card pool, inherited from a scraped MTGO event, or set by the user.
 """
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql  # noqa: I001
+
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision = "009"
 down_revision = "008"

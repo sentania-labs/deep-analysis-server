@@ -110,6 +110,7 @@ async def infer_format_for_match(
 
     result = infer_format_from_cards(card_legalities)
     if result:
+        result = result.title()
         _log.info(
             "format inferred",
             extra={"format": result, "cards_checked": len(card_legalities)},

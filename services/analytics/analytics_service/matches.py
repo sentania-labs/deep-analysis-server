@@ -117,8 +117,8 @@ async def update_match_format(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
 ) -> None:
-    fmt = body.format.lower().strip()
-    if fmt not in _VALID_FORMATS:
+    key = body.format.lower().strip()
+    if key not in _VALID_FORMATS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"error": "invalid_format", "valid": sorted(_VALID_FORMATS)},
@@ -131,7 +131,7 @@ async def update_match_format(
              WHERE id = :match_id AND user_id = :user_id
             """
         ),
-        {"format": fmt, "match_id": match_id, "user_id": user.user_id},
+        {"format": key.title(), "match_id": match_id, "user_id": user.user_id},
     )
     if result.rowcount == 0:  # type: ignore[attr-defined]
         raise HTTPException(

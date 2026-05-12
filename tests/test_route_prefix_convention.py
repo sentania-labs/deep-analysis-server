@@ -72,6 +72,7 @@ _WEB_BROWSER_PATHS = frozenset(
         "/register",
         "/cards",
         "/matches/{match_id}",
+        "/matches/{match_id}/format",
     }
 )
 
