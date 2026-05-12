@@ -1,26 +1,16 @@
 {
-    # CI-only: tls internal avoids ACME DNS dependency.
+    auto_https off
 }
 
-:80 {
-    handle /health {
-        respond "ok" 200
-    }
-    handle {
-        redir https://{host}{uri} 301
-    }
-}
-
-deepanalysis.local {
-    tls internal
-
+:8080 {
     handle /health {
         respond "ok" 200
     }
 
-    # Use `handle` (preserve path) not `handle_path` (strip prefix) — backends
-    # register full paths like /auth/login, /ingest/upload. See commit fac34b2
-    # for the production Caddyfile fix this mirrors.
+    handle / {
+        redir /dashboard 302
+    }
+
     handle /auth/* {
         reverse_proxy auth:8000
     }
@@ -33,9 +23,6 @@ deepanalysis.local {
         reverse_proxy analytics:8000
     }
 
-    # /admin/* serves the web admin UI (W3.5-C); mirrors the production
-    # Caddyfile. Auth's JSON /admin/* endpoints stay reachable on the
-    # internal compose network for service-to-service calls.
     handle {
         reverse_proxy web:8000
     }

@@ -425,17 +425,34 @@ async def test_revoke_my_agent_translates_transport_error(
 
 
 @pytest.mark.asyncio
-async def test_change_password_raises_auth_forbidden_on_401(
+async def test_change_password_invalid_credentials_returns_inline_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """401 from /auth/password/change means auth no longer accepts the
-    session (revoked, expired, or current password rejected). Callers
-    redirect to /login rather than rendering an inline form error."""
+    """401 with invalid_credentials returns a business error so the
+    caller can re-render the form with an inline message (issue #4)."""
     from web_service import auth_client
 
     _stub_post(
         monkeypatch,
         httpx.Response(401, json={"detail": {"error": "invalid_credentials"}}),
+    )
+
+    ok, err = await auth_client.change_password("http://auth:8000", "tok", "old-pw", "new-pw-9876")
+    assert ok is False
+    assert err == "invalid_credentials"
+
+
+@pytest.mark.asyncio
+async def test_change_password_expired_session_401_raises_auth_forbidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """401 without invalid_credentials (e.g. expired session) still
+    raises AuthForbidden so the caller redirects to /login."""
+    from web_service import auth_client
+
+    _stub_post(
+        monkeypatch,
+        httpx.Response(401, json={"detail": {"error": "session_expired"}}),
     )
 
     with pytest.raises(auth_client.AuthForbidden):

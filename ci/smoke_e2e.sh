@@ -16,14 +16,14 @@
 # Usage:
 #   DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=... \
 #   DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=... \
-#   bash ci/smoke_e2e.sh https://deepanalysis.local
+#   bash ci/smoke_e2e.sh http://localhost:8080
 #
 # Exit code 0 = all checks passed.
 # Exit code 1 = one or more checks failed.
 
 set -euo pipefail
 
-BASE_URL="${1:-https://deepanalysis.local}"
+BASE_URL="${1:-http://localhost:8080}"
 
 PASS=0
 FAIL=0
@@ -43,11 +43,11 @@ check() {
 
 http_status() {
     # Returns just the HTTP status code; -k skips TLS verify (self-signed in CI).
-    curl -sk -o /dev/null -w "%{http_code}" "$@"
+    curl -s -o /dev/null -w "%{http_code}" "$@"
 }
 
 http_body() {
-    curl -sk "$@"
+    curl -s "$@"
 }
 
 echo "=== Deep Analysis E2E smoke — $BASE_URL ==="

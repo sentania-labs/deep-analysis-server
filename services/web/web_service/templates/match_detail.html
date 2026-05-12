@@ -10,7 +10,21 @@
         <li><strong>Date:</strong>
             {{ match.played_at.strftime("%Y-%m-%d %H:%M") if match.played_at else "—" }}
         </li>
-        <li><strong>Format:</strong> {{ match.format_ or "—" }}</li>
+        <li><strong>Format:</strong>
+            <form method="post" action="/matches/{{ match.match_id }}/format" class="inline-form">
+                <select name="format" onchange="this.form.submit()">
+                    {% if not match.format_ %}
+                    <option value="" disabled selected>—</option>
+                    {% endif %}
+                    {% for fmt in format_options %}
+                    <option value="{{ fmt }}"
+                        {% if match.format_ and match.format_|lower == fmt|lower %}selected{% endif %}>
+                        {{ fmt }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </form>
+        </li>
         <li><strong>Players:</strong>
             {% if match.players %}
                 {{ match.players|join(", ") }}
@@ -72,5 +86,7 @@
 .result-win { background: #d4edda; color: #155724; }
 .result-loss { background: #f8d7da; color: #721c24; }
 .result-draw { background: #fff3cd; color: #856404; }
+.inline-form { display: inline; }
+.inline-form select { font-size: inherit; padding: 0.15rem 0.3rem; }
 </style>
 {% endblock %}

@@ -139,17 +139,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
     steps:
       - uses: actions/checkout@v4
-      - name: Map deepanalysis.local to loopback
-        run: echo "127.0.0.1 deepanalysis.local" | sudo tee -a /etc/hosts
       - name: Seed .env for compose
         run: |
           cp .env.example .env
-          echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
-          echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
-          # auth-migrate runs inside the compose network, so postgres is
-          # reachable as `postgres`, not `localhost`. Override .env.example's
-          # host-side default.
           echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
       - name: Create external networks
         run: docker network create edge-slots
@@ -158,7 +151,7 @@ jobs:
       - name: Wait for gateway
         run: |
           for i in $(seq 1 30); do
-            if curl -sk -o /dev/null -w "%{http_code}" https://deepanalysis.local/health | grep -q 200; then
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep -q 200; then
               echo "gateway up after ${i} tries"
               exit 0
             fi
@@ -169,14 +162,10 @@ jobs:
           docker compose logs --tail=200
           exit 1
       - name: Wait for upstream services
-        # Gateway /health is answered by Caddy directly, so it doesn't
-        # imply upstreams are ready. Without this wait, the route-prefix
-        # smoke races the FastAPI services and gets 502s ("connection
-        # refused") from Caddy. Each /<svc>/healthz is unauthenticated.
         run: |
           for svc in auth ingest web; do
             for i in $(seq 1 60); do
-              code=$(curl -sk -o /dev/null -w "%{http_code}" "https://deepanalysis.local/${svc}/healthz")
+              code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8080/${svc}/healthz")
               if [ "$code" = "200" ]; then
                 echo "${svc} up after ${i} tries"
                 break
@@ -191,16 +180,13 @@ jobs:
             done
           done
       - name: Route prefix smoke (v0.4.2 fix verification)
-        # Verifies gateway routing + auth-gate behavior without needing
-        # an admin account. Full E2E (login → upload → 201) is a follow-up
-        # once compose-smoke DB bootstrap is stabilized (TODO: W9.5 follow-up).
         run: |
-          BASE=https://deepanalysis.local
+          BASE=http://localhost:8080
           FAIL=0
 
           check() {
             local label="$1" expected="$2"
-            actual=$(curl -sk -o /dev/null -w "%{http_code}" "${@:3}")
+            actual=$(curl -s -o /dev/null -w "%{http_code}" "${@:3}")
             if [ "$actual" = "$expected" ]; then
               echo "  PASS: $label (got $actual)"
             else
@@ -253,17 +239,10 @@ jobs:
         uses: astral-sh/setup-uv@v3
       - name: uv sync
         run: uv sync --all-packages --dev
-      - name: Map deepanalysis.local to loopback
-        run: echo "127.0.0.1 deepanalysis.local" | sudo tee -a /etc/hosts
       - name: Seed .env for compose (with bootstrap admin)
         run: |
           cp .env.example .env
-          echo 'GATEWAY_DOMAIN=deepanalysis.local' >> .env
-          echo 'DEEP_ANALYSIS_ACME_EMAIL=ci@example.com' >> .env
           echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
-          # auth-migrate runs inside the compose network. The job-level
-          # DATABASE_URL above (localhost:5432) is for host-side alembic;
-          # the .env value is what the container reads.
           echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" >> .env
           echo "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" >> .env
@@ -302,17 +281,14 @@ jobs:
       - name: Wait for gateway + auth bootstrap
         run: |
           for i in $(seq 1 60); do
-            if curl -sk -o /dev/null -w "%{http_code}" https://deepanalysis.local/health | grep -q 200; then
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health | grep -q 200; then
               break
             fi
             sleep 2
           done
-          # Bootstrap admin is created during the auth container's
-          # lifespan startup — give it a few extra seconds after the
-          # gateway answers to finish the DB write.
           for i in $(seq 1 30); do
-            code=$(curl -sk -o /dev/null -w "%{http_code}" \
-              -X POST https://deepanalysis.local/auth/login \
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -X POST http://localhost:8080/auth/login \
               -H 'Content-Type: application/json' \
               -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}")
             if [ "$code" = "200" ]; then
@@ -326,7 +302,7 @@ jobs:
           docker compose logs --tail=200
           exit 1
       - name: Run UI smoke
-        run: bash ci/smoke_ui.sh https://deepanalysis.local
+        run: bash ci/smoke_ui.sh http://localhost:8080
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --tail=200

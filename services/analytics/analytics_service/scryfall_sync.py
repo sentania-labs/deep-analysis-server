@@ -67,11 +67,11 @@ _UPSERT_SQL = text(
     """
     INSERT INTO catalog.cards (
         scryfall_id, name, oracle_text, type_line, mana_cost,
-        colors, set_code, image_uri, art_crop_uri, synced_at
+        colors, set_code, image_uri, art_crop_uri, legalities, synced_at
     ) VALUES (
         :scryfall_id, :name, :oracle_text, :type_line, :mana_cost,
         CAST(:colors AS jsonb), :set_code, :image_uri, :art_crop_uri,
-        :synced_at
+        CAST(:legalities AS jsonb), :synced_at
     )
     ON CONFLICT (scryfall_id) DO UPDATE SET
         name = EXCLUDED.name,
@@ -82,6 +82,7 @@ _UPSERT_SQL = text(
         set_code = EXCLUDED.set_code,
         image_uri = EXCLUDED.image_uri,
         art_crop_uri = EXCLUDED.art_crop_uri,
+        legalities = EXCLUDED.legalities,
         synced_at = EXCLUDED.synced_at
     """
 )
@@ -98,6 +99,7 @@ def _card_row(card: dict[str, Any], synced_at: datetime) -> dict[str, Any]:
     """
     image_uris = card.get("image_uris") or {}
     colors = card.get("colors")
+    legalities = card.get("legalities")
     return {
         "scryfall_id": card["id"],
         "name": card["name"],
@@ -110,6 +112,7 @@ def _card_row(card: dict[str, Any], synced_at: datetime) -> dict[str, Any]:
         "set_code": card.get("set"),
         "image_uri": image_uris.get("normal"),
         "art_crop_uri": image_uris.get("art_crop"),
+        "legalities": _jsonb_param(legalities),
         "synced_at": synced_at,
     }
 
