@@ -289,12 +289,17 @@ async def logout(
 
 
 @app.get("/auth/me", response_model=MeResponse)
-async def me(user: AuthenticatedUser = Depends(get_current_user)) -> MeResponse:
+async def me(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MeResponse:
+    row = (await db.execute(select(User).where(User.id == user.user_id))).scalar_one_or_none()
     return MeResponse(
         user_id=user.user_id,
         email=user.email,
         role=user.role,
         must_change_password=user.must_change_password,
+        mtgo_usernames=row.mtgo_usernames if row else None,
     )
 
 
@@ -307,35 +312,37 @@ async def update_me(
     caller: AuthenticatedUser = Depends(require_user_role),
     db: AsyncSession = Depends(get_session),
 ) -> UpdateMeResponse:
-    new_email = body.email.strip().lower()
-    if not new_email:
-        # min_length on the schema covers blank, but a whitespace-only
-        # string would slip through — guard explicitly.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "invalid_email"},
-        )
-
     user = (await db.execute(select(User).where(User.id == caller.user_id))).scalar_one_or_none()
     if user is None or user.disabled:
         raise _INVALID_CREDENTIALS
 
-    if new_email != user.email.lower():
-        clash = (
-            await db.execute(
-                select(User).where(
-                    func.lower(User.email) == new_email,
-                    User.id != user.id,
-                )
-            )
-        ).scalar_one_or_none()
-        if clash is not None:
+    if body.email is not None:
+        new_email = body.email.strip().lower()
+        if not new_email:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"error": "email_already_exists"},
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "invalid_email"},
             )
+        if new_email != user.email.lower():
+            clash = (
+                await db.execute(
+                    select(User).where(
+                        func.lower(User.email) == new_email,
+                        User.id != user.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if clash is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "email_already_exists"},
+                )
+        user.email = new_email
 
-    user.email = new_email
+    if body.mtgo_usernames is not None:
+        cleaned = [n.strip() for n in body.mtgo_usernames if n.strip()]
+        user.mtgo_usernames = cleaned or None
+
     user.updated_at = datetime.now(UTC)
     await db.commit()
     await db.refresh(user)
@@ -357,6 +364,7 @@ async def update_me(
         email=user.email,
         role=user.role,
         must_change_password=user.must_change_password,
+        mtgo_usernames=user.mtgo_usernames,
         access_token=fresh_access,
         expires_in=settings.access_token_ttl_seconds,
     )

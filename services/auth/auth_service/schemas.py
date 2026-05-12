@@ -35,10 +35,12 @@ class MeResponse(BaseModel):
     email: str
     role: str
     must_change_password: bool
+    mtgo_usernames: list[str] | None = None
 
 
 class UpdateMeRequest(BaseModel):
-    email: str = Field(min_length=1, max_length=320)
+    email: str | None = Field(default=None, min_length=1, max_length=320)
+    mtgo_usernames: list[str] | None = None
 
 
 class UpdateMeResponse(MeResponse):

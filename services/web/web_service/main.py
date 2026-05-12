@@ -363,10 +363,16 @@ async def profile_edit_form(
             "profile_edit.html",
             {"email": ""},
         )
+    names_str = ", ".join(me.mtgo_usernames) if me.mtgo_usernames else ""
     return templates.TemplateResponse(
         request,
         "profile_edit.html",
-        {"user": user, "email": me.email, "error": None},
+        {
+            "user": user,
+            "email": me.email,
+            "mtgo_usernames_str": names_str,
+            "error": None,
+        },
     )
 
 
@@ -374,6 +380,7 @@ async def profile_edit_form(
 async def profile_edit_submit(
     request: Request,
     email: Annotated[str, Form()],
+    mtgo_usernames: Annotated[str, Form()] = "",
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
@@ -381,12 +388,18 @@ async def profile_edit_submit(
     if bounce is not None:
         return bounce
     submitted = email.strip()
+    names_list = [n.strip() for n in mtgo_usernames.split(",") if n.strip()]
 
     def _render_error(message: str, code: int) -> Response:
         return templates.TemplateResponse(
             request,
             "profile_edit.html",
-            {"user": user, "email": submitted, "error": message},
+            {
+                "user": user,
+                "email": submitted,
+                "mtgo_usernames_str": mtgo_usernames,
+                "error": message,
+            },
             status_code=code,
         )
 
@@ -394,7 +407,12 @@ async def profile_edit_submit(
         return _render_error("Email is required.", status.HTTP_400_BAD_REQUEST)
 
     try:
-        result = await auth_client.update_me(settings.auth_service_url, user.token, submitted)
+        result = await auth_client.update_me(
+            settings.auth_service_url,
+            user.token,
+            submitted,
+            mtgo_usernames=names_list or None,
+        )
     except auth_client.AuthForbidden:
         _log.info("profile.edit.update_me.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)

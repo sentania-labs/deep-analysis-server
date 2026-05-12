@@ -29,6 +29,7 @@ class MeResult:
     email: str
     role: str
     must_change_password: bool
+    mtgo_usernames: list[str] | None = None
 
 
 @dataclass
@@ -216,6 +217,7 @@ async def get_me(base_url: str, token: str) -> MeResult:
         email=str(data["email"]),
         role=str(data["role"]),
         must_change_password=bool(data["must_change_password"]),
+        mtgo_usernames=data.get("mtgo_usernames"),
     )
 
 
@@ -263,8 +265,10 @@ async def update_me(
     base_url: str,
     token: str,
     email: str,
+    *,
+    mtgo_usernames: list[str] | None = None,
 ) -> UpdateMeResult:
-    """Try to update the caller's email.
+    """Try to update the caller's profile fields.
 
     On 200, returns ``UpdateMeResult(ok=True, access_token=..., expires_in=...)``
     — the auth response carries a freshly-minted token because email is a
@@ -277,12 +281,15 @@ async def update_me(
     401/403 raise :class:`AuthForbidden`; 5xx / transport raise
     :class:`AuthClientError`.
     """
+    body: dict[str, object] = {"email": email}
+    if mtgo_usernames is not None:
+        body["mtgo_usernames"] = mtgo_usernames
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.patch(
                 f"{base_url}/auth/me",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"email": email},
+                json=body,
             )
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth /me PATCH transport error: {exc}") from exc

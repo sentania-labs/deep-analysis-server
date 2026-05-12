@@ -56,6 +56,7 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    mtgo_usernames: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
