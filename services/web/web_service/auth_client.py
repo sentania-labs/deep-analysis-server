@@ -163,6 +163,13 @@ async def change_password(
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
+        if resp.status_code == 401:
+            try:
+                detail = resp.json().get("detail") or {}
+                if isinstance(detail, dict) and detail.get("error") == "invalid_credentials":
+                    return False, "invalid_credentials"
+            except ValueError:
+                pass
         raise AuthForbidden(f"auth /password/change returned {resp.status_code}")
     if resp.status_code == 400:
         try:

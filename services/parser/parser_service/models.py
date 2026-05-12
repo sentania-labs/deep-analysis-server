@@ -56,6 +56,7 @@ class Match(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    format_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     players: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, server_default="[]")
     match_result: Mapped[str | None] = mapped_column(String(64), nullable=True)

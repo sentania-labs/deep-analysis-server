@@ -28,6 +28,7 @@ import redis.asyncio as redis
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
+from common.format_inference import collect_card_names, infer_format_for_match
 from common.redis_client import EventPublisher
 from parser_service.parsing import LogParser, ParsedMatch
 from parser_service.persistence import persist_match
@@ -143,6 +144,18 @@ class ParserConsumer:
                 _log.exception("persist failed sha=%s user_id=%s", sha256, user_id)
                 await session.rollback()
                 return parsed
+
+            if not match.format:
+                try:
+                    card_names = collect_card_names(parsed)
+                    if card_names:
+                        fmt = await infer_format_for_match(session, card_names)
+                        if fmt:
+                            match.format = fmt
+                            match.format_source = "inferred"
+                            await session.commit()
+                except Exception:  # noqa: BLE001
+                    _log.debug("format inference failed sha=%s", sha256)
 
         out: MatchParsedPayload = {
             "match_id": str(match.id),

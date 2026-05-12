@@ -85,8 +85,71 @@ def test_extract_events_malformed_html_does_not_raise() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _card(name: str, qty: int, *, side: bool = False) -> dict:
+    return {
+        "qty": str(qty),
+        "sideboard": str(side).lower(),
+        "card_attributes": {"card_name": name},
+    }
+
+
+def test_extract_decklists_mtgo_js_data() -> None:
+    """Primary strategy: window.MTGO.decklists.data JS payload."""
+    import json
+
+    data = {
+        "event_id": "12345",
+        "description": "Modern Challenge 32",
+        "decklists": [
+            {
+                "player": "Alice",
+                "main_deck": [
+                    _card("Lightning Bolt", 4),
+                    _card("Goblin Guide", 4),
+                    _card("Smash to Smithereens", 2, side=True),
+                ],
+            },
+            {
+                "player": "Bob",
+                "main_deck": [
+                    _card("Karn Liberated", 4),
+                    _card("Nature's Claim", 3, side=True),
+                ],
+            },
+        ],
+    }
+    html = f"""
+    <html><body>
+      <script type="text/javascript">
+        window.MTGO = window.MTGO || {{}};
+        window.MTGO.decklists = window.MTGO.decklists || {{}};
+        window.MTGO.decklists.data = {json.dumps(data)};
+      </script>
+    </body></html>
+    """
+    decks = extract_decklists_from_html(html, "https://example.com/event")
+    assert len(decks) == 2
+    by_player = {d["player_name"]: d for d in decks}
+    alice = by_player["Alice"]
+    assert alice["decklist_main"] == {"Lightning Bolt": 4, "Goblin Guide": 4}
+    assert alice["decklist_sideboard"] == {"Smash to Smithereens": 2}
+    bob = by_player["Bob"]
+    assert bob["decklist_main"] == {"Karn Liberated": 4}
+    assert bob["decklist_sideboard"] == {"Nature's Claim": 3}
+
+
+def test_extract_decklists_mtgo_js_data_bad_json() -> None:
+    """JS data strategy gracefully handles malformed JSON."""
+    html = """
+    <html><body>
+      <script>window.MTGO.decklists.data = {not valid json};</script>
+    </body></html>
+    """
+    assert extract_decklists_from_html(html, "https://example.com") == []
+
+
 def test_extract_decklists_player_blocks() -> None:
-    """Primary strategy: per-player decklist blocks with main + sideboard."""
+    """Fallback strategy: per-player decklist blocks with main + sideboard."""
     html = """
     <html><body>
       <div class="deck-block">

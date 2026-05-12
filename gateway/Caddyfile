@@ -1,26 +1,14 @@
-# gateway/Caddyfile — production config.
+# gateway/Caddyfile — slot-internal reverse proxy.
 #
-# Env vars an operator must set (see .env.example):
-#   GATEWAY_DOMAIN             Public hostname Caddy serves (e.g. deepanalysis.example.com).
-#                              Must have a public DNS A/CNAME record pointing at this host
-#                              for ACME certificate issuance to succeed.
-#   DEEP_ANALYSIS_ACME_EMAIL   Contact email Let's Encrypt uses for ACME registration.
-#
-# For local-only / no-DNS testing, override via docker-compose.override.yml to mount
-# a Caddyfile with `tls internal` instead. See docs/deploy.md.
+# Fleet-caddy on the host terminates TLS for the public FQDN and
+# forwards to this container over the edge-slots bridge network.
+# This gateway runs plaintext only — no ACME, no TLS.
 
-:80 {
-    handle /health {
-        respond "ok" 200
-    }
-    handle {
-        redir https://{host}{uri} 301
-    }
+{
+    auto_https off
 }
 
-{$GATEWAY_DOMAIN} {
-    tls {$DEEP_ANALYSIS_ACME_EMAIL}
-
+:8080 {
     handle /health {
         respond "ok" 200
     }
@@ -37,11 +25,6 @@
         reverse_proxy analytics:8000
     }
 
-    # /admin/* serves the web admin UI (W3.5-C). The auth service still
-    # exposes JSON /admin/* endpoints for internal service-to-service use
-    # (web -> auth) but those are no longer reachable via the gateway.
-    # Operators who need raw API access connect to auth directly on the
-    # internal compose network (docker exec or port-forward).
     handle {
         reverse_proxy web:8000
     }

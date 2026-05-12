@@ -9,6 +9,7 @@ independent and coexist in the compose stack.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
@@ -43,6 +44,7 @@ app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
 mount_metrics(app, SERVICE_NAME)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # Browser-auth redirect handler — converts BrowserAuthRedirect into a
@@ -355,7 +357,9 @@ async def profile_edit_form(
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me call failed")
-        return _service_unavailable(request, user)
+        return _service_unavailable(
+            request, user, "profile_edit.html", {"email": ""},
+        )
     return templates.TemplateResponse(
         request,
         "profile_edit.html",
@@ -459,7 +463,10 @@ async def profile_agents(
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /me/agents call failed")
-        return _service_unavailable(request, user)
+        return _service_unavailable(
+            request, user, "profile_agents.html",
+            {"agents": [], "page": 1, "total_pages": 0, "total": 0},
+        )
     return templates.TemplateResponse(
         request,
         "profile_agents.html",
@@ -489,7 +496,10 @@ async def profile_agents_generate_code(
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except auth_client.AuthClientError:
         _log.exception("auth /agent/registration-code call failed")
-        return _service_unavailable(request, user)
+        return _service_unavailable(
+            request, user, "profile_agents.html",
+            {"agents": [], "page": 1, "total_pages": 0, "total": 0},
+        )
 
     # Re-render the agents page with the freshly minted code. List
     # fetch is best-effort — surfacing the code matters more than the
@@ -626,19 +636,55 @@ async def match_detail_page(
             "user": user,
             "match": match,
             "overall_result": overall_result,
+            "format_options": [
+                "Standard", "Pioneer", "Modern", "Legacy", "Vintage",
+                "Pauper", "Commander", "Draft", "Sealed", "Historic",
+                "Premodern", "Cube",
+            ],
         },
     )
 
 
-def _service_unavailable(request: Request, user: BrowserUser) -> Response:
+@app.post("/matches/{match_id}/format")
+async def match_set_format(
+    match_id: uuid.UUID,
+    request: Request,
+    format: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    try:
+        await analytics_client.update_match_format(
+            settings.analytics_service_url, user.token,
+            str(match_id), format,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics PATCH format failed match_id=%s", match_id)
+    return RedirectResponse(
+        url=f"/matches/{match_id}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _service_unavailable(
+    request: Request,
+    user: BrowserUser,
+    template: str = "profile.html",
+    extra_context: dict[str, Any] | None = None,
+) -> Response:
+    ctx: dict[str, Any] = {
+        "user": user,
+        "me": None,
+        "error": "Authentication service unavailable. Please try again.",
+    }
+    if extra_context:
+        ctx.update(extra_context)
     return templates.TemplateResponse(
         request,
-        "profile.html",
-        {
-            "user": user,
-            "me": None,
-            "error": "Authentication service unavailable. Please try again.",
-        },
+        template,
+        ctx,
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 

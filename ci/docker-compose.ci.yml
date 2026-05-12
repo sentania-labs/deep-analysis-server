@@ -1,6 +1,6 @@
 # ci/docker-compose.ci.yml — CI override for compose-smoke and smoke-ui.
 #
-# Switches the gateway from ACME (needs public DNS) to tls internal for CI.
+# Mounts the CI Caddyfile (identical config, kept separate for clarity).
 #
 # JWT key handling for smoke-ui:
 # The auth service generates the RS256 keypair at container startup if the
@@ -11,9 +11,8 @@
 # DA_JWT_KEYS_DIR in the CI environment (defaults to /tmp/ci-jwt-keys).
 services:
   gateway:
-    environment:
-      GATEWAY_DOMAIN: deepanalysis.local
-      DEEP_ANALYSIS_ACME_EMAIL: ""  # not used with tls internal
+    ports:
+      - "8080:8080"
     volumes:
       - ./ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro
 

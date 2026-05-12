@@ -277,6 +277,10 @@ def extract_decklists_from_html(html: str, event_url: str) -> list[dict[str, Any
         )
         return []
 
+    decklists = _extract_decklists_strategy_mtgo_js_data(soup)
+    if decklists:
+        return decklists
+
     decklists = _extract_decklists_strategy_player_blocks(soup)
     if decklists:
         return decklists
@@ -290,7 +294,8 @@ def extract_decklists_from_html(html: str, event_url: str) -> list[dict[str, Any
         extra={
             "event_url": event_url,
             "expected": (
-                "player blocks with class containing 'deck'/'player' "
+                "window.MTGO.decklists.data JS payload, "
+                "player blocks with class containing 'deck'/'player', "
                 "or an embedded application/json deck payload"
             ),
             "html_snippet": html[:_SNIPPET_CHARS],
@@ -299,10 +304,89 @@ def extract_decklists_from_html(html: str, event_url: str) -> list[dict[str, Any
     return []
 
 
+_MTGO_JS_DATA_RE = re.compile(r"window\.MTGO\.decklists\.data\s*=\s*")
+
+
+def _extract_decklists_strategy_mtgo_js_data(
+    soup: BeautifulSoup,
+) -> list[dict[str, Any]]:
+    """Primary strategy: ``window.MTGO.decklists.data = {...}`` in a script tag.
+
+    mtgo.com renders decklist data as a JS object assignment. The
+    ``main_deck`` array contains all cards; each entry's ``sideboard``
+    field (string ``"true"``/``"false"``) discriminates board membership.
+    """
+    for script in soup.find_all("script"):
+        if not isinstance(script, Tag):
+            continue
+        raw = script.string or script.get_text() or ""
+        match = _MTGO_JS_DATA_RE.search(raw)
+        if not match:
+            continue
+        json_start = match.end()
+        try:
+            data, _ = json.JSONDecoder().raw_decode(raw, json_start)
+        except (ValueError, TypeError):
+            _log.debug(
+                "mtgo event page: found MTGO.decklists.data but JSON decode failed",
+                extra={"snippet": raw[json_start : json_start + 200]},
+            )
+            continue
+        if not isinstance(data, dict):
+            continue
+        entries = data.get("decklists")
+        if not isinstance(entries, list):
+            continue
+        return _decklists_from_mtgo_js(entries)
+    return []
+
+
+def _decklists_from_mtgo_js(entries: list[Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        player = entry.get("player")
+        if not isinstance(player, str) or not player.strip():
+            continue
+        main: dict[str, int] = {}
+        side: dict[str, int] = {}
+        for card in entry.get("main_deck") or []:
+            if not isinstance(card, dict):
+                continue
+            attrs = card.get("card_attributes")
+            if not isinstance(attrs, dict):
+                continue
+            name = attrs.get("card_name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            try:
+                qty = int(card.get("qty", 0))
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0:
+                continue
+            name = name.strip()
+            is_side = str(card.get("sideboard", "false")).lower() == "true"
+            target = side if is_side else main
+            target[name] = target.get(name, 0) + qty
+        if not main and not side:
+            continue
+        out.append(
+            {
+                "player_name": player.strip(),
+                "placement": None,
+                "decklist_main": main,
+                "decklist_sideboard": side,
+            }
+        )
+    return out
+
+
 def _extract_decklists_strategy_player_blocks(
     soup: BeautifulSoup,
 ) -> list[dict[str, Any]]:
-    """Primary strategy: per-player blocks with mainboard/sideboard sections."""
+    """Fallback strategy: per-player blocks with mainboard/sideboard sections."""
     out: list[dict[str, Any]] = []
     deck_blocks = soup.find_all(attrs={"class": re.compile(r"(deck|player)", re.IGNORECASE)})
     for block in deck_blocks:
