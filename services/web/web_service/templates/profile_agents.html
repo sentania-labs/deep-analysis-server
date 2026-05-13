@@ -3,149 +3,159 @@
 {% block title %}My agents &middot; Deep Analysis{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <h1>My agents</h1>
-    {% if error %}
-    <div class="alert alert-danger">{{ error }}</div>
-    {% endif %}
-    <p><a href="/profile">&larr; Back to profile</a></p>
+<div class="mb-6">
+    <a href="/profile" class="text-xs text-accent hover:text-accent-hover">&larr; Back to profile</a>
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light mt-2">My Agents</h1>
+</div>
 
-    <section class="register-agent">
-        <h2>Register New Agent</h2>
-        <p class="muted">
-            Generate a one-time code, then enter it in your Deep Analysis
-            agent to link it to your account.
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
+{% endif %}
+
+{# Register Agent #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
+    <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Register New Agent</h2>
+    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mb-3">
+        Generate a one-time code, then enter it in your Deep Analysis agent to link it to your account.
+    </p>
+    <form method="post" action="/profile/agents/registration-code">
+        <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">Generate Registration Code</button>
+    </form>
+    {% if registration_code %}
+    <div class="mt-4 dark:bg-surface-2 bg-surface-light-2 border dark:border-border border-border-light rounded-md p-4" role="status">
+        <p class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-2">Your registration code:</p>
+        <pre class="font-mono text-sm dark:text-txt-primary text-txt-primary-light dark:bg-surface-3 bg-surface-light-3 rounded px-3 py-2 mb-3" id="registration-code-block"><code>{{ registration_code }}</code></pre>
+        <p class="mb-2">
+            <button type="button"
+                    class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors"
+                    onclick="copyRegistrationCode()"
+                    id="copy-registration-code-btn">Copy</button>
         </p>
-        <form method="post" action="/profile/agents/registration-code">
-            <button type="submit" class="btn btn-primary">Generate Registration Code</button>
-        </form>
-        {% if registration_code %}
-        <div class="registration-code-card" role="status">
-            <p class="muted">Your registration code:</p>
-            <pre id="registration-code-block"><code>{{ registration_code }}</code></pre>
-            <p>
-                <button type="button"
-                        class="btn"
-                        onclick="copyRegistrationCode()"
-                        id="copy-registration-code-btn">Copy</button>
-            </p>
-            <p class="muted">
-                Expires {{ registration_code_expires_at.strftime("%H:%M UTC") }}.
-                Enter this code in your Deep Analysis agent to register it.
-                The code expires in 10 minutes.
-            </p>
-        </div>
-        <script>
-        function copyRegistrationCode() {
-            var code = {{ registration_code | tojson }};
-            var btn = document.getElementById("copy-registration-code-btn");
-            var done = function () {
-                if (btn) {
-                    var original = btn.textContent;
-                    btn.textContent = "Copied";
-                    setTimeout(function () { btn.textContent = original; }, 1500);
-                }
-            };
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(code).then(done, done);
-                return;
-            }
-            var ta = document.createElement("textarea");
-            ta.value = code;
-            document.body.appendChild(ta);
-            ta.select();
-            try { document.execCommand("copy"); } catch (e) { /* ignore */ }
-            document.body.removeChild(ta);
-            done();
-        }
-        </script>
-        {% endif %}
-    </section>
-
-    {% if reingest_result is defined and reingest_result %}
-    <div class="alert alert-info" role="status">
-        Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted.
-        The backfill scanner will re-parse them shortly.
+        <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">
+            Expires {{ registration_code_expires_at.strftime("%H:%M UTC") }}.
+            Enter this code in your Deep Analysis agent to register it.
+            The code expires in 10 minutes.
+        </p>
     </div>
+    <script>
+    function copyRegistrationCode() {
+        var code = {{ registration_code | tojson }};
+        var btn = document.getElementById("copy-registration-code-btn");
+        var done = function () {
+            if (btn) {
+                var original = btn.textContent;
+                btn.textContent = "Copied";
+                setTimeout(function () { btn.textContent = original; }, 1500);
+            }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(code).then(done, done);
+            return;
+        }
+        var ta = document.createElement("textarea");
+        ta.value = code;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+        document.body.removeChild(ta);
+        done();
+    }
+    </script>
     {% endif %}
+</div>
 
-    {% if not agents %}
-        <p>No agents registered yet.</p>
-    {% else %}
-        <table class="data-table">
+{% if reingest_result is defined and reingest_result %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
+    Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted.
+    The backfill scanner will re-parse them shortly.
+</div>
+{% endif %}
+
+{# Agent List #}
+{% if not agents %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
+    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">No agents registered yet.</p>
+</div>
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full">
             <thead>
-                <tr>
-                    <th>Machine</th>
-                    <th>Client version</th>
-                    <th>Local Files</th>
-                    <th>Parsed</th>
-                    <th>Last seen</th>
-                    <th>Registered</th>
-                    <th>Status</th>
-                    <th></th>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Machine</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Client Version</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Local Files</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Parsed</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Last Seen</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Registered</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Status</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for a in agents %}
-                <tr>
-                    <td>{{ a.machine_name }}</td>
-                    <td>{{ a.client_version or "—" }}</td>
-                    <td>{{ a.local_file_count if a.local_file_count is not none else "—" }}</td>
-                    <td>{{ a.parsed_count if a.parsed_count is not none else "—" }}</td>
-                    <td>{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M UTC") if a.last_seen_at else "never" }}</td>
-                    <td>{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "—" }}</td>
-                    <td>
+                <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">{{ a.machine_name }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.client_version or "—" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ a.local_file_count if a.local_file_count is not none else "—" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ a.parsed_count if a.parsed_count is not none else "—" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M UTC") if a.last_seen_at else "never" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "—" }}</td>
+                    <td class="px-4 py-2.5 text-sm">
                         {% if a.revoked_at %}
-                            revoked {{ a.revoked_at.strftime("%Y-%m-%d") }}
+                            <span class="bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">revoked {{ a.revoked_at.strftime("%Y-%m-%d") }}</span>
                         {% else %}
-                            active
+                            <span class="bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">active</span>
                         {% endif %}
                     </td>
-                    <td>
+                    <td class="px-4 py-2.5 text-right">
                         {% if not a.revoked_at %}
-                        <form method="post"
-                              action="/profile/agents/{{ a.agent_id }}/revoke"
-                              class="inline-form revoke-form">
-                            <button type="submit" class="btn btn-danger">Revoke</button>
-                        </form>
-                        <form method="post"
-                              action="/profile/agents/{{ a.agent_id }}/reingest"
-                              class="inline-form reingest-form">
-                            <button type="submit" class="btn">Reingest</button>
-                        </form>
+                        <div class="flex gap-1 justify-end">
+                            <form method="post" action="/profile/agents/{{ a.agent_id }}/revoke" class="inline revoke-form">
+                                <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
+                            </form>
+                            <form method="post" action="/profile/agents/{{ a.agent_id }}/reingest" class="inline reingest-form">
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button>
+                            </form>
+                        </div>
                         {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
-        {% set first_idx = (page - 1) * per_page + 1 %}
-        {% set last_idx = first_idx + agents|length - 1 %}
-        {% set has_prev = page > 1 %}
-        {% set has_next = last_idx < total %}
-        <nav class="pagination" aria-label="Agent list pagination">
-            <p class="muted">
-                Showing {{ first_idx }}–{{ last_idx }} of
-                {{ total }} agent{{ "" if total == 1 else "s" }}.
+    </div>
+
+    {% set first_idx = (page - 1) * per_page + 1 %}
+    {% set last_idx = first_idx + agents|length - 1 %}
+    {% set has_prev = page > 1 %}
+    {% set has_next = last_idx < total %}
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <nav class="flex items-center justify-between" aria-label="Agent list pagination">
+            <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
+                Showing <span class="font-mono">{{ first_idx }}</span>&ndash;<span class="font-mono">{{ last_idx }}</span> of
+                <span class="font-mono">{{ total }}</span> agent{{ "" if total == 1 else "s" }}.
             </p>
             {% if has_prev or has_next %}
-            <p>
+            <div class="flex items-center gap-2 text-sm">
                 {% if has_prev %}
-                <a class="btn"
-                   href="/profile/agents?page={{ page - 1 }}&per_page={{ per_page }}"
-                   rel="prev">&larr; Previous</a>
+                <a href="/profile/agents?page={{ page - 1 }}&per_page={{ per_page }}"
+                   rel="prev"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">&larr; Previous</a>
                 {% endif %}
-                <span class="muted">Page {{ page }}</span>
+                <span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>
                 {% if has_next %}
-                <a class="btn"
-                   href="/profile/agents?page={{ page + 1 }}&per_page={{ per_page }}"
-                   rel="next">Next &rarr;</a>
+                <a href="/profile/agents?page={{ page + 1 }}&per_page={{ per_page }}"
+                   rel="next"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">Next &rarr;</a>
                 {% endif %}
-            </p>
+            </div>
             {% endif %}
         </nav>
-    {% endif %}
-</section>
+    </div>
+</div>
+{% endif %}
+
 <script>
     document.querySelectorAll('.revoke-form').forEach(function (form) {
         form.addEventListener('submit', function (e) {

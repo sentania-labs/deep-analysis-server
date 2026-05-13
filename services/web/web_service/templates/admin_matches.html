@@ -3,82 +3,89 @@
 {% block title %}Admin · Matches · Deep Analysis{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <h1>Matches</h1>
-    <nav class="admin-subnav">
-        <a href="/admin/users">Users</a>
-        <span class="muted"> · </span>
-        <a href="/admin/agents">Agents</a>
-        <span class="muted"> · </span>
-        <a href="/admin/matches" aria-current="page"><strong>Matches</strong></a>
-        <span class="muted"> · </span>
-        <a href="/admin/archetypes">Archetypes</a>
-        <span class="muted"> · </span>
-        <a href="/admin/cards">Cards</a>
-        <span class="muted"> · </span>
-        <a href="/admin/invites">Invites</a>
-        <span class="muted"> · </span>
-        <a href="/admin/settings">Settings</a>
-    </nav>
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Matches</h1>
+</div>
 
-    {% if error %}
-    <div class="alert alert-error" role="alert">{{ error }}</div>
-    {% endif %}
+{# Admin tabs #}
+<nav class="flex gap-1 border-b dark:border-border border-border-light mb-6 overflow-x-auto">
+    <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
+    <a href="/admin/agents" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Agents</a>
+    <a href="/admin/matches" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Matches</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/cards" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Cards</a>
+    <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
+    <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
+</nav>
 
-    <form method="get" action="/admin/matches" class="filter-form">
-        <label class="field field-inline">
-            <span>Format</span>
-            <select name="format">
-                <option value="">All</option>
-                {% for f in format_options %}
-                <option value="{{ f }}" {% if filters.format == f %}selected{% endif %}>{{ f }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="field field-inline">
-            <span>Opponent</span>
-            <input type="text" name="opponent" value="{{ filters.opponent }}" placeholder="Search...">
-        </label>
-        <label class="field field-inline">
-            <span>Result</span>
-            <select name="result">
-                <option value="">All</option>
-                <option value="wins" {% if filters.result == "wins" %}selected{% endif %}>Wins</option>
-                <option value="losses" {% if filters.result == "losses" %}selected{% endif %}>Losses</option>
-                <option value="draws" {% if filters.result == "draws" %}selected{% endif %}>Draws</option>
-            </select>
-        </label>
-        <label class="field field-inline">
-            <span>From</span>
-            <input type="date" name="date_from" value="{{ filters.date_from }}">
-        </label>
-        <label class="field field-inline">
-            <span>To</span>
-            <input type="date" name="date_to" value="{{ filters.date_to }}">
-        </label>
-        <button type="submit" class="btn btn-primary">Filter</button>
-        <a class="btn" href="/admin/matches">Clear</a>
-    </form>
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
+{% endif %}
+
+{# Filter bar #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md mb-6 overflow-hidden">
+    <div class="px-4 py-3 border-b dark:border-border border-border-light">
+        <form method="get" action="/admin/matches" class="flex flex-wrap gap-3 items-end">
+            <label class="flex flex-col gap-1">
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Format</span>
+                <select name="format" class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+                    <option value="">All</option>
+                    {% for f in format_options %}
+                    <option value="{{ f }}" {% if filters.format == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Opponent</span>
+                <input type="text" name="opponent" value="{{ filters.opponent }}" placeholder="Search..."
+                       class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Result</span>
+                <select name="result" class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+                    <option value="">All</option>
+                    <option value="wins" {% if filters.result == "wins" %}selected{% endif %}>Wins</option>
+                    <option value="losses" {% if filters.result == "losses" %}selected{% endif %}>Losses</option>
+                    <option value="draws" {% if filters.result == "draws" %}selected{% endif %}>Draws</option>
+                </select>
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">From</span>
+                <input type="date" name="date_from" value="{{ filters.date_from }}"
+                       class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+            </label>
+            <label class="flex flex-col gap-1">
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">To</span>
+                <input type="date" name="date_to" value="{{ filters.date_to }}"
+                       class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+            </label>
+            <div class="flex gap-2 items-end pb-px">
+                <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-1.5 text-sm font-medium transition-colors">Filter</button>
+                <a href="/admin/matches" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-1.5 text-sm no-underline transition-colors">Clear</a>
+            </div>
+        </form>
+    </div>
 
     {% if not match_list or not match_list.matches %}
-        <p>No matches found.</p>
+        <div class="px-4 py-6 text-sm dark:text-txt-secondary text-txt-secondary-light">No matches found.</div>
     {% else %}
-        <table class="data-table">
+    <div class="overflow-x-auto">
+        <table class="w-full">
             <thead>
-                <tr>
-                    <th>User</th>
-                    <th>Players</th>
-                    <th>Format</th>
-                    <th>Result</th>
-                    <th>Games</th>
-                    <th>Played</th>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">User</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Players</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Format</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Result</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Games</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Played</th>
                 </tr>
             </thead>
             <tbody>
                 {% for m in match_list.matches %}
-                <tr>
-                    <td>{{ m.user_email or ("UID " ~ m.user_id) }}</td>
-                    <td>
+                <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">{{ m.user_email or ("UID " ~ m.user_id) }}</td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">
                         {% if m.players|length >= 2 %}
                             {{ m.players[0] }} vs {{ m.players[1] }}
                         {% elif m.players %}
@@ -87,21 +94,21 @@
                             —
                         {% endif %}
                     </td>
-                    <td>{{ m.format_ or "—" }}</td>
-                    <td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-secondary text-txt-secondary-light">{{ m.format_ or "—" }}</td>
+                    <td class="px-4 py-2.5 text-sm">
                         {% if m.winner %}
                             {{ m.match_result or "—" }}
-                            <span class="muted">({{ m.winner }})</span>
+                            <span class="dark:text-txt-tertiary text-txt-secondary-light">({{ m.winner }})</span>
                         {% elif m.game_count > 0 %}
                             {{ m.match_result or "Draw" }}
                         {% else %}
                             —
                         {% endif %}
                     </td>
-                    <td>{{ m.game_count }}</td>
-                    <td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ m.game_count }}</td>
+                    <td class="px-4 py-2.5 text-sm">
                         {% if m.played_at %}
-                            <a href="/matches/{{ m.match_id }}">{{ m.played_at.strftime("%Y-%m-%d %H:%M") }}</a>
+                            <a href="/matches/{{ m.match_id }}" class="text-accent hover:text-accent-hover font-mono text-xs">{{ m.played_at.strftime("%Y-%m-%d %H:%M") }}</a>
                         {% else %}
                             —
                         {% endif %}
@@ -110,32 +117,35 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
 
-        {% set first_idx = (match_list.page - 1) * match_list.per_page + 1 %}
-        {% set last_idx = first_idx + match_list.matches|length - 1 %}
-        {% set has_prev = match_list.page > 1 %}
-        {% set has_next = last_idx < match_list.total %}
-        <nav class="pagination" aria-label="Match list pagination">
-            <p class="muted">
-                Showing {{ first_idx }}–{{ last_idx }} of
-                {{ match_list.total }} match{{ "" if match_list.total == 1 else "es" }}.
+    {% set first_idx = (match_list.page - 1) * match_list.per_page + 1 %}
+    {% set last_idx = first_idx + match_list.matches|length - 1 %}
+    {% set has_prev = match_list.page > 1 %}
+    {% set has_next = last_idx < match_list.total %}
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <nav class="flex items-center justify-between" aria-label="Match list pagination">
+            <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
+                Showing <span class="font-mono">{{ first_idx }}</span>&ndash;<span class="font-mono">{{ last_idx }}</span> of
+                <span class="font-mono">{{ match_list.total }}</span> match{{ "" if match_list.total == 1 else "es" }}.
             </p>
             {% if has_prev or has_next %}
-            <p>
+            <div class="flex items-center gap-2">
                 {% if has_prev %}
-                <a class="btn"
-                   href="/admin/matches?page={{ match_list.page - 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
-                   rel="prev">&larr; Previous</a>
+                <a href="/admin/matches?page={{ match_list.page - 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+                   rel="prev"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">&larr; Prev</a>
                 {% endif %}
-                <span class="muted">Page {{ match_list.page }}</span>
+                <span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ match_list.page }}</span>
                 {% if has_next %}
-                <a class="btn"
-                   href="/admin/matches?page={{ match_list.page + 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
-                   rel="next">Next &rarr;</a>
+                <a href="/admin/matches?page={{ match_list.page + 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+                   rel="next"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">Next &rarr;</a>
                 {% endif %}
-            </p>
+            </div>
             {% endif %}
         </nav>
+    </div>
     {% endif %}
-</section>
+</div>
 {% endblock %}

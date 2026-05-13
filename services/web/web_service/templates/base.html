@@ -1,63 +1,283 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark"
+      x-data="themeManager()"
+      :class="{ 'dark': isDark }"
+>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Deep Analysis{% endblock %}</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            base: { DEFAULT: '#0a0a0f', light: '#f4f4f8' },
+            surface: { DEFAULT: '#12121a', 2: '#1a1a24', 3: '#22222e', light: '#ffffff', 'light-2': '#f9f9fb', 'light-3': '#eeeef2' },
+            border: { DEFAULT: '#2a2a36', subtle: '#1e1e28', focus: '#4e7cff', light: '#dcdce4' },
+            txt: { primary: '#e8e8ed', secondary: '#8b8b9e', tertiary: '#5c5c6e', 'primary-light': '#1a1a2e', 'secondary-light': '#6b6b7e' },
+            accent: { DEFAULT: '#4e7cff', hover: '#6690ff', muted: 'rgba(78,124,255,0.1)' },
+            success: { DEFAULT: '#22c55e', muted: 'rgba(34,197,94,0.1)' },
+            danger: { DEFAULT: '#ef4444', muted: 'rgba(239,68,68,0.1)' },
+            warning: { DEFAULT: '#eab308', muted: 'rgba(234,179,8,0.1)' },
+            mtg: { white: '#f9e4b7', blue: '#5b8def', black: '#9b8ec2', red: '#e05555', green: '#3bb55a' },
+          },
+          fontFamily: {
+            ui: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        }
+      }
+    }
+    </script>
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script>
+    function themeManager() {
+        return {
+            isDark: true,
+            init() {
+                var stored = localStorage.getItem('theme');
+                if (stored === 'light') {
+                    this.isDark = false;
+                } else if (stored === 'system') {
+                    this.isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                } else {
+                    this.isDark = true;
+                }
+            },
+            toggle() {
+                this.isDark = !this.isDark;
+                localStorage.setItem('theme', this.isDark ? 'dark' : 'light');
+            }
+        }
+    }
+    </script>
 </head>
-<body>
-    <header class="site-header">
-        <div class="site-header-inner">
-            <a class="site-logo" href="{% if user %}/dashboard{% else %}/{% endif %}">Deep Analysis</a>
-            <nav class="site-nav">
+<body class="font-ui text-sm dark:bg-base bg-base-light dark:text-txt-primary text-txt-primary-light min-h-screen flex flex-col">
+    {# ── Header ── #}
+    <header class="fixed top-0 left-0 right-0 z-50 h-12 dark:bg-surface bg-surface-light border-b dark:border-border border-border-light flex items-center px-4">
+        <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-3">
                 {% if user %}
-                    {% if user.role != "admin" %}
-                    <a class="nav-link" href="/cards">Cards</a>
-                    {% endif %}
-                    <div class="nav-dropdown" tabindex="0">
-                        <button type="button" class="nav-dropdown-trigger" aria-haspopup="true">
-                            {% if user.role == "admin" %}
-                                <span class="nav-badge-admin">Admin</span>
-                                {{ user.email or "admin" }}
-                            {% else %}
-                                {{ user.display_name }}
-                            {% endif %}
-                            <span class="nav-dropdown-arrow" aria-hidden="true">&#9662;</span>
-                        </button>
-                        <ul class="nav-dropdown-menu" role="menu">
-                            {% if user.role != "admin" %}
-                            <li role="none"><a role="menuitem" href="/profile">Profile</a></li>
-                            <li role="none"><a role="menuitem" href="/profile/edit">Edit profile</a></li>
-                            <li role="none"><a role="menuitem" href="/settings/password">Change password</a></li>
-                            <li role="none"><a role="menuitem" href="/profile/agents">My agents</a></li>
-                            {% else %}
-                            <li role="none"><a role="menuitem" href="/admin/users">Admin panel</a></li>
-                            <li role="none" class="nav-dropdown-divider"></li>
-                            <li role="none"><a role="menuitem" href="/settings/password">Change password</a></li>
-                            {% endif %}
-                            <li role="none" class="nav-dropdown-divider"></li>
-                            <li role="none">
-                                <form method="post" action="/logout" class="nav-dropdown-form">
-                                    <button type="submit" role="menuitem" class="nav-dropdown-btn">Log out</button>
-                                </form>
-                            </li>
-                        </ul>
-                    </div>
+                {# Mobile hamburger #}
+                <button @click="$store.sidebar.toggle()"
+                        class="lg:hidden dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    </svg>
+                </button>
                 {% endif %}
-            </nav>
+                <a href="{% if user %}/dashboard{% else %}/{% endif %}"
+                   class="font-semibold text-[15px] dark:text-txt-primary text-txt-primary-light tracking-tight hover:no-underline">
+                    Deep Analysis
+                </a>
+            </div>
+            <div class="flex items-center gap-3">
+                {# Theme toggle #}
+                <button @click="toggle()" class="p-1.5 rounded-md dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 transition-colors" title="Toggle theme">
+                    <svg x-show="isDark" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                    </svg>
+                    <svg x-show="!isDark" x-cloak class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                    </svg>
+                </button>
+                {% if user %}
+                {# Profile dropdown #}
+                <div x-data="{ open: false }" class="relative">
+                    <button @click="open = !open" @click.outside="open = false"
+                            class="flex items-center gap-1.5 px-2 py-1 rounded-md text-[13px] dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 border border-transparent hover:dark:border-border hover:border-border-light transition-colors"
+                            aria-haspopup="true">
+                        {% if user.role == "admin" %}
+                            <span class="bg-accent-muted text-accent text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Admin</span>
+                            {{ user.email or "admin" }}
+                        {% else %}
+                            {{ user.display_name }}
+                        {% endif %}
+                        <svg class="w-3 h-3 transition-transform" :class="{ 'rotate-180': open }" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                        </svg>
+                    </button>
+                    <ul x-show="open" x-transition.opacity.duration.150ms
+                        class="absolute right-0 top-full mt-1 min-w-[180px] dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md shadow-lg py-1 z-50"
+                        role="menu">
+                        {% if user.role != "admin" %}
+                        <li role="none"><a role="menuitem" href="/profile" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">Profile</a></li>
+                        <li role="none"><a role="menuitem" href="/profile/edit" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">Edit profile</a></li>
+                        <li role="none"><a role="menuitem" href="/settings/password" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">Change password</a></li>
+                        <li role="none"><a role="menuitem" href="/profile/agents" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">My agents</a></li>
+                        {% else %}
+                        <li role="none"><a role="menuitem" href="/admin/users" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">Admin panel</a></li>
+                        <li role="none" class="border-t dark:border-border border-border-light my-1"></li>
+                        <li role="none"><a role="menuitem" href="/settings/password" class="block px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 no-underline">Change password</a></li>
+                        {% endif %}
+                        <li role="none" class="border-t dark:border-border border-border-light my-1"></li>
+                        <li role="none">
+                            <form method="post" action="/logout" class="m-0">
+                                <button type="submit" role="menuitem" class="w-full text-left px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 bg-transparent border-none cursor-pointer font-[inherit]">Log out</button>
+                            </form>
+                        </li>
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
         </div>
     </header>
 
-    <main class="site-main">
-        {% block content %}{% endblock %}
-    </main>
+    {% block body_layout %}
+    {% if user %}
+    {# ── Authenticated: sidebar + main ── #}
+    <div class="flex pt-12 min-h-screen"
+         x-data
+         x-init="
+            if (typeof $store.sidebar === 'undefined') {
+                Alpine.store('sidebar', {
+                    open: localStorage.getItem('sidebar_open') !== 'false',
+                    toggle() {
+                        this.open = !this.open;
+                        localStorage.setItem('sidebar_open', this.open);
+                    }
+                });
+            }
+         ">
+        {# Sidebar #}
+        <aside :class="$store.sidebar.open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:overflow-hidden'"
+               class="fixed lg:sticky top-12 left-0 z-40 h-[calc(100vh-3rem)] w-[220px] dark:bg-surface bg-surface-light border-r dark:border-border border-border-light overflow-y-auto transition-all duration-200 flex-shrink-0 lg:top-12"
+               @click.outside.window="if (window.innerWidth < 1024) $store.sidebar.open = false">
+            <nav class="py-4 px-3 flex flex-col gap-1">
+                {% if user.role != "admin" %}
+                {# User nav #}
+                <a href="/dashboard"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/dashboard' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+                    Overview
+                </a>
+                <a href="/cards"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/cards' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    Cards
+                </a>
+                {% endif %}
 
-    <footer class="site-footer">
-        <span>Deep Analysis · self-hosted match analytics</span>
-        <span class="site-version">v{{ app_version }}</span>
+                {% if user.role == "admin" %}
+                {# Admin nav #}
+                <p class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider dark:text-txt-tertiary text-txt-secondary-light">Admin</p>
+                <a href="/admin/users"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/users' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                    Users
+                </a>
+                <a href="/admin/agents"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/agents' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    Agents
+                </a>
+                <a href="/admin/matches"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/matches' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                    Matches
+                </a>
+                <a href="/admin/archetypes"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path.startswith('/admin/archetypes') %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
+                    Archetypes
+                </a>
+                <a href="/admin/cards"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/cards' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    Cards
+                </a>
+                <a href="/admin/invites"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/invites' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                    Invites
+                </a>
+                <a href="/admin/settings"
+                   class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
+                          {% if request and request.url and request.url.path == '/admin/settings' %}
+                          dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
+                          {% else %}
+                          dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
+                          {% endif %}">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Settings
+                </a>
+                {% endif %}
+            </nav>
+        </aside>
+
+        {# Backdrop for mobile sidebar #}
+        <div x-show="$store.sidebar.open"
+             x-transition.opacity
+             @click="$store.sidebar.open = false"
+             class="fixed inset-0 bg-black/50 z-30 lg:hidden"></div>
+
+        {# Main content #}
+        <main class="flex-1 min-w-0 px-4 sm:px-6 lg:px-8 py-6">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    {% else %}
+    {# ── Unauthenticated: no sidebar ── #}
+    <main class="flex-1 pt-12 px-4 sm:px-6 py-8">
+        {% block unauth_content %}{% endblock %}
+    </main>
+    {% endif %}
+    {% endblock %}
+
+    {# ── Footer ── #}
+    <footer class="border-t dark:border-border border-border-light dark:bg-surface bg-surface-light dark:text-txt-secondary text-txt-secondary-light text-xs py-3 px-6 text-center">
+        <span>Deep Analysis</span>
+        <span class="mx-1">&middot;</span>
+        <span>v{{ app_version }}</span>
     </footer>
 </body>
 </html>

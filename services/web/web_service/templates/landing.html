@@ -2,43 +2,59 @@
 
 {% block title %}Deep Analysis — MTGO Match Analytics{% endblock %}
 
-{% block content %}
-<div class="landing">
-    <section class="landing-hero">
-        <h1>Deep Analysis</h1>
-        <p class="landing-tagline">
-            Self-hosted match analytics for Magic: The Gathering Online
-        </p>
-    </section>
+{% block body_layout %}
+<main class="flex-1 pt-12">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 py-16 text-center">
+        <section class="mb-12">
+            <h1 class="text-4xl sm:text-5xl font-bold dark:text-txt-primary text-txt-primary-light mb-4 tracking-tight">
+                Deep Analysis
+            </h1>
+            <p class="text-lg dark:text-txt-secondary text-txt-secondary-light">
+                Self-hosted match analytics for Magic: The Gathering Online
+            </p>
+        </section>
 
-    <section class="landing-features">
-        <ul class="landing-feature-list">
-            <li>
-                <strong>Match tracking</strong> — automatically capture every
-                match from your MTGO game logs
-            </li>
-            <li>
-                <strong>Performance analytics</strong> — win rates, format
-                breakdowns, and opponent history at a glance
-            </li>
-            <li>
-                <strong>Format detection</strong> — Standard, Modern, Legacy,
-                Vintage, Pauper, and more identified automatically
-            </li>
-            <li>
-                <strong>Play/draw and sideboard stats</strong> — see how your
-                decisions before and after boarding affect your results
-            </li>
-        </ul>
-    </section>
+        <section class="grid sm:grid-cols-2 gap-4 mb-12 text-left">
+            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
+                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Match tracking</h3>
+                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    Automatically capture every match from your MTGO game logs
+                </p>
+            </div>
+            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
+                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Performance analytics</h3>
+                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    Win rates, format breakdowns, and opponent history at a glance
+                </p>
+            </div>
+            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
+                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Format detection</h3>
+                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    Standard, Modern, Legacy, Vintage, Pauper, and more identified automatically
+                </p>
+            </div>
+            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
+                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Play/draw and sideboard stats</h3>
+                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    See how your decisions before and after boarding affect your results
+                </p>
+            </div>
+        </section>
 
-    <section class="auth-card landing-cta">
-        <div class="form-actions">
-            <a href="/login" class="btn btn-primary">Sign in</a>
-            {% if registration_open %}
-                <a href="/register" class="btn btn-secondary">Register</a>
-            {% endif %}
-        </div>
-    </section>
-</div>
+        <section class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 inline-block">
+            <div class="flex gap-3 justify-center">
+                <a href="/login"
+                   class="bg-accent text-white hover:bg-accent-hover rounded-md px-6 py-2.5 text-sm font-medium no-underline transition-colors">
+                    Sign in
+                </a>
+                {% if registration_open %}
+                <a href="/register"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-6 py-2.5 text-sm no-underline transition-colors">
+                    Register
+                </a>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+</main>
 {% endblock %}
