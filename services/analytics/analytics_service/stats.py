@@ -75,17 +75,26 @@ class OpponentStat(BaseModel):
 def _classify_match(
     players: list[Any] | None,
     game_wins_by_player: dict[str, int],
+    mtgo_usernames: list[str] | None = None,
 ) -> tuple[str, str | None, int, int]:
     """Return (result, opponent, player_wins, player_losses).
 
-    - The "user" within the match is taken to be ``players[0]``.
-    - W/L/D is derived from per-game wins, not the match-level
-      ``winner`` column, so ties and unknowns produce the right shape.
+    If ``mtgo_usernames`` is provided, the user is identified by
+    matching against the player list. Falls back to ``players[0]``
+    when no username matches.
     """
     if not players:
         return "", None, 0, 0
-    user = str(players[0]) if players else None
-    opponent = str(players[1]) if len(players) > 1 else None
+    user: str | None = None
+    if mtgo_usernames:
+        names_lower = {n.lower() for n in mtgo_usernames}
+        for p in players:
+            if str(p).lower() in names_lower:
+                user = str(p)
+                break
+    if user is None:
+        user = str(players[0])
+    opponent = next((str(p) for p in players if str(p) != user), None)
     if user is None:
         return "", opponent, 0, 0
     user_wins = game_wins_by_player.get(user, 0)
@@ -97,6 +106,21 @@ def _classify_match(
     if user_wins < opp_wins:
         return "L", opponent, user_wins, opp_wins
     return "D", opponent, user_wins, opp_wins
+
+
+async def _load_mtgo_usernames(db: AsyncSession, user_id: int) -> list[str] | None:
+    try:
+        row = (
+            await db.execute(
+                text("SELECT mtgo_usernames FROM auth.users WHERE id = :uid"),
+                {"uid": user_id},
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        return None
+    if row and isinstance(row, list):
+        return row
+    return None
 
 
 async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
@@ -149,13 +173,20 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
     return out
 
 
-def _summarize(matches: list[dict[str, Any]]) -> StatsSummary:
+def _summarize(
+    matches: list[dict[str, Any]],
+    mtgo_usernames: list[str] | None = None,
+) -> StatsSummary:
     if not matches:
         return StatsSummary()
     wins = losses = draws = 0
     recent: list[RecentMatch] = []
     for m in matches:
-        result, opponent, pw, pl = _classify_match(m["players"], m["wins_by_player"])
+        result, opponent, pw, pl = _classify_match(
+            m["players"],
+            m["wins_by_player"],
+            mtgo_usernames,
+        )
         if result == "W":
             wins += 1
         elif result == "L":
@@ -192,7 +223,8 @@ async def get_summary(
     db: AsyncSession = Depends(get_session),
 ) -> StatsSummary:
     matches = await _load_user_matches(db, user.user_id)
-    return _summarize(matches)
+    names = await _load_mtgo_usernames(db, user.user_id)
+    return _summarize(matches, names)
 
 
 @router.get("/by-format", response_model=list[FormatStat])
@@ -203,12 +235,17 @@ async def get_by_format(
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
+    names = await _load_mtgo_usernames(db, user.user_id)
     buckets: dict[str, dict[str, int]] = {}
     for m in matches:
         fmt = m["format"] or "Unknown"
         bucket = buckets.setdefault(fmt, {"matches": 0, "wins": 0, "losses": 0, "draws": 0})
         bucket["matches"] += 1
-        result, _opp, _pw, _pl = _classify_match(m["players"], m["wins_by_player"])
+        result, _opp, _pw, _pl = _classify_match(
+            m["players"],
+            m["wins_by_player"],
+            names,
+        )
         if result == "W":
             bucket["wins"] += 1
         elif result == "L":
@@ -240,9 +277,14 @@ async def get_by_opponent(
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
+    names = await _load_mtgo_usernames(db, user.user_id)
     buckets: dict[str, dict[str, int]] = {}
     for m in matches:
-        result, opponent, _pw, _pl = _classify_match(m["players"], m["wins_by_player"])
+        result, opponent, _pw, _pl = _classify_match(
+            m["players"],
+            m["wins_by_player"],
+            names,
+        )
         if not opponent:
             continue
         bucket = buckets.setdefault(opponent, {"matches": 0, "wins": 0, "losses": 0, "draws": 0})
@@ -268,3 +310,33 @@ async def get_by_opponent(
             )
         )
     return out
+
+
+class UsernameSuggestion(BaseModel):
+    username: str
+    match_count: int
+
+
+@router.get("/username-suggestion", response_model=list[UsernameSuggestion])
+async def get_username_suggestion(
+    user: AuthenticatedUser = Depends(require_user),
+    db: AsyncSession = Depends(get_session),
+) -> list[UsernameSuggestion]:
+    """Count player-name frequency across a user's matches and return
+    the most common names as MTGO username suggestions."""
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT name, COUNT(*) AS n
+                FROM parser.matches, jsonb_array_elements_text(players) AS name
+                WHERE user_id = :user_id
+                GROUP BY name
+                ORDER BY n DESC
+                LIMIT 5
+                """
+            ),
+            {"user_id": user.user_id},
+        )
+    ).all()
+    return [UsernameSuggestion(username=str(name), match_count=int(n)) for name, n in rows]

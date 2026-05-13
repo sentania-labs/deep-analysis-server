@@ -53,6 +53,7 @@ def _user_view(u: User) -> UserView:
         role=u.role,
         disabled=u.disabled,
         must_change_password=u.must_change_password,
+        mtgo_usernames=u.mtgo_usernames,
         created_at=u.created_at,
         updated_at=u.updated_at,
     )

@@ -14,6 +14,13 @@
             <input type="email" name="email" autocomplete="email" required autofocus
                    value="{{ email or '' }}">
         </label>
+        <label class="field">
+            <span>MTGO Username(s)</span>
+            <input type="text" name="mtgo_usernames"
+                   placeholder="e.g. sentania, MyAltAccount"
+                   value="{{ mtgo_usernames_str or '' }}">
+            <small class="field-hint">Comma-separated. Used to identify you in match results.</small>
+        </label>
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">Save</button>
             <a href="/profile" class="btn btn-secondary">Cancel</a>
