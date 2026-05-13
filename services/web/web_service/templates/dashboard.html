@@ -10,16 +10,6 @@
     {% else %}
         <p>Welcome, user #{{ user.user_id }}.</p>
     {% endif %}
-    <ul class="dashboard-actions">
-        {% if user.role != "admin" %}
-        <li><a href="/profile">Profile</a></li>
-        <li><a href="/profile/agents">My agents</a></li>
-        {% endif %}
-        <li><a href="/settings/password">Change password</a></li>
-        {% if user.role == "admin" %}
-        <li><a href="/admin/users">Admin: users</a></li>
-        {% endif %}
-    </ul>
 </section>
 
 {% if stats_error|default(false) or stats_summary is not defined or stats_summary is none %}
@@ -43,46 +33,127 @@
             </li>
             <li><strong>Win rate:</strong> {{ "%.1f"|format(stats_summary.win_rate) }}%</li>
         </ul>
-
-        <h3>Recent matches</h3>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Opponent</th>
-                    <th>Format</th>
-                    <th>Result</th>
-                    <th>Score</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for match in stats_summary.recent_matches %}
-                <tr>
-                    <td>
-                        <a href="/matches/{{ match.match_id }}">
-                            {{ match.played_at.strftime("%Y-%m-%d") if match.played_at else match.match_id[:8] }}
-                        </a>
-                    </td>
-                    <td>{{ match.opponent or "—" }}</td>
-                    <td>{{ match.format_ or "—" }}</td>
-                    <td>
-                        {% if match.result == "W" %}
-                            <span class="result-badge result-win">W</span>
-                        {% elif match.result == "L" %}
-                            <span class="result-badge result-loss">L</span>
-                        {% elif match.result == "D" %}
-                            <span class="result-badge result-draw">D</span>
-                        {% else %}
-                            —
-                        {% endif %}
-                    </td>
-                    <td>{{ match.player_wins }}-{{ match.player_losses }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
     {% endif %}
 </section>
+
+{% if stats_summary.total_matches > 0 %}
+<section class="panel">
+    <h2>Match history</h2>
+    <form method="get" action="/dashboard" class="filter-form">
+        <input type="hidden" name="per_page" value="{{ per_page }}">
+        <div class="filter-row">
+            <label class="filter-field">
+                <span>Format</span>
+                <select name="format">
+                    <option value="">All</option>
+                    {% for f in ["Modern", "Standard", "Pioneer", "Legacy", "Vintage", "Pauper", "Unknown"] %}
+                    <option value="{{ f }}"
+                        {% if filters.format == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="filter-field">
+                <span>Opponent</span>
+                <input type="text" name="opponent" placeholder="Search..."
+                       value="{{ filters.opponent or '' }}">
+            </label>
+            <label class="filter-field">
+                <span>From</span>
+                <input type="date" name="date_from"
+                       value="{{ filters.date_from or '' }}">
+            </label>
+            <label class="filter-field">
+                <span>To</span>
+                <input type="date" name="date_to"
+                       value="{{ filters.date_to or '' }}">
+            </label>
+            <label class="filter-field">
+                <span>Result</span>
+                <select name="result">
+                    <option value="">All</option>
+                    <option value="wins"
+                        {% if filters.result == "wins" %}selected{% endif %}>Wins</option>
+                    <option value="losses"
+                        {% if filters.result == "losses" %}selected{% endif %}>Losses</option>
+                    <option value="draws"
+                        {% if filters.result == "draws" %}selected{% endif %}>Draws</option>
+                </select>
+            </label>
+            <div class="filter-actions">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                <a href="/dashboard" class="btn btn-secondary">Clear</a>
+            </div>
+        </div>
+    </form>
+
+    {% if match_list and match_list.matches %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Opponent</th>
+                <th>Format</th>
+                <th>Result</th>
+                <th>Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for match in match_list.matches %}
+            <tr>
+                <td>
+                    <a href="/matches/{{ match.match_id }}">
+                        {{ match.played_at.strftime("%Y-%m-%d") if match.played_at else match.match_id[:8] }}
+                    </a>
+                </td>
+                <td>{{ match.opponent or "&mdash;" }}</td>
+                <td>{{ match.format_ or "&mdash;" }}</td>
+                <td>
+                    {% if match.result == "W" %}
+                        <span class="result-badge result-win">W</span>
+                    {% elif match.result == "L" %}
+                        <span class="result-badge result-loss">L</span>
+                    {% elif match.result == "D" %}
+                        <span class="result-badge result-draw">D</span>
+                    {% else %}
+                        &mdash;
+                    {% endif %}
+                </td>
+                <td>{{ match.player_wins }}-{{ match.player_losses }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% set first_idx = (page - 1) * per_page + 1 %}
+    {% set last_idx = first_idx + match_list.matches|length - 1 %}
+    {% set has_prev = page > 1 %}
+    {% set has_next = last_idx < match_list.total %}
+    <nav class="pagination" aria-label="Match list pagination">
+        <p class="muted">
+            Showing {{ first_idx }}&ndash;{{ last_idx }} of
+            {{ match_list.total }} match{{ "" if match_list.total == 1 else "es" }}.
+        </p>
+        {% if has_prev or has_next %}
+        <p>
+            {% if has_prev %}
+            <a class="btn"
+               href="/dashboard?page={{ page - 1 }}&per_page={{ per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+               rel="prev">&larr; Previous</a>
+            {% endif %}
+            <span class="muted">Page {{ page }}</span>
+            {% if has_next %}
+            <a class="btn"
+               href="/dashboard?page={{ page + 1 }}&per_page={{ per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+               rel="next">Next &rarr;</a>
+            {% endif %}
+        </p>
+        {% endif %}
+    </nav>
+    {% elif match_list %}
+        <p class="muted">No matches found for the selected filters.</p>
+    {% endif %}
+</section>
+{% endif %}
 
 {% if format_stats|default([]) %}
 <section class="panel">
@@ -183,5 +254,42 @@
 .result-win { background: #d4edda; color: #155724; }
 .result-loss { background: #f8d7da; color: #721c24; }
 .result-draw { background: #fff3cd; color: #856404; }
+.filter-form { margin-bottom: 16px; }
+.filter-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+.filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.filter-field select,
+.filter-field input[type="text"],
+.filter-field input[type="date"] {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+}
+.filter-field select:focus,
+.filter-field input:focus {
+    outline: 2px solid var(--focus);
+    outline-offset: 0;
+    border-color: var(--focus);
+}
+.filter-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    padding-bottom: 1px;
+}
 </style>
 {% endblock %}

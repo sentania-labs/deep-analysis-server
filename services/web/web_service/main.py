@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Form, Query, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -184,11 +184,22 @@ async def login_submit(
     return redirect
 
 
+_DASHBOARD_DEFAULT_PER_PAGE = 20
+_DASHBOARD_MAX_PER_PAGE = 100
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=_DASHBOARD_MAX_PER_PAGE)] = _DASHBOARD_DEFAULT_PER_PAGE,
+    format: Annotated[str, Query(alias="format")] = "",
+    opponent: Annotated[str, Query()] = "",
+    result: Annotated[str, Query()] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
@@ -196,6 +207,7 @@ async def dashboard(
     stats_summary: Any = None
     format_stats: list[Any] = []
     opponent_stats: list[Any] = []
+    match_list: Any = None
     stats_error = False
     try:
         stats_summary = await analytics_client.get_stats_summary(
@@ -207,12 +219,34 @@ async def dashboard(
         opponent_stats = await analytics_client.get_stats_by_opponent(
             settings.analytics_service_url, user.token
         )
+        match_list = await analytics_client.get_match_list(
+            settings.analytics_service_url,
+            user.token,
+            page=page,
+            per_page=per_page,
+            format_filter=format or None,
+            opponent=opponent or None,
+            result=result or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+        )
     except analytics_client.AnalyticsForbidden:
         # Treat as logged-out: bounce to /login so the user can re-auth.
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics stats call failed; rendering dashboard with error banner")
         stats_error = True
+
+    # Filters dict to persist across pagination
+    filters = {
+        "format": format,
+        "opponent": opponent,
+        "result": result,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    # Build query string for pagination links
+    filter_qs = "&".join(f"{k}={v}" for k, v in filters.items() if v)
 
     return templates.TemplateResponse(
         request,
@@ -222,7 +256,12 @@ async def dashboard(
             "stats_summary": stats_summary,
             "format_stats": format_stats,
             "opponent_stats": opponent_stats,
+            "match_list": match_list,
             "stats_error": stats_error,
+            "page": page,
+            "per_page": per_page,
+            "filters": filters,
+            "filter_qs": filter_qs,
         },
     )
 
@@ -373,6 +412,31 @@ async def profile_edit_form(
             "mtgo_usernames_str": names_str,
             "error": None,
         },
+    )
+
+
+@app.get("/profile/username-suggestions")
+async def profile_username_suggestions(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """JSON endpoint returning MTGO username suggestions from match data."""
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+    try:
+        suggestions = await analytics_client.get_username_suggestions(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return JSONResponse([], status_code=status.HTTP_401_UNAUTHORIZED)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /stats/username-suggestion call failed")
+        return JSONResponse([], status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return JSONResponse(
+        [{"username": s.username, "match_count": s.match_count} for s in suggestions]
     )
 
 

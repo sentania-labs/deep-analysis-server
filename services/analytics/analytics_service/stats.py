@@ -14,10 +14,10 @@ this module is the only consumer that needs to be updated.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -340,3 +340,100 @@ async def get_username_suggestion(
         )
     ).all()
     return [UsernameSuggestion(username=str(name), match_count=int(n)) for name, n in rows]
+
+
+# ---------------------------------------------------------------------------
+# Paginated match listing with filters
+# ---------------------------------------------------------------------------
+
+_MATCHES_DEFAULT_PER_PAGE = 20
+_MATCHES_MAX_PER_PAGE = 100
+
+
+class MatchListItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    match_id: str
+    played_at: datetime | None = None
+    opponent: str | None = None
+    result: str = ""
+    format_: str | None = Field(default=None, alias="format")
+    player_wins: int = 0
+    player_losses: int = 0
+
+
+class MatchListResponse(BaseModel):
+    matches: list[MatchListItem] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    per_page: int = _MATCHES_DEFAULT_PER_PAGE
+
+
+@router.get("/matches", response_model=MatchListResponse)
+async def list_matches(
+    user: AuthenticatedUser = Depends(require_user),
+    db: AsyncSession = Depends(get_session),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=_MATCHES_MAX_PER_PAGE)] = _MATCHES_DEFAULT_PER_PAGE,
+    format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    result: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+) -> MatchListResponse:
+    """Paginated, filterable match listing for the dashboard."""
+    all_matches = await _load_user_matches(db, user.user_id)
+    names = await _load_mtgo_usernames(db, user.user_id)
+
+    # Classify all matches so we can filter by result / opponent
+    classified: list[tuple[dict[str, Any], str, str | None, int, int]] = []
+    for m in all_matches:
+        r, opp, pw, pl = _classify_match(m["players"], m["wins_by_player"], names)
+        classified.append((m, r, opp, pw, pl))
+
+    # Apply filters
+    if format and format.lower() != "all":
+        classified = [
+            (m, r, opp, pw, pl)
+            for m, r, opp, pw, pl in classified
+            if (m["format"] or "Unknown").lower() == format.lower()
+        ]
+    if opponent:
+        needle = opponent.lower()
+        classified = [
+            (m, r, opp, pw, pl) for m, r, opp, pw, pl in classified if opp and needle in opp.lower()
+        ]
+    if result and result.lower() != "all":
+        result_map = {"wins": "W", "losses": "L", "draws": "D"}
+        target = result_map.get(result.lower(), result.upper())
+        classified = [(m, r, opp, pw, pl) for m, r, opp, pw, pl in classified if r == target]
+    if date_from:
+        classified = [
+            (m, r, opp, pw, pl)
+            for m, r, opp, pw, pl in classified
+            if m["played_at"] and m["played_at"].date() >= date_from
+        ]
+    if date_to:
+        classified = [
+            (m, r, opp, pw, pl)
+            for m, r, opp, pw, pl in classified
+            if m["played_at"] and m["played_at"].date() <= date_to
+        ]
+
+    total = len(classified)
+    offset = (page - 1) * per_page
+    page_items = classified[offset : offset + per_page]
+
+    items = [
+        MatchListItem(
+            match_id=str(m["id"]),
+            played_at=m["played_at"],
+            opponent=opp,
+            result=r,
+            format=m["format"],
+            player_wins=pw,
+            player_losses=pl,
+        )
+        for m, r, opp, pw, pl in page_items
+    ]
+    return MatchListResponse(matches=items, total=total, page=page, per_page=per_page)

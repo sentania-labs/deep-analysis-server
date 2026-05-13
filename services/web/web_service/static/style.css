@@ -77,6 +77,79 @@ p  { margin: 0 0 12px; }
 
 .nav-logout { margin: 0; }
 
+/* Profile dropdown */
+.nav-dropdown {
+    position: relative;
+}
+.nav-dropdown-trigger {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.nav-dropdown-trigger:hover,
+.nav-dropdown:focus-within .nav-dropdown-trigger {
+    color: var(--text);
+    border-color: var(--border);
+    background: var(--bg);
+}
+.nav-dropdown-arrow {
+    font-size: 10px;
+    line-height: 1;
+}
+.nav-dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    min-width: 180px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(17, 24, 33, 0.1);
+    list-style: none;
+    padding: 4px 0;
+    margin: 0;
+    z-index: 100;
+}
+.nav-dropdown:focus-within .nav-dropdown-menu {
+    display: block;
+}
+.nav-dropdown-menu a,
+.nav-dropdown-btn {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text);
+    text-decoration: none;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+.nav-dropdown-menu a:hover,
+.nav-dropdown-btn:hover {
+    background: var(--bg);
+    text-decoration: none;
+}
+.nav-dropdown-divider {
+    border-top: 1px solid var(--border);
+    margin: 4px 0;
+}
+.nav-dropdown-form {
+    margin: 0;
+}
+
 .linklike {
     background: none;
     border: none;
@@ -168,4 +241,14 @@ input:focus { outline: 2px solid var(--focus); outline-offset: 0; border-color: 
     padding: 8px 12px;
     font-size: 13px;
     margin: 0 0 14px;
+}
+
+.btn-secondary {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+.btn-secondary:hover {
+    background: var(--bg);
+    text-decoration: none;
 }

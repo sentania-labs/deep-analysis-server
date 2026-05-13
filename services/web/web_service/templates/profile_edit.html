@@ -16,15 +16,70 @@
         </label>
         <label class="field">
             <span>MTGO Username(s)</span>
-            <input type="text" name="mtgo_usernames"
+            <input type="text" name="mtgo_usernames" id="mtgo-usernames"
                    placeholder="e.g. sentania, MyAltAccount"
                    value="{{ mtgo_usernames_str or '' }}">
             <small class="field-hint">Comma-separated. Used to identify you in match results.</small>
         </label>
+        <div class="field-actions">
+            <button type="button" class="btn btn-secondary btn-sm"
+                    id="detect-usernames-btn"
+                    title="Detect MTGO usernames from your uploaded match data">
+                Detect from matches
+            </button>
+            <span id="detect-status" class="field-hint"></span>
+        </div>
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">Save</button>
             <a href="/profile" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
 </section>
+
+<script>
+(function() {
+    var btn = document.getElementById('detect-usernames-btn');
+    var input = document.getElementById('mtgo-usernames');
+    var statusEl = document.getElementById('detect-status');
+    if (!btn || !input) return;
+
+    btn.addEventListener('click', function() {
+        btn.disabled = true;
+        statusEl.textContent = 'Detecting...';
+        fetch('/profile/username-suggestions')
+            .then(function(resp) {
+                if (!resp.ok) throw new Error('Request failed');
+                return resp.json();
+            })
+            .then(function(data) {
+                if (data.length === 0) {
+                    statusEl.textContent = 'No usernames found in match data.';
+                } else {
+                    var names = data.map(function(s) { return s.username; });
+                    input.value = names.join(', ');
+                    statusEl.textContent = 'Found ' + data.length + ' username(s).';
+                }
+            })
+            .catch(function() {
+                statusEl.textContent = 'Could not detect usernames.';
+            })
+            .finally(function() {
+                btn.disabled = false;
+            });
+    });
+})();
+</script>
+
+<style>
+.field-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: -8px;
+}
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+</style>
 {% endblock %}

@@ -538,6 +538,118 @@ async def update_match_format(base_url: str, token: str, match_id: str, format_:
     return True
 
 
+@dataclass
+class MatchListItem:
+    match_id: str
+    played_at: datetime | None
+    opponent: str | None
+    result: str
+    format_: str | None
+    player_wins: int
+    player_losses: int
+
+
+@dataclass
+class MatchListResponse:
+    matches: list[MatchListItem]
+    total: int
+    page: int
+    per_page: int
+
+
+def _to_match_list_item(payload: dict[str, Any]) -> MatchListItem:
+    return MatchListItem(
+        match_id=str(payload.get("match_id", "")),
+        played_at=_parse_dt(payload.get("played_at")),
+        opponent=payload.get("opponent"),
+        result=str(payload.get("result") or ""),
+        format_=payload.get("format"),
+        player_wins=int(payload.get("player_wins") or 0),
+        player_losses=int(payload.get("player_losses") or 0),
+    )
+
+
+async def get_match_list(
+    base_url: str,
+    token: str,
+    *,
+    page: int = 1,
+    per_page: int = 20,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    result: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> MatchListResponse:
+    params: dict[str, Any] = {"page": page, "per_page": per_page}
+    if format_filter and format_filter.lower() != "all":
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if result and result.lower() != "all":
+        params["result"] = result
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/matches",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /stats/matches transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/matches returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/matches returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return MatchListResponse(
+        matches=[_to_match_list_item(m) for m in data.get("matches", [])],
+        total=int(data.get("total", 0)),
+        page=int(data.get("page", 1)),
+        per_page=int(data.get("per_page", 20)),
+    )
+
+
+@dataclass
+class UsernameSuggestionItem:
+    username: str
+    match_count: int
+
+
+async def get_username_suggestions(base_url: str, token: str) -> list[UsernameSuggestionItem]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/username-suggestion",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/username-suggestion transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /stats/username-suggestion returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/username-suggestion returned {resp.status_code}: {resp.text}"
+        )
+    return [
+        UsernameSuggestionItem(
+            username=str(row.get("username", "")),
+            match_count=int(row.get("match_count", 0)),
+        )
+        for row in resp.json()
+    ]
+
+
 async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatItem]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
