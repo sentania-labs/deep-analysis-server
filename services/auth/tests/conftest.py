@@ -30,6 +30,7 @@ from alembic import command
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ROOT_ALEMBIC_INI = REPO_ROOT / "alembic.ini"
 AUTH_ALEMBIC_INI = REPO_ROOT / "services" / "auth" / "alembic.ini"
+INGEST_ALEMBIC_INI = REPO_ROOT / "services" / "ingest" / "alembic.ini"
 
 DEFAULT_DB_URL = "postgresql+psycopg://postgres:postgres@localhost:5432/deep_analysis"
 
@@ -100,8 +101,15 @@ def _migrate(_keys: Any, sync_db_url: str) -> Iterator[None]:
         )
         auth_cfg.set_main_option("sqlalchemy.url", sync_db_url)
 
+        ingest_cfg = Config(str(INGEST_ALEMBIC_INI))
+        ingest_cfg.set_main_option(
+            "script_location", str(REPO_ROOT / "services" / "ingest" / "alembic")
+        )
+        ingest_cfg.set_main_option("sqlalchemy.url", sync_db_url)
+
         command.upgrade(root_cfg, "head")
         command.upgrade(auth_cfg, "head")
+        command.upgrade(ingest_cfg, "head")
         yield
     finally:
         eng.dispose()

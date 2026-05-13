@@ -79,6 +79,7 @@ class AgentHeartbeatResponse(BaseModel):
     status: str
     registered_at: datetime
     revoked: bool
+    upload_count: int = 0
 
 
 class UserView(BaseModel):
