@@ -102,7 +102,6 @@ echo ">> pushing compose file to $DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
 scp "${SCP_OPTS[@]}" "$PROD_COMPOSE" "$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
 
 echo ">> pushing gateway Caddyfile to $DEPLOY_HOST:$DEPLOY_PATH/gateway/"
-ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "mkdir -p $DEPLOY_PATH/gateway"
 scp "${SCP_OPTS[@]}" "$SCRIPT_DIR/../gateway/Caddyfile" \
     "$DEPLOY_HOST:$DEPLOY_PATH/gateway/Caddyfile"
 
