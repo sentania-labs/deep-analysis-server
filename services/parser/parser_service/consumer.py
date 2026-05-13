@@ -30,8 +30,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
 from common.format_inference import collect_card_names, infer_format_for_match
 from common.redis_client import EventPublisher
+from parser_service import analytics_client
 from parser_service.parsing import LogParser, ParsedMatch
 from parser_service.persistence import persist_match
+from parser_service.settings import get_settings as get_parser_settings
 from parser_service.storage import RawFileNotFoundError, RawFileTooLargeError, read_raw
 
 _log = logging.getLogger("parser.consumer")
@@ -145,7 +147,11 @@ class ParserConsumer:
                 await session.rollback()
                 return parsed
 
-            if not match.format:
+            # Skip format inference when an admin has manually set the
+            # format — format_source='manual' is authoritative and must
+            # survive both reparsing and inference.
+            card_names: list[str] = []
+            if not match.format and match.format_source != "manual":
                 try:
                     card_names = collect_card_names(parsed)
                     if card_names:
@@ -156,6 +162,22 @@ class ParserConsumer:
                             await session.commit()
                 except Exception:  # noqa: BLE001
                     _log.debug("format inference failed sha=%s", sha256)
+
+            # Archetype classification — best-effort, never fails the parse.
+            try:
+                if not card_names:
+                    card_names = collect_card_names(parsed)
+                if card_names:
+                    settings = get_parser_settings()
+                    archetype_id = await analytics_client.classify(
+                        settings.analytics_service_url,
+                        card_names,
+                    )
+                    if archetype_id and match.archetype_id != archetype_id:
+                        match.archetype_id = archetype_id
+                        await session.commit()
+            except Exception:  # noqa: BLE001
+                _log.debug("archetype classification failed sha=%s", sha256)
 
         out: MatchParsedPayload = {
             "match_id": str(match.id),

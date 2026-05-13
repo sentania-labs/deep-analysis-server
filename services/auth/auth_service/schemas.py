@@ -146,6 +146,11 @@ class StaleCleanupResponse(BaseModel):
     cutoff_date: str
 
 
+class RotateKeyResponse(BaseModel):
+    agent_id: uuid.UUID
+    api_token: str
+
+
 class RevokeSessionsResponse(BaseModel):
     revoked_count: int
 
@@ -182,6 +187,7 @@ class CreateInviteRequest(BaseModel):
         le=INVITE_TOKEN_MAX_HOURS,
     )
     max_uses: int = Field(default=1, ge=0, le=10000)
+    role: Literal["user", "admin"] = "user"
 
 
 class CreateInviteResponse(BaseModel):
@@ -192,6 +198,7 @@ class CreateInviteResponse(BaseModel):
     expires_at: datetime
     created_at: datetime
     max_uses: int
+    role: str
 
 
 class InviteView(BaseModel):
@@ -202,6 +209,7 @@ class InviteView(BaseModel):
     expires_at: datetime
     max_uses: int
     use_count: int
+    role: str
 
 
 class InviteListView(BaseModel):

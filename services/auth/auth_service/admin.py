@@ -20,7 +20,12 @@ from auth_service.deps import AuthenticatedUser, require_admin, require_root_adm
 from auth_service.models import AgentRegistration, InviteToken, ServerSetting, User
 from auth_service.models import Session as SessionRow
 from auth_service.passwords import hash_password
-from auth_service.registration import generate_invite_token, hash_invite_token
+from auth_service.registration import (
+    generate_api_token,
+    generate_invite_token,
+    hash_api_token,
+    hash_invite_token,
+)
 from auth_service.schemas import (
     AgentListView,
     AgentView,
@@ -32,6 +37,7 @@ from auth_service.schemas import (
     RegistrationModeView,
     ResetPasswordResponse,
     RevokeSessionsResponse,
+    RotateKeyResponse,
     SetRegistrationModeRequest,
     StaleCleanupResponse,
     TunablesView,
@@ -292,6 +298,53 @@ async def revoke_agent(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/agents/{agent_id}/rotate-key", response_model=RotateKeyResponse)
+async def rotate_agent_key(
+    agent_id: uuid.UUID,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> RotateKeyResponse:
+    """Generate a new API token for an agent, replacing the old one.
+
+    The new plaintext token is returned once — subsequent reads show
+    only the hashed form.  This is the admin equivalent of a password
+    reset for an agent.
+    """
+    agent = (
+        await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent_id))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise _error(status.HTTP_404_NOT_FOUND, "agent_not_found")
+
+    new_token = generate_api_token()
+    agent.api_token_hash = hash_api_token(new_token)
+    await db.commit()
+    return RotateKeyResponse(agent_id=agent.id, api_token=new_token)
+
+
+@router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    agent_id: uuid.UUID,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Permanently delete an agent registration.
+
+    The ``ingest.user_uploads`` FK to ``auth.agent_registrations``
+    carries ``ON DELETE CASCADE``, so associated upload rows are
+    removed automatically by the database.
+    """
+    agent = (
+        await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent_id))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise _error(status.HTTP_404_NOT_FOUND, "agent_not_found")
+
+    await db.delete(agent)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ---------------------------------------------------------------------------
 # Server settings — W3.6.3 (registration mode toggle, UID=1 only)
 # ---------------------------------------------------------------------------
@@ -381,6 +434,7 @@ def _invite_view(row: InviteToken, creator_email: str | None) -> InviteView:
         expires_at=row.expires_at,
         max_uses=row.max_uses if row.max_uses is not None else 1,
         use_count=row.use_count or 0,
+        role=row.role,
     )
 
 
@@ -413,6 +467,7 @@ async def create_invite(
         created_at=now,
         expires_at=expires_at,
         max_uses=stored_max_uses,
+        role=body.role,
     )
     db.add(invite)
     await db.commit()
@@ -423,6 +478,7 @@ async def create_invite(
         expires_at=invite.expires_at,
         created_at=invite.created_at,
         max_uses=invite.max_uses,
+        role=invite.role,
     )
 
 
