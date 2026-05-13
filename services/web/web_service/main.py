@@ -1261,6 +1261,237 @@ async def admin_user_reset_password(
     )
 
 
+@app.post("/admin/users/create")
+async def admin_user_create(
+    request: Request,
+    email: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+    role: Annotated[str, Form()] = "user",
+    must_change_password: Annotated[str, Form()] = "",
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    se, sp = email.strip(), password.strip()
+    if not se or not sp:
+        users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error="Email and password are required.",
+            result=None,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        cu, err = await auth_client.admin_create_user(
+            settings.auth_service_url,
+            user.token,
+            email=se,
+            password=sp,
+            role=role if role in ("user", "admin") else "user",
+            must_change_password=bool(must_change_password),
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        return Response(
+            content="Authentication service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if cu is not None:
+        return RedirectResponse(url="/admin/users", status_code=status.HTTP_303_SEE_OTHER)
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    msg = (
+        "A user with that email already exists."
+        if err == "email_already_exists"
+        else "Could not create user."
+    )
+    sc = status.HTTP_409_CONFLICT if err == "email_already_exists" else status.HTTP_400_BAD_REQUEST
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=msg,
+        result=None,
+        status_code=sc,
+    )
+
+
+@app.post("/admin/users/{user_id}/toggle-role")
+async def admin_user_toggle_role(
+    user_id: int,
+    request: Request,
+    new_role: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if new_role not in ("user", "admin"):
+        return RedirectResponse(
+            url=f"/admin/users?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    try:
+        updated, err = await auth_client.admin_update_user(
+            settings.auth_service_url, user.token, user_id, role=new_role
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        return Response(
+            content="Authentication service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if updated is not None:
+        return RedirectResponse(
+            url=f"/admin/users?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    if err == "user_not_found":
+        msg, sc = "That user no longer exists.", status.HTTP_404_NOT_FOUND
+    elif err == "cannot_demote_last_admin":
+        msg, sc = "Cannot demote the last admin.", status.HTTP_400_BAD_REQUEST
+    else:
+        msg, sc = "Could not update role.", status.HTTP_400_BAD_REQUEST
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=msg,
+        result=None,
+        status_code=sc,
+    )
+
+
+@app.post("/admin/users/{user_id}/toggle-disabled")
+async def admin_user_toggle_disabled(
+    user_id: int,
+    request: Request,
+    disabled: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        updated, err = await auth_client.admin_update_user(
+            settings.auth_service_url, user.token, user_id, disabled=(disabled == "true")
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        return Response(
+            content="Authentication service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if updated is not None:
+        return RedirectResponse(
+            url=f"/admin/users?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    if err == "user_not_found":
+        msg, sc = "That user no longer exists.", status.HTTP_404_NOT_FOUND
+    elif err == "cannot_disable_self":
+        msg, sc = "You cannot disable yourself.", status.HTTP_400_BAD_REQUEST
+    else:
+        msg, sc = "Could not update user.", status.HTTP_400_BAD_REQUEST
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=msg,
+        result=None,
+        status_code=sc,
+    )
+
+
+@app.post("/admin/users/{user_id}/revoke-sessions")
+async def admin_user_revoke_sessions(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        count, err = await auth_client.admin_revoke_user_sessions(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        return Response(
+            content="Authentication service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    if count is not None:
+        return _render_admin_users_sync(
+            request,
+            user,
+            users,
+            total,
+            page=page,
+            per_page=per_page,
+            error=None,
+            result={"revoke_sessions": True, "user_id": user_id, "revoked_count": count},
+            status_code=200,
+        )
+    if err == "user_not_found":
+        msg, sc = "That user no longer exists.", status.HTTP_404_NOT_FOUND
+    else:
+        msg, sc = "Could not revoke sessions.", status.HTTP_400_BAD_REQUEST
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=msg,
+        result=None,
+        status_code=sc,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Admin agents — W3.6.2 (cross-user view + revoke-any)
 # ---------------------------------------------------------------------------
@@ -1304,6 +1535,7 @@ def _render_admin_agents_sync(
     per_page: int,
     error: str | None,
     status_code: int,
+    rotated_key: dict[str, Any] | None = None,
 ) -> Response:
     return templates.TemplateResponse(
         request,
@@ -1315,6 +1547,7 @@ def _render_admin_agents_sync(
             "page": page,
             "per_page": per_page,
             "error": error,
+            "rotated_key": rotated_key,
         },
         status_code=status_code,
     )
@@ -1478,6 +1711,213 @@ async def admin_agent_revoke(
     )
 
 
+@app.post("/admin/agents/{agent_id}/rotate-key")
+async def admin_agent_rotate_key(
+    agent_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result, err = await auth_client.admin_rotate_agent_key(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.agents.rotate_key.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/agents rotate-key call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if result is not None:
+        return _render_admin_agents_sync(
+            request,
+            user,
+            agents,
+            total,
+            page=page,
+            per_page=per_page,
+            error=None,
+            status_code=200,
+            rotated_key={"agent_id": str(agent_id), "api_token": result.api_token},
+        )
+
+    if err == "agent_not_found":
+        message = "That agent no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not rotate key."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        status_code=code,
+    )
+
+
+@app.post("/admin/agents/{agent_id}/delete")
+async def admin_agent_delete(
+    agent_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, err = await auth_client.admin_delete_agent(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.agents.delete.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth DELETE /admin/agents call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(
+            url=f"/admin/agents?page={page}&per_page={per_page}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if err == "agent_not_found":
+        message = "That agent no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not delete agent."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        status_code=code,
+    )
+
+
+@app.post("/admin/agents/reingest-all")
+async def admin_agents_reingest_all(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE)
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        result = await parser_client.admin_delete_all_matches(
+            settings.parser_service_url, user.token
+        )
+    except parser_client.ParserForbidden:
+        return _admin_forbidden(request, user)
+    except parser_client.ParserClientError:
+        return Response(
+            content="Parser service unavailable.", status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    return templates.TemplateResponse(
+        request,
+        "admin_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": None,
+            "reingest_result": result,
+        },
+    )
+
+
+@app.post("/admin/agents/cleanup-stale")
+async def admin_agents_cleanup_stale(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE)
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        count, err = await auth_client.admin_cleanup_stale_agents(
+            settings.auth_service_url, user.token
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        return Response(
+            content="Authentication service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if count is not None:
+        return templates.TemplateResponse(
+            request,
+            "admin_agents.html",
+            {
+                "user": user,
+                "agents": agents,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "error": None,
+                "cleanup_result": {"revoked_count": count},
+            },
+        )
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error="Could not clean up stale agents.",
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Admin settings — W3.6.3 (registration mode toggle, UID=1 only)
 # ---------------------------------------------------------------------------
@@ -1499,10 +1939,13 @@ def _render_admin_settings(
     *,
     mode: auth_client.RegistrationMode | None,
     tunables: auth_client.TunablesResult | None = None,
+    cards_status: dict[str, Any] | None = None,
+    scraper_health: dict[str, Any] | None = None,
     error: str | None,
     saved: bool,
     tunables_saved: bool = False,
     tunables_error: str | None = None,
+    scrape_mtgo_triggered: bool = False,
     status_code: int,
 ) -> Response:
     return templates.TemplateResponse(
@@ -1512,12 +1955,15 @@ def _render_admin_settings(
             "user": user,
             "mode": mode,
             "tunables": tunables,
+            "cards_status": cards_status,
+            "scraper_health": scraper_health,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
             "saved": saved,
             "tunables_saved": tunables_saved,
             "tunables_error": tunables_error,
+            "scrape_mtgo_triggered": scrape_mtgo_triggered,
         },
         status_code=status_code,
     )
@@ -1530,6 +1976,7 @@ async def admin_settings(
     settings: WebSettings = Depends(get_settings),
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
     tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
+    scrape_mtgo_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -1537,6 +1984,8 @@ async def admin_settings(
 
     mode: auth_client.RegistrationMode | None = None
     tunables: auth_client.TunablesResult | None = None
+    cards_status: dict[str, Any] | None = None
+    scraper_health: dict[str, Any] | None = None
     error: str | None = None
 
     try:
@@ -1558,6 +2007,18 @@ async def admin_settings(
         if error is None:
             error = "Authentication service unavailable. Please try again."
 
+    try:
+        cards_status = await analytics_client.admin_get_cards_status(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("admin.settings.cards_status unavailable")
+    try:
+        scraper_health = await analytics_client.admin_get_scraper_health(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("admin.settings.scraper_health unavailable")
     code = (
         status.HTTP_503_SERVICE_UNAVAILABLE if error and mode is None and tunables is None else 200
     )
@@ -1566,9 +2027,12 @@ async def admin_settings(
         user,
         mode=mode,
         tunables=tunables,
+        cards_status=cards_status,
+        scraper_health=scraper_health,
         error=error,
         saved=saved == 1,
         tunables_saved=tunables_saved == 1,
+        scrape_mtgo_triggered=scrape_mtgo_triggered == 1,
         status_code=code,
     )
 
@@ -1699,6 +2163,30 @@ async def admin_settings_tunables(
         saved=False,
         tunables_error="Invalid tunable values. Check ranges and try again.",
         status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.post("/admin/settings/scrape-mtgo")
+async def admin_settings_scrape_mtgo(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        await analytics_client.admin_trigger_mtgo_scrape(settings.analytics_service_url, user.token)
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/scrape-mtgo call failed")
+        return Response(
+            content="Analytics service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return RedirectResponse(
+        url="/admin/settings?scrape_mtgo_triggered=1", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
@@ -1859,6 +2347,7 @@ async def admin_invites_create(
     request: Request,
     expires_in_hours: Annotated[int, Form(ge=1, le=_INVITE_MAX_EXPIRES_HOURS)],
     max_uses: Annotated[int | None, Form()] = 1,
+    role: Annotated[str, Form()] = "user",
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
@@ -1873,10 +2362,16 @@ async def admin_invites_create(
 
     # Treat 0 or empty as unlimited (0 in the API).
     effective_max_uses = max_uses if max_uses and max_uses > 0 else 0
+    # Sanitize role — only "user" and "admin" are valid.
+    effective_role = role if role in ("user", "admin") else "user"
 
     try:
         created = await auth_client.admin_create_invite(
-            settings.auth_service_url, user.token, expires_in_hours, effective_max_uses
+            settings.auth_service_url,
+            user.token,
+            expires_in_hours,
+            effective_max_uses,
+            role=effective_role,
         )
     except auth_client.AuthForbidden:
         _log.info("admin.invites.create.forbidden", extra={"user_id": user.user_id})

@@ -48,6 +48,13 @@
             <input type="number" name="max_uses"
                    value="1" min="0" max="10000">
         </label>
+        <label class="field">
+            <span>Role</span>
+            <select name="role">
+                <option value="user" selected>user</option>
+                <option value="admin">admin</option>
+            </select>
+        </label>
         <button type="submit" class="btn btn-primary">Create invite</button>
     </form>
 
@@ -60,6 +67,7 @@
                 <tr>
                     <th>ID</th>
                     <th>Created by</th>
+                    <th>Role</th>
                     <th>Created</th>
                     <th>Age</th>
                     <th>Uses</th>
@@ -72,6 +80,7 @@
                 <tr>
                     <td><code>{{ i.id }}</code></td>
                     <td>{{ i.created_by_email or "—" }}</td>
+                    <td>{{ i.role or "user" }}</td>
                     <td>{{ i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "—" }}</td>
                     <td>{{ i.age or "—" }}</td>
                     <td>{{ i.use_count }} / {{ "&#8734;" if i.max_uses is none or i.max_uses == 0 else i.max_uses }}</td>

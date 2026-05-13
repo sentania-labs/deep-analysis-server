@@ -57,6 +57,31 @@ async def delete_my_matches(
     return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
 
 
+async def admin_delete_all_matches(
+    base_url: str,
+    token: str,
+) -> DeletedCountResult:
+    """Admin nuclear: delete ALL parsed matches across all users."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.delete(
+                f"{base_url}/parser/admin/matches",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise ParserClientError(
+            f"parser DELETE /parser/admin/matches transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise ParserForbidden(f"parser DELETE /parser/admin/matches returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise ParserClientError(
+            f"parser DELETE /parser/admin/matches returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+
+
 async def admin_delete_user_matches(
     base_url: str,
     token: str,

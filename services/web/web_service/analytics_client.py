@@ -457,6 +457,27 @@ async def admin_trigger_sync(base_url: str, token: str) -> bool:
     )
 
 
+async def admin_trigger_mtgo_scrape(base_url: str, token: str) -> bool:
+    """Trigger an MTGO results scrape. Returns True on 202."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/admin/scrape-mtgo",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/scrape-mtgo transport error: {exc}"
+        ) from exc
+    if resp.status_code == 202:
+        return True
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics POST /admin/scrape-mtgo returned {resp.status_code}")
+    raise AnalyticsClientError(
+        f"analytics POST /admin/scrape-mtgo returned {resp.status_code}: {resp.text}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Match detail
 # ---------------------------------------------------------------------------
@@ -1085,3 +1106,6 @@ async def get_game_turns(
         game_number=resolved_game_number,
         turns=turns,
     )
+
+
+# PERSISTENCE_TEST_42

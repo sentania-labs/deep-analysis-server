@@ -418,3 +418,45 @@ async def test_post_forbidden_for_non_admin(app_client: httpx.AsyncClient) -> No
         _main.app.dependency_overrides.clear()
 
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/settings/scrape-mtgo
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_scrape_mtgo_success_redirects(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_scrape(_url: str, _token: str) -> bool:
+        return True
+
+    monkeypatch.setattr(analytics_client, "admin_trigger_mtgo_scrape", fake_scrape)
+    dep, _ = _override_admin(user_id=1)
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/settings/scrape-mtgo")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 303
+    assert "scrape_mtgo_triggered=1" in r.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_post_scrape_mtgo_forbidden_for_non_admin(app_client: httpx.AsyncClient) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/settings/scrape-mtgo")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 403
