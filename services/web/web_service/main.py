@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import mount_metrics
-from web_service import analytics_client, auth_client
+from web_service import analytics_client, auth_client, parser_client
 from web_service.deps import (
     BrowserAuthRedirect,
     BrowserUser,
@@ -549,6 +549,52 @@ async def profile_agents_generate_code(
             "per_page": per_page,
             "registration_code": result.code,
             "registration_code_expires_at": result.expires_at,
+        },
+    )
+
+
+@app.post("/profile/agents/reingest")
+async def profile_agents_reingest(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Force reingest: delete all parsed matches for the current user."""
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+    try:
+        result = await parser_client.delete_my_matches(settings.parser_service_url, user.token)
+    except parser_client.ParserForbidden:
+        _log.info("profile.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except parser_client.ParserClientError:
+        _log.exception("parser DELETE /parser/matches call failed")
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    # Re-render the agents page with the reingest result.
+    offset = 0
+    per_page = _PROFILE_AGENTS_DEFAULT_PER_PAGE
+    try:
+        agents, total = await auth_client.list_my_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        agents, total = [], 0
+
+    return templates.TemplateResponse(
+        request,
+        "profile_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": 1,
+            "per_page": per_page,
+            "reingest_result": result,
         },
     )
 
@@ -1125,6 +1171,53 @@ async def admin_agents_list(
         per_page=per_page,
         error=None,
         status_code=200,
+    )
+
+
+@app.post("/admin/agents/{user_id}/reingest")
+async def admin_agent_reingest(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: force reingest for a specific user."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result = await parser_client.admin_delete_user_matches(
+            settings.parser_service_url, user.token, user_id
+        )
+    except parser_client.ParserForbidden:
+        _log.info("admin.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except parser_client.ParserClientError:
+        _log.exception("parser DELETE /parser/admin/matches/%s call failed", user_id)
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    return templates.TemplateResponse(
+        request,
+        "admin_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": None,
+            "reingest_result": result,
+        },
     )
 
 

@@ -62,6 +62,13 @@
         {% endif %}
     </section>
 
+    {% if reingest_result is defined and reingest_result %}
+    <div class="alert alert-info" role="status">
+        Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted.
+        The backfill scanner will re-parse them shortly.
+    </div>
+    {% endif %}
+
     {% if not agents %}
         <p>No agents registered yet.</p>
     {% else %}
@@ -70,6 +77,8 @@
                 <tr>
                     <th>Machine</th>
                     <th>Client version</th>
+                    <th>Local Files</th>
+                    <th>Parsed</th>
                     <th>Last seen</th>
                     <th>Registered</th>
                     <th>Status</th>
@@ -81,6 +90,8 @@
                 <tr>
                     <td>{{ a.machine_name }}</td>
                     <td>{{ a.client_version or "—" }}</td>
+                    <td>{{ a.local_file_count if a.local_file_count is not none else "—" }}</td>
+                    <td>{{ a.parsed_count if a.parsed_count is not none else "—" }}</td>
                     <td>{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M UTC") if a.last_seen_at else "never" }}</td>
                     <td>{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "—" }}</td>
                     <td>
@@ -94,8 +105,13 @@
                         {% if not a.revoked_at %}
                         <form method="post"
                               action="/profile/agents/{{ a.agent_id }}/revoke"
-                              onsubmit="return confirm('Revoke this agent? It will need to be re-registered to upload again.');">
+                              class="inline-form revoke-form">
                             <button type="submit" class="btn btn-danger">Revoke</button>
+                        </form>
+                        <form method="post"
+                              action="/profile/agents/reingest"
+                              class="inline-form reingest-form">
+                            <button type="submit" class="btn">Reingest</button>
                         </form>
                         {% endif %}
                     </td>
@@ -130,4 +146,20 @@
         </nav>
     {% endif %}
 </section>
+<script>
+    document.querySelectorAll('.revoke-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            if (!window.confirm('Revoke this agent? It will need to be re-registered to upload again.')) {
+                e.preventDefault();
+            }
+        });
+    });
+    document.querySelectorAll('.reingest-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            if (!window.confirm('Force reingest? This deletes all your parsed matches. The backfill scanner will re-parse them.')) {
+                e.preventDefault();
+            }
+        });
+    });
+</script>
 {% endblock %}

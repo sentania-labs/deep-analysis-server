@@ -73,6 +73,7 @@ class AgentRegisterResponse(BaseModel):
 
 class AgentHeartbeatRequest(BaseModel):
     client_version: str | None = Field(default=None, max_length=64)
+    local_file_count: int | None = None
 
 
 class AgentHeartbeatResponse(BaseModel):
@@ -127,6 +128,8 @@ class AgentView(BaseModel):
     user_email: str
     machine_name: str
     client_version: str | None
+    local_file_count: int | None = None
+    parsed_count: int | None = None
     created_at: datetime
     last_seen_at: datetime | None
     revoked_at: datetime | None

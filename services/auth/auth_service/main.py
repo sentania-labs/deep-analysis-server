@@ -399,6 +399,14 @@ async def list_my_agents(
         .scalars()
         .all()
     )
+    # Cross-schema read: count parsed matches per user so the agent
+    # page can compare local_file_count vs parsed_count.
+    parsed_row = await db.execute(
+        text("SELECT COUNT(*) FROM parser.matches WHERE user_id = :uid"),
+        {"uid": caller.user_id},
+    )
+    parsed_count: int = parsed_row.scalar_one()
+
     agents = [
         AgentView(
             agent_id=a.id,
@@ -406,6 +414,8 @@ async def list_my_agents(
             user_email=caller.email,
             machine_name=a.machine_name,
             client_version=a.client_version,
+            local_file_count=a.local_file_count,
+            parsed_count=parsed_count,
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,
@@ -808,6 +818,8 @@ async def agent_heartbeat(
     row.last_seen_at = datetime.now(UTC)
     if body.client_version is not None:
         row.client_version = body.client_version
+    if body.local_file_count is not None:
+        row.local_file_count = body.local_file_count
     await db.commit()
     await db.refresh(row)
 

@@ -21,6 +21,13 @@
     <div class="alert alert-error" role="alert">{{ error }}</div>
     {% endif %}
 
+    {% if reingest_result is defined and reingest_result %}
+    <div class="alert alert-info" role="status">
+        Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted.
+        The backfill scanner will re-parse them shortly.
+    </div>
+    {% endif %}
+
     <table class="data-table">
         <thead>
             <tr>
@@ -28,6 +35,8 @@
                 <th>Owner</th>
                 <th>Machine</th>
                 <th>Client version</th>
+                <th>Local Files</th>
+                <th>Parsed</th>
                 <th>Created</th>
                 <th>Last seen</th>
                 <th>Status</th>
@@ -37,7 +46,7 @@
         <tbody>
             {% if not agents %}
             <tr>
-                <td colspan="8" class="muted">No agents registered.</td>
+                <td colspan="10" class="muted">No agents registered.</td>
             </tr>
             {% else %}
                 {% for a in agents %}
@@ -48,6 +57,8 @@
                     </td>
                     <td>{{ a.machine_name }}</td>
                     <td>{{ a.client_version or "—" }}</td>
+                    <td>{{ a.local_file_count if a.local_file_count is not none else "—" }}</td>
+                    <td>{{ a.parsed_count if a.parsed_count is not none else "—" }}</td>
                     <td>{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "—" }}</td>
                     <td>{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M") if a.last_seen_at else "—" }}</td>
                     <td>
@@ -65,6 +76,12 @@
                               data-machine-name="{{ a.machine_name }}"
                               data-user-email="{{ a.user_email }}">
                             <button type="submit" class="btn btn-danger">Revoke</button>
+                        </form>
+                        <form method="post"
+                              action="/admin/agents/{{ a.user_id }}/reingest?page={{ page }}&per_page={{ per_page }}"
+                              class="inline-form reingest-form"
+                              data-user-email="{{ a.user_email }}">
+                            <button type="submit" class="btn">Reingest</button>
                         </form>
                         {% else %}
                             <span class="muted">—</span>
@@ -110,6 +127,17 @@
             var ue = form.dataset.userEmail || '';
             var msg = 'Revoke agent ' + mn + ' owned by ' + ue +
                 '? The agent will lose access immediately.';
+            if (!window.confirm(msg)) {
+                e.preventDefault();
+            }
+        });
+    });
+    document.querySelectorAll('.reingest-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            var ue = form.dataset.userEmail || '';
+            var msg = 'Force reingest for ' + ue +
+                '? This deletes all parsed matches for this user. ' +
+                'The backfill scanner will re-parse them.';
             if (!window.confirm(msg)) {
                 e.preventDefault();
             }
