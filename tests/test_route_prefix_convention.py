@@ -51,6 +51,7 @@ _INFRA_PATHS = frozenset({"/healthz", "/metrics"})
 # human types or lands on, not service API paths.
 _WEB_BROWSER_PATHS = frozenset(
     {
+        "/",
         "/login",
         "/logout",
         "/dashboard",

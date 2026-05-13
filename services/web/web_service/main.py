@@ -125,6 +125,32 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+@app.get("/", response_class=HTMLResponse)
+async def landing(
+    request: Request,
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Public landing page.
+
+    Logged-in users are redirected straight to /dashboard (or the admin
+    panel for admins). Everyone else sees the marketing landing page.
+    """
+    try:
+        user = await get_current_browser_user(request, settings)
+    except BrowserAuthRedirect:
+        # No valid session — render the public landing page.
+        mode = await auth_client.public_get_registration_mode(settings.auth_service_url)
+        return templates.TemplateResponse(
+            request,
+            "landing.html",
+            {"user": None, "registration_open": mode != "closed"},
+        )
+    # Logged in — bounce to the appropriate home.
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request, next: str | None = None) -> HTMLResponse:
     return templates.TemplateResponse(
