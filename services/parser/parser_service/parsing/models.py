@@ -68,6 +68,9 @@ class ParsedGame(BaseModel):
     game_number: int
     winner: str | None = None
     result: str | None = None  # "win", "loss", "draw", "concede"
+    on_play: bool | None = None  # True if hero chose to play first
+    play_first: str | None = None  # player name who chose to play first
+    opening_hand_sizes: dict[str, int] = Field(default_factory=dict)
     turns: list[TurnSnapshot] = Field(default_factory=list)
 
 

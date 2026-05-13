@@ -184,6 +184,18 @@ class MTGODatStrategy(LogFormatStrategy):
 
     _CARD_RE = re.compile(r"@\[([^@\[\]]+?)@:\d+,\d+:@\]")
 
+    # --- word-to-int mapping for MTGO hand-size text ----------------------
+    _WORD_TO_INT: dict[str, int] = {
+        "zero": 0,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+    }
+
     def can_parse(self, content: bytes, filename: str | None = None) -> bool:
         if not content:
             return False
@@ -352,6 +364,46 @@ class MTGODatStrategy(LogFormatStrategy):
             game.winner = opp
             game.result = "concede"
 
+        # --- play/draw detection ------------------------------------------
+        play_first_re = re.compile(rf"@P({alt}) chooses to play first\.")
+        draw_first_re = re.compile(rf"@P({alt}) chooses to draw first\.")
+        if (m := play_first_re.search(block)) is not None:
+            game.play_first = m.group(1)
+        elif (m := draw_first_re.search(block)) is not None:
+            # The player who chose to draw first means the opponent plays first.
+            chooser = m.group(1)
+            opp = next((p for p in players if p != chooser), None)
+            game.play_first = opp
+
+        # --- opening hand sizes -------------------------------------------
+        # Two forms in the .dat log:
+        #   "@P<player> begins the game with <word> cards in hand."
+        #   "@P<player> puts ... and begins the game with <word> cards in hand."
+        # Both indicate the final hand size (post-mulligan). We use two
+        # separate patterns so the non-greedy quantifier can't skip across
+        # @P boundaries.
+        word_alt = "|".join(self._WORD_TO_INT.keys())
+        hand_direct_re = re.compile(rf"@P({alt}) begins the game with ({word_alt}) cards in hand\.")
+        hand_bottom_re = re.compile(
+            rf"@P({alt}) puts [^@]+ and begins the game with ({word_alt}) cards in hand\."
+        )
+        for m in hand_direct_re.finditer(block):
+            player = m.group(1)
+            count = self._WORD_TO_INT.get(m.group(2).lower(), 7)
+            game.opening_hand_sizes[player] = count
+        for m in hand_bottom_re.finditer(block):
+            player = m.group(1)
+            count = self._WORD_TO_INT.get(m.group(2).lower(), 7)
+            # The "puts ... and begins" form is the post-mulligan size;
+            # it overrides any earlier "begins the game" match.
+            game.opening_hand_sizes[player] = count
+
+        # on_play is relative to the first player in the match's player
+        # list (the "hero"): True if hero plays first, False if hero draws.
+        # We leave it None if we couldn't determine play_first.
+        if game.play_first is not None and players:
+            game.on_play = game.play_first == players[0]
+
         game.turns = self._parse_turns(block, players)
         return game
 
@@ -363,20 +415,83 @@ class MTGODatStrategy(LogFormatStrategy):
             return []
 
         carry: dict[str, PlayerSnapshot] = {p: PlayerSnapshot(name=p) for p in players}
-        play_re = re.compile(rf"@P({alt}) plays {self._CARD_RE.pattern}")
-        cast_re = re.compile(rf"@P({alt}) casts {self._CARD_RE.pattern}")
+        card_pat = self._CARD_RE.pattern
+
+        play_re = re.compile(rf"@P({alt}) plays {card_pat}")
+        cast_re = re.compile(rf"@P({alt}) casts {card_pat}")
+
+        # Draw patterns:
+        #   "@P<player> draws a card."  (anonymous draw)
+        #   "@P<player> draws a card with @[Card@:id:@]."  (draw triggered by source)
+        #   "@P<player> draws <word> cards with @[Card@:id:@]."  (multi-draw)
+        draw_anon_re = re.compile(rf"@P({alt}) draws a card\.")
+        draw_with_re = re.compile(rf"@P({alt}) draws a card with {card_pat}")
+        draw_multi_re = re.compile(
+            rf"@P({alt}) draws ({'|'.join(self._WORD_TO_INT.keys())})"
+            rf" cards with {card_pat}"
+        )
+
+        # Graveyard: "@P<player> puts @[Card@:id:@] into their graveyard."
+        graveyard_re = re.compile(rf"@P({alt}) puts {card_pat} into their graveyard\.")
+
+        # Exile: "@P<player> exiles @[Card@:id:@]"
+        exile_re = re.compile(rf"@P({alt}) exiles {card_pat}")
+
+        # Life payment: "by paying <N> life" within a cast line.
+        # The player is captured from the cast-line prefix.
+        life_pay_re = re.compile(rf"@P({alt}) casts {card_pat} by paying (\d+) life")
 
         turns: list[TurnSnapshot] = []
         for idx, (start, num, active) in enumerate(marks):
             end = marks[idx + 1][0] if idx + 1 < len(marks) else len(block)
             window = block[start:end]
 
+            # Lands / spells → battlefield
             for pm in play_re.finditer(window):
                 snap = carry.setdefault(pm.group(1), PlayerSnapshot(name=pm.group(1)))
                 snap.zones.battlefield.append(pm.group(2).strip())
             for cm in cast_re.finditer(window):
                 snap = carry.setdefault(cm.group(1), PlayerSnapshot(name=cm.group(1)))
                 snap.zones.battlefield.append(cm.group(2).strip())
+
+            # Draws → hand zone (card name "unknown" for anonymous draws)
+            for dm in draw_anon_re.finditer(window):
+                snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
+                snap.zones.hand.append("unknown")
+            for dm in draw_with_re.finditer(window):
+                snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
+                snap.zones.hand.append("unknown")
+            for dm in draw_multi_re.finditer(window):
+                snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
+                count = self._WORD_TO_INT.get(dm.group(2).lower(), 1)
+                for _ in range(count):
+                    snap.zones.hand.append("unknown")
+
+            # Graveyard moves
+            for gm in graveyard_re.finditer(window):
+                snap = carry.setdefault(gm.group(1), PlayerSnapshot(name=gm.group(1)))
+                card = gm.group(2).strip()
+                snap.zones.graveyard.append(card)
+                # Remove from battlefield if present (best-effort)
+                if card in snap.zones.battlefield:
+                    snap.zones.battlefield.remove(card)
+
+            # Exile moves
+            for em in exile_re.finditer(window):
+                snap = carry.setdefault(em.group(1), PlayerSnapshot(name=em.group(1)))
+                card = em.group(2).strip()
+                snap.zones.exile.append(card)
+                # Remove from battlefield/graveyard if present (best-effort)
+                if card in snap.zones.battlefield:
+                    snap.zones.battlefield.remove(card)
+                elif card in snap.zones.graveyard:
+                    snap.zones.graveyard.remove(card)
+
+            # Life payments (best-effort — only explicit "paying N life",
+            # NOT combat damage which isn't logged in .dat format)
+            for lm in life_pay_re.finditer(window):
+                snap = carry.setdefault(lm.group(1), PlayerSnapshot(name=lm.group(1)))
+                snap.life -= int(lm.group(3))
 
             snapshot_players = {
                 name: PlayerSnapshot(

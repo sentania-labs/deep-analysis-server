@@ -26,6 +26,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -92,6 +93,9 @@ class Game(Base):
     game_number: Mapped[int] = mapped_column(Integer, nullable=False)
     winner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     result: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    on_play: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    play_first: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    opening_hand_sizes: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     __table_args__ = (
         UniqueConstraint("match_id", "game_number", name="uq_games_match_game_number"),
