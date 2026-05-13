@@ -157,7 +157,7 @@
                 {# User nav #}
                 <a href="/dashboard"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/dashboard' %}
+                          {% if request and request.url and request.url.path == '/dashboard' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -167,7 +167,7 @@
                 </a>
                 <a href="/cards"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/cards' %}
+                          {% if request and request.url and request.url.path == '/cards' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -182,7 +182,7 @@
                 <p class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider dark:text-txt-tertiary text-txt-secondary-light">Admin</p>
                 <a href="/admin/users"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/users' %}
+                          {% if request and request.url and request.url.path == '/admin/users' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -192,7 +192,7 @@
                 </a>
                 <a href="/admin/agents"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/agents' %}
+                          {% if request and request.url and request.url.path == '/admin/agents' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -202,7 +202,7 @@
                 </a>
                 <a href="/admin/matches"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/matches' %}
+                          {% if request and request.url and request.url.path == '/admin/matches' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -212,7 +212,7 @@
                 </a>
                 <a href="/admin/archetypes"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path.startswith('/admin/archetypes') %}
+                          {% if request and request.url and request.url.path.startswith('/admin/archetypes') %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -222,7 +222,7 @@
                 </a>
                 <a href="/admin/cards"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/cards' %}
+                          {% if request and request.url and request.url.path == '/admin/cards' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -232,7 +232,7 @@
                 </a>
                 <a href="/admin/invites"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/invites' %}
+                          {% if request and request.url and request.url.path == '/admin/invites' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3
@@ -242,7 +242,7 @@
                 </a>
                 <a href="/admin/settings"
                    class="flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] no-underline transition-colors
-                          {% if request.url.path == '/admin/settings' %}
+                          {% if request and request.url and request.url.path == '/admin/settings' %}
                           dark:bg-accent-muted dark:text-accent bg-accent-muted text-accent border-l-2 border-accent font-medium
                           {% else %}
                           dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3

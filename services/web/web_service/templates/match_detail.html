@@ -48,11 +48,11 @@
                 <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Result</span>
                 <p class="mt-0.5">
                     {% if overall_result == "W" %}
-                        <span class="bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">W</span>
+                        <span class="result-win bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">W</span>
                     {% elif overall_result == "L" %}
-                        <span class="bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">L</span>
+                        <span class="result-loss bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">L</span>
                     {% elif overall_result == "D" %}
-                        <span class="bg-warning-muted text-warning text-xs font-medium px-2 py-0.5 rounded">D</span>
+                        <span class="result-draw bg-warning-muted text-warning text-xs font-medium px-2 py-0.5 rounded">D</span>
                     {% else %}
                         <span class="text-sm dark:text-txt-secondary text-txt-secondary-light">—</span>
                     {% endif %}

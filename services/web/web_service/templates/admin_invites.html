@@ -63,7 +63,7 @@
 </div>
 
 {# Pending invites #}
-<h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">Pending Invites</h2>
+<h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">Pending invites</h2>
 
 {% if not invites %}
     <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">No pending invites.</p>
@@ -122,7 +122,7 @@
                 {% if has_prev %}
                 <a href="/admin/invites?page={{ page - 1 }}&per_page={{ per_page }}"
                    rel="prev"
-                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">&larr; Prev</a>
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors">&larr; Previous</a>
                 {% endif %}
                 <span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>
                 {% if has_next %}

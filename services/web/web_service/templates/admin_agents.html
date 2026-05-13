@@ -54,7 +54,7 @@
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Local</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Parsed</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Created</th>
-                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Last Seen</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Last seen</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Status</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Actions</th>
                 </tr>
@@ -102,7 +102,7 @@
     <div class="px-4 py-3 border-t dark:border-border border-border-light">
         <nav class="flex items-center justify-between" aria-label="Agent list pagination">
             <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">Showing <span class="font-mono">{{ first_idx }}</span>--<span class="font-mono">{{ last_idx }}</span> of <span class="font-mono">{{ total }}</span> agent{{ "" if total == 1 else "s" }}.</p>
-            {% if has_prev or has_next %}<div class="flex items-center gap-2">{% if has_prev %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Prev</a>{% endif %}<span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>{% if has_next %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</div>{% endif %}
+            {% if has_prev or has_next %}<div class="flex items-center gap-2">{% if has_prev %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Previous</a>{% endif %}<span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>{% if has_next %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</div>{% endif %}
         </nav>
     </div>
     {% endif %}

@@ -26,7 +26,7 @@
 {% else %}
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
-        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Total Matches</div>
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Total matches</div>
         <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ stats_summary.total_matches }}</div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
@@ -36,7 +36,7 @@
         </div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
-        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Win Rate</div>
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Win rate</div>
         <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ "%.1f"|format(stats_summary.win_rate) }}%</div>
     </div>
     {% if play_draw_stats %}
@@ -56,7 +56,7 @@
 {% if format_stats|default([]) %}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md mb-6 overflow-hidden">
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
-        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">By Format</h2>
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">By format</h2>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full">
@@ -371,7 +371,7 @@
 {# Full Opponent Table #}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md mb-6 overflow-hidden">
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
-        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">By Opponent</h2>
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">By opponent</h2>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full">

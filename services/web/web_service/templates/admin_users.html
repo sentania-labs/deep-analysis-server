@@ -24,7 +24,7 @@
     {% elif result.temporary_password is defined %}
     <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
         <p>Temporary password for user #{{ result.user_id }} (give this to them out-of-band; they will be required to change it on next login):</p>
-        <p class="mt-1"><code class="font-mono dark:bg-surface-3 bg-surface-light-3 px-2 py-1 rounded text-sm">{{ result.temporary_password }}</code></p>
+        <p class="mt-1"><code class="temp-password font-mono dark:bg-surface-3 bg-surface-light-3 px-2 py-1 rounded text-sm">{{ result.temporary_password }}</code></p>
     </div>
     {% endif %}
 {% endif %}
@@ -122,7 +122,7 @@
     <div class="px-4 py-3 border-t dark:border-border border-border-light">
         <nav class="flex items-center justify-between" aria-label="User list pagination">
             <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">Showing <span class="font-mono">{{ first_idx }}</span>--<span class="font-mono">{{ last_idx }}</span> of <span class="font-mono">{{ total }}</span> user{{ "" if total == 1 else "s" }}.</p>
-            {% if has_prev or has_next %}<div class="flex items-center gap-2">{% if has_prev %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/users?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Prev</a>{% endif %}<span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>{% if has_next %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/users?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</div>{% endif %}
+            {% if has_prev or has_next %}<div class="flex items-center gap-2">{% if has_prev %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/users?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Previous</a>{% endif %}<span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>{% if has_next %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/users?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</div>{% endif %}
         </nav>
     </div>
 </div>
