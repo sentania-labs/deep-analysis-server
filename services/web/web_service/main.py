@@ -239,6 +239,10 @@ async def dashboard(
     opponent_stats: list[Any] = []
     match_list: Any = None
     stats_error = False
+    play_draw_stats: Any = None
+    preboard_postboard_stats: Any = None
+    mulligan_stats: Any = None
+    card_stats: Any = None
     try:
         stats_summary = await analytics_client.get_stats_summary(
             settings.analytics_service_url, user.token
@@ -266,6 +270,36 @@ async def dashboard(
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics stats call failed; rendering dashboard with error banner")
         stats_error = True
+
+    # v0.9.0 analytics widgets — each is independent so a failure in
+    # one doesn't block the others or the main dashboard.
+    try:
+        play_draw_stats = await analytics_client.get_play_draw_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("play/draw stats unavailable")
+
+    try:
+        preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("preboard/postboard stats unavailable")
+
+    try:
+        mulligan_stats = await analytics_client.get_mulligan_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("mulligan stats unavailable")
+
+    try:
+        card_stats = await analytics_client.get_card_stats(
+            settings.analytics_service_url, user.token, per_page=20, sort_by="games"
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("card stats unavailable")
 
     # Filters dict to persist across pagination
     filters = {
@@ -304,6 +338,10 @@ async def dashboard(
             "per_page": per_page,
             "filters": filters,
             "filter_qs": filter_qs,
+            "play_draw_stats": play_draw_stats,
+            "preboard_postboard_stats": preboard_postboard_stats,
+            "mulligan_stats": mulligan_stats,
+            "card_stats": card_stats,
         },
     )
 
@@ -831,6 +869,39 @@ async def match_detail_page(
                 "Cube",
             ],
         },
+    )
+
+
+@app.get("/matches/{match_id}/games/{game_number}/turns", response_class=HTMLResponse)
+async def match_game_turns(
+    match_id: uuid.UUID,
+    game_number: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """HTMX partial: per-game turn-by-turn state viewer."""
+    try:
+        turns_data = await analytics_client.get_game_turns(
+            settings.analytics_service_url,
+            user.token,
+            str(match_id),
+            game_number,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.exception(
+            "analytics GET /matches/%s/games/%s/turns call failed", match_id, game_number
+        )
+        return HTMLResponse(
+            "<p>Turn data unavailable — analytics service could not be reached.</p>",
+            status_code=503,
+        )
+    return templates.TemplateResponse(
+        request,
+        "_turn_viewer.html",
+        {"turns_data": turns_data},
     )
 
 
@@ -1414,8 +1485,11 @@ def _render_admin_settings(
     user: BrowserUser,
     *,
     mode: auth_client.RegistrationMode | None,
+    tunables: auth_client.TunablesResult | None = None,
     error: str | None,
     saved: bool,
+    tunables_saved: bool = False,
+    tunables_error: str | None = None,
     status_code: int,
 ) -> Response:
     return templates.TemplateResponse(
@@ -1424,10 +1498,13 @@ def _render_admin_settings(
         {
             "user": user,
             "mode": mode,
+            "tunables": tunables,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
             "saved": saved,
+            "tunables_saved": tunables_saved,
+            "tunables_error": tunables_error,
         },
         status_code=status_code,
     )
@@ -1439,10 +1516,15 @@ async def admin_settings(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
+    tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
+
+    mode: auth_client.RegistrationMode | None = None
+    tunables: auth_client.TunablesResult | None = None
+    error: str | None = None
 
     try:
         mode = await auth_client.admin_get_registration_mode(settings.auth_service_url, user.token)
@@ -1451,21 +1533,32 @@ async def admin_settings(
         return _admin_forbidden(request, user)
     except auth_client.AuthClientError:
         _log.exception("auth /admin/settings/registration-mode call failed")
-        return _render_admin_settings(
-            request,
-            user,
-            mode=None,
-            error="Authentication service unavailable. Please try again.",
-            saved=False,
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
+        error = "Authentication service unavailable. Please try again."
+
+    try:
+        tunables = await auth_client.admin_get_tunables(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.tunables.get.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/settings/tunables call failed")
+        if error is None:
+            error = "Authentication service unavailable. Please try again."
+
+    code = (
+        status.HTTP_503_SERVICE_UNAVAILABLE
+        if error and mode is None and tunables is None
+        else 200
+    )
     return _render_admin_settings(
         request,
         user,
         mode=mode,
-        error=None,
+        tunables=tunables,
+        error=error,
         saved=saved == 1,
-        status_code=200,
+        tunables_saved=tunables_saved == 1,
+        status_code=code,
     )
 
 

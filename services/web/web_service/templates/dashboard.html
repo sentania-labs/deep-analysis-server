@@ -155,6 +155,120 @@
 </section>
 {% endif %}
 
+{% if play_draw_stats %}
+<section class="panel">
+    <h2>Play/Draw Split</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Games</th>
+                <th>Wins</th>
+                <th>Win Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>On Play</strong></td>
+                <td>{{ play_draw_stats.on_play_matches }}</td>
+                <td>{{ play_draw_stats.on_play_wins }}</td>
+                <td>{{ "%.1f"|format(play_draw_stats.on_play_win_rate) }}%</td>
+            </tr>
+            <tr>
+                <td><strong>On Draw</strong></td>
+                <td>{{ play_draw_stats.on_draw_matches }}</td>
+                <td>{{ play_draw_stats.on_draw_wins }}</td>
+                <td>{{ "%.1f"|format(play_draw_stats.on_draw_win_rate) }}%</td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if preboard_postboard_stats %}
+<section class="panel">
+    <h2>Pre-board vs Post-board</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Games</th>
+                <th>Wins</th>
+                <th>Win Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Game 1 (Pre-board)</strong></td>
+                <td>{{ preboard_postboard_stats.game1_matches }}</td>
+                <td>{{ preboard_postboard_stats.game1_wins }}</td>
+                <td>{{ "%.1f"|format(preboard_postboard_stats.game1_win_rate) }}%</td>
+            </tr>
+            <tr>
+                <td><strong>Games 2-3 (Post-board)</strong></td>
+                <td>{{ preboard_postboard_stats.games23_matches }}</td>
+                <td>{{ preboard_postboard_stats.games23_wins }}</td>
+                <td>{{ "%.1f"|format(preboard_postboard_stats.games23_win_rate) }}%</td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if mulligan_stats and mulligan_stats.buckets %}
+<section class="panel">
+    <h2>Mulligan Analysis</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Hand Size</th>
+                <th>Games</th>
+                <th>Wins</th>
+                <th>Win Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for bucket in mulligan_stats.buckets %}
+            {% if bucket.games > 0 %}
+            <tr>
+                <td>{{ bucket.hand_size }}</td>
+                <td>{{ bucket.games }}</td>
+                <td>{{ bucket.wins }}</td>
+                <td>{{ "%.1f"|format(bucket.win_rate) }}%</td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% if card_stats and card_stats.cards %}
+<section class="panel">
+    <h2>Card Performance</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Card</th>
+                <th>Games</th>
+                <th>Win Rate</th>
+                <th>Avg Cast Turn</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for card in card_stats.cards %}
+            <tr>
+                <td>{{ card.card_name }}</td>
+                <td>{{ card.games }}</td>
+                <td>{{ "%.1f"|format(card.win_rate) }}%</td>
+                <td>{{ "%.1f"|format(card.avg_cast_turn) if card.avg_cast_turn is not none else "—" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
 {% if format_stats|default([]) %}
 <section class="panel">
     <h2>By format</h2>

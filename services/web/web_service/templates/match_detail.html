@@ -55,14 +55,43 @@
                     <th>Game #</th>
                     <th>Winner</th>
                     <th>Turns</th>
+                    <th>Opening Hands</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
                 {% for game in match.games %}
                 <tr>
-                    <td>{{ game.game_number }}</td>
+                    <td>
+                        {{ game.game_number }}
+                        {% if game.on_play is true %}
+                            <span class="play-draw-badge play-badge">(On Play)</span>
+                        {% elif game.on_play is false %}
+                            <span class="play-draw-badge draw-badge">(On Draw)</span>
+                        {% endif %}
+                    </td>
                     <td>{{ game.winner or "—" }}</td>
                     <td>{{ game.turns if game.turns is not none else "—" }}</td>
+                    <td>
+                        {% if game.opening_hand_sizes %}
+                            {{ game.opening_hand_sizes.values()|list|join(" vs ") }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-secondary btn-sm"
+                            hx-get="/matches/{{ match.match_id }}/games/{{ game.game_number }}/turns"
+                            hx-target="#turns-{{ game.game_number }}"
+                            hx-swap="innerHTML">
+                            Show turns
+                        </button>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="5" style="padding: 0; border: none;">
+                        <div id="turns-{{ game.game_number }}"></div>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -88,5 +117,9 @@
 .result-draw { background: #fff3cd; color: #856404; }
 .inline-form { display: inline; }
 .inline-form select { font-size: inherit; padding: 0.15rem 0.3rem; }
+.play-draw-badge { font-size: 11px; font-weight: 500; margin-left: 4px; }
+.play-badge { color: #155724; }
+.draw-badge { color: #856404; }
+.btn-sm { padding: 4px 8px; font-size: 12px; }
 </style>
 {% endblock %}

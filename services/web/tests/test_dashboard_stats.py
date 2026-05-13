@@ -150,10 +150,58 @@ async def test_dashboard_renders_with_stats(
             per_page=20,
         )
 
+    async def fake_play_draw(_url: str, _token: str) -> Any:
+        return analytics_client.PlayDrawStats(
+            on_play_matches=10,
+            on_play_wins=6,
+            on_play_win_rate=60.0,
+            on_draw_matches=8,
+            on_draw_wins=3,
+            on_draw_win_rate=37.5,
+        )
+
+    async def fake_preboard(_url: str, _token: str) -> Any:
+        return analytics_client.PreboardPostboardStats(
+            game1_matches=10,
+            game1_wins=5,
+            game1_win_rate=50.0,
+            games23_matches=8,
+            games23_wins=4,
+            games23_win_rate=50.0,
+        )
+
+    async def fake_mulligan(_url: str, _token: str) -> Any:
+        return analytics_client.MulliganStats(
+            buckets=[
+                analytics_client.MulliganBucket(hand_size=7, games=12, wins=8, win_rate=66.7),
+                analytics_client.MulliganBucket(hand_size=6, games=4, wins=2, win_rate=50.0),
+            ]
+        )
+
+    async def fake_card_stats(_url: str, _token: str, **_kw: Any) -> Any:
+        return analytics_client.CardStatsResponse(
+            cards=[
+                analytics_client.CardStatItem(
+                    card_name="Lightning Bolt",
+                    games=10,
+                    wins=7,
+                    win_rate=70.0,
+                    avg_cast_turn=2.3,
+                ),
+            ],
+            total=1,
+            page=1,
+            per_page=20,
+        )
+
     monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
     monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", fake_opponent)
     monkeypatch.setattr(analytics_client, "get_match_list", fake_match_list)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", fake_play_draw)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", fake_preboard)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", fake_mulligan)
+    monkeypatch.setattr(analytics_client, "get_card_stats", fake_card_stats)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:
@@ -174,6 +222,13 @@ async def test_dashboard_renders_with_stats(
     assert "By opponent" in text
     # No error banner
     assert "Stats unavailable" not in text
+    # v0.9.0 analytics widgets
+    assert "Play/Draw Split" in text
+    assert "On Play" in text
+    assert "Pre-board vs Post-board" in text
+    assert "Mulligan Analysis" in text
+    assert "Card Performance" in text
+    assert "Lightning Bolt" in text
 
 
 @pytest.mark.asyncio
@@ -197,10 +252,17 @@ async def test_dashboard_empty_state_no_matches(
     async def fake_match_list(_url: str, _token: str, **_kw: Any) -> Any:
         return analytics_client.MatchListResponse(matches=[], total=0, page=1, per_page=20)
 
+    async def fake_none(*_a: Any, **_kw: Any) -> None:
+        raise analytics_client.AnalyticsClientError("no data")
+
     monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
     monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", fake_opponent)
     monkeypatch.setattr(analytics_client, "get_match_list", fake_match_list)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_card_stats", fake_none)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:
@@ -213,6 +275,8 @@ async def test_dashboard_empty_state_no_matches(
     # No breakdown sections
     assert "By format" not in r.text
     assert "By opponent" not in r.text
+    # v0.9.0 widgets also not shown when analytics unavailable
+    assert "Play/Draw Split" not in r.text
 
 
 @pytest.mark.asyncio
@@ -231,6 +295,10 @@ async def test_dashboard_renders_error_banner_on_analytics_failure(
     monkeypatch.setattr(analytics_client, "get_stats_by_format", boom)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", boom)
     monkeypatch.setattr(analytics_client, "get_match_list", boom)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", boom)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", boom)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", boom)
+    monkeypatch.setattr(analytics_client, "get_card_stats", boom)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:
