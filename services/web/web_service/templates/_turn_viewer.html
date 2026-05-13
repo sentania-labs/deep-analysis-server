@@ -1,0 +1,95 @@
+{# HTMX partial — no {% extends %} #}
+{% if not turns_data or not turns_data.turns %}
+<p class="muted" style="padding: 8px 0;">No turn data available for this game.</p>
+{% else %}
+<div class="turn-viewer">
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Turn</th>
+                <th>Active Player</th>
+                {% for ps in turns_data.turns[0].player_states %}
+                <th>{{ ps.player }} Life</th>
+                {% endfor %}
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for turn in turns_data.turns %}
+            {% set turn_idx = loop.index0 %}
+            <tr>
+                <td>{{ turn.turn_number }}</td>
+                <td>{{ turn.active_player or "—" }}</td>
+                {% for ps in turn.player_states %}
+                <td>
+                    {% if ps.life is not none %}
+                        {% if turn_idx > 0 and loop.index0 < turns_data.turns[turn_idx - 1].player_states|length %}
+                            {% set prev_life = turns_data.turns[turn_idx - 1].player_states[loop.index0].life %}
+                            {% if prev_life is not none and ps.life < prev_life %}
+                                <span style="color: #a4252b; font-weight: 500;">{{ ps.life }}</span>
+                            {% elif prev_life is not none and ps.life > prev_life %}
+                                <span style="color: #155724; font-weight: 500;">{{ ps.life }}</span>
+                            {% else %}
+                                {{ ps.life }}
+                            {% endif %}
+                        {% else %}
+                            {{ ps.life }}
+                        {% endif %}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                {% endfor %}
+                <td>
+                    <button class="btn btn-secondary btn-sm turn-detail-toggle"
+                            onclick="var el=document.getElementById('turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}'); el.style.display = el.style.display === 'none' ? 'table-row' : 'none';">
+                        Details
+                    </button>
+                </td>
+            </tr>
+            <tr id="turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}" style="display: none;">
+                <td colspan="{{ 3 + turn.player_states|length }}" style="background: #f9fafb; padding: 12px;">
+                    {% for ps in turn.player_states %}
+                    <div style="margin-bottom: 8px;">
+                        <strong>{{ ps.player }}</strong>
+                        {% if ps.zones %}
+                        <ul style="list-style: none; padding-left: 12px; margin: 4px 0;">
+                            {% if ps.zones.hand %}
+                            <li><strong>Hand:</strong> {{ ps.zones.hand|join(", ") }}</li>
+                            {% endif %}
+                            {% if ps.zones.battlefield %}
+                            <li><strong>Battlefield:</strong> {{ ps.zones.battlefield|join(", ") }}</li>
+                            {% endif %}
+                            {% if ps.zones.graveyard %}
+                            <li><strong>Graveyard:</strong> {{ ps.zones.graveyard|join(", ") }}</li>
+                            {% endif %}
+                            {% if ps.zones.exile %}
+                            <li><strong>Exile:</strong> {{ ps.zones.exile|join(", ") }}</li>
+                            {% endif %}
+                        </ul>
+                        {% else %}
+                        <span class="muted"> — no zone data</span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% if turn.stack %}
+                    <div>
+                        <strong>Stack:</strong> {{ turn.stack|join(", ") }}
+                    </div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="muted" style="font-size: 11px; margin-top: 4px;">
+        Life totals are best-effort for .dat files (tracks payments only, not combat damage).
+    </p>
+</div>
+{% endif %}
+
+<style>
+.turn-viewer { padding: 8px 0; }
+.turn-detail-toggle { cursor: pointer; }
+.btn-sm { padding: 4px 8px; font-size: 12px; }
+</style>

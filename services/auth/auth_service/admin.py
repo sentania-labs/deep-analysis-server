@@ -34,6 +34,8 @@ from auth_service.schemas import (
     RevokeSessionsResponse,
     SetRegistrationModeRequest,
     StaleCleanupResponse,
+    TunablesView,
+    UpdateTunablesRequest,
     UpdateUserRequest,
     UserListView,
     UserView,
@@ -377,6 +379,8 @@ def _invite_view(row: InviteToken, creator_email: str | None) -> InviteView:
         created_by_email=creator_email,
         created_at=row.created_at,
         expires_at=row.expires_at,
+        max_uses=row.max_uses if row.max_uses is not None else 1,
+        use_count=row.use_count or 0,
     )
 
 
@@ -400,11 +404,15 @@ async def create_invite(
     plaintext = generate_invite_token()
     now = datetime.now(UTC)
     expires_at = now + timedelta(hours=body.expires_in_hours)
+    # 0 means unlimited; None (should not happen with the updated schema
+    # but guard defensively) also maps to 0.
+    stored_max_uses = body.max_uses if body.max_uses is not None else 0
     invite = InviteToken(
         token_hash=hash_invite_token(plaintext),
         created_by_user_id=admin.user_id,
         created_at=now,
         expires_at=expires_at,
+        max_uses=stored_max_uses,
     )
     db.add(invite)
     await db.commit()
@@ -414,6 +422,7 @@ async def create_invite(
         token=plaintext,
         expires_at=invite.expires_at,
         created_at=invite.created_at,
+        max_uses=invite.max_uses,
     )
 
 
@@ -424,11 +433,20 @@ async def list_invites(
     _admin: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_session),
 ) -> InviteListView:
-    """List pending invites (not used, not expired)."""
+    """List pending invites (not exhausted, not expired)."""
     now = datetime.now(UTC)
+    # An invite is pending when it hasn't expired and still has uses
+    # remaining: max_uses=0 means unlimited, NULL is legacy unlimited,
+    # positive max_uses requires use_count < max_uses.
+    from sqlalchemy import or_
+
     pending = (
-        InviteToken.used_at.is_(None),
         InviteToken.expires_at > now,
+        or_(
+            InviteToken.max_uses.is_(None),
+            InviteToken.max_uses == 0,
+            InviteToken.use_count < InviteToken.max_uses,
+        ),
     )
 
     total = int(
@@ -470,7 +488,12 @@ async def revoke_invite(
     if invite is None:
         raise _error(status.HTTP_404_NOT_FOUND, "invite_not_found")
     now = datetime.now(UTC)
-    if invite.used_at is None and invite.expires_at > now:
+    # Revoke if not expired and still has remaining uses.
+    # max_uses 0 or NULL = unlimited (always active until expired).
+    still_active = invite.expires_at > now and (
+        invite.max_uses is None or invite.max_uses == 0 or invite.use_count < invite.max_uses
+    )
+    if still_active:
         invite.expires_at = now
         await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -501,3 +524,99 @@ async def cleanup_stale_agents(
         r.revoked_at = now
     await db.commit()
     return StaleCleanupResponse(revoked_count=len(rows), cutoff_date=cutoff.isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Tunables — admin-configurable runtime parameters
+# ---------------------------------------------------------------------------
+
+# Mutable tunables stored as individual keys in server_settings.
+# The key prefix groups them together and the default value is used
+# both when no DB row exists and for initial display.
+_TUNABLE_DEFAULTS: dict[str, int] = {
+    "backfill_batch_size": 100,
+    "backfill_interval_seconds": 300,
+    "scryfall_sync_interval_days": 7,
+    "mtgo_scraper_interval_hours": 24,
+}
+
+# Read-only constants surfaced in the tunables view for admin visibility
+# but not persisted to server_settings — they live in code.
+_PARSER_VERSION = "0.9.0"
+_REPARSE_MIN_VERSION = "0.9.0"
+_MIN_AGENT_VERSION = "0.4.14"
+
+
+async def _read_tunable(db: AsyncSession, key: str) -> int:
+    """Read a single tunable from server_settings, falling back to the
+    compiled default."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == f"tunable:{key}"))
+    ).scalar_one_or_none()
+    if row is None:
+        return _TUNABLE_DEFAULTS[key]
+    try:
+        return int(row.value)
+    except (TypeError, ValueError):
+        return _TUNABLE_DEFAULTS[key]
+
+
+async def _read_all_tunables(db: AsyncSession) -> TunablesView:
+    return TunablesView(
+        backfill_batch_size=await _read_tunable(db, "backfill_batch_size"),
+        backfill_interval_seconds=await _read_tunable(db, "backfill_interval_seconds"),
+        scryfall_sync_interval_days=await _read_tunable(db, "scryfall_sync_interval_days"),
+        mtgo_scraper_interval_hours=await _read_tunable(db, "mtgo_scraper_interval_hours"),
+        reparse_min_version=_REPARSE_MIN_VERSION,
+        min_agent_version=_MIN_AGENT_VERSION,
+        parser_version=_PARSER_VERSION,
+    )
+
+
+@router.get("/settings/tunables", response_model=TunablesView)
+async def get_tunables(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> TunablesView:
+    """Read the current values of all tunables. Any admin may read."""
+    return await _read_all_tunables(db)
+
+
+@router.patch("/settings/tunables", response_model=TunablesView)
+async def update_tunables(
+    body: UpdateTunablesRequest,
+    admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> TunablesView:
+    """Update one or more mutable tunables. Any admin may write."""
+    now = datetime.now(UTC)
+    updates: dict[str, int] = {}
+    if body.backfill_batch_size is not None:
+        updates["backfill_batch_size"] = body.backfill_batch_size
+    if body.backfill_interval_seconds is not None:
+        updates["backfill_interval_seconds"] = body.backfill_interval_seconds
+    if body.scryfall_sync_interval_days is not None:
+        updates["scryfall_sync_interval_days"] = body.scryfall_sync_interval_days
+    if body.mtgo_scraper_interval_hours is not None:
+        updates["mtgo_scraper_interval_hours"] = body.mtgo_scraper_interval_hours
+
+    for key, value in updates.items():
+        db_key = f"tunable:{key}"
+        row = (
+            await db.execute(select(ServerSetting).where(ServerSetting.key == db_key))
+        ).scalar_one_or_none()
+        if row is None:
+            row = ServerSetting(
+                key=db_key,
+                value=value,
+                updated_at=now,
+                updated_by_user_id=admin.user_id,
+            )
+            db.add(row)
+        else:
+            row.value = value
+            row.updated_at = now
+            row.updated_by_user_id = admin.user_id
+
+    await db.commit()
+    return await _read_all_tunables(db)

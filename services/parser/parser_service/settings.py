@@ -10,12 +10,12 @@ from common.settings import BaseServiceSettings
 
 # Stamped on every match row at parse time so we can detect matches
 # parsed by an older version and queue them for reparse.
-PARSER_VERSION = "0.8.8"
+PARSER_VERSION = "0.9.0"
 
 # Backfill scanner picks up matches where ``parsed_with_version`` is
 # NULL or less than this threshold, ensuring they get re-parsed with
 # the current parser logic.
-REPARSE_MIN_VERSION = "0.8.8"
+REPARSE_MIN_VERSION = "0.9.0"
 
 
 class ParserSettings(BaseServiceSettings):
@@ -34,6 +34,8 @@ class ParserSettings(BaseServiceSettings):
     parser_max_log_bytes: int = 50 * 1024 * 1024
     # Interval (seconds) between backfill scans for ingested-but-not-parsed files.
     backfill_interval_seconds: int = 300
+    # Maximum number of unparsed files to process per backfill scan.
+    backfill_batch_size: int = 100
 
 
 _settings: ParserSettings | None = None

@@ -64,5 +64,85 @@
             {% endif %}
         </form>
     {% endif %}
+
+    {# ------------------------------------------------------------------ #}
+    {# System tunables                                                     #}
+    {# ------------------------------------------------------------------ #}
+
+    <hr>
+
+    {% if tunables_saved %}
+    <div class="alert alert-info" role="status">System tunables updated.</div>
+    {% endif %}
+
+    {% if tunables_error %}
+    <div class="alert alert-error" role="alert">{{ tunables_error }}</div>
+    {% endif %}
+
+    <h2>System tunables</h2>
+    <p class="muted">
+        Configurable runtime parameters for parser and analytics services.
+        Changes take effect on the next service read cycle.
+    </p>
+
+    {% if tunables is none %}
+        <p class="muted">Tunables unavailable.</p>
+    {% else %}
+        <form method="post" action="/admin/settings/tunables" class="tunables-form">
+            <fieldset>
+                <legend>Parser</legend>
+                <label class="field">
+                    <span>Backfill batch size</span>
+                    <input type="number" name="backfill_batch_size"
+                           value="{{ tunables.backfill_batch_size }}"
+                           min="10" max="1000" required>
+                    <small class="muted">Files per scan (10–1000)</small>
+                </label>
+                <label class="field">
+                    <span>Backfill interval (seconds)</span>
+                    <input type="number" name="backfill_interval_seconds"
+                           value="{{ tunables.backfill_interval_seconds }}"
+                           min="60" max="3600" required>
+                    <small class="muted">Seconds between scans (60–3600)</small>
+                </label>
+            </fieldset>
+
+            <fieldset>
+                <legend>Analytics</legend>
+                <label class="field">
+                    <span>Scryfall sync interval (days)</span>
+                    <input type="number" name="scryfall_sync_interval_days"
+                           value="{{ tunables.scryfall_sync_interval_days }}"
+                           min="1" max="30" required>
+                    <small class="muted">Days between Scryfall card syncs (1–30)</small>
+                </label>
+                <label class="field">
+                    <span>MTGO scraper interval (hours)</span>
+                    <input type="number" name="mtgo_scraper_interval_hours"
+                           value="{{ tunables.mtgo_scraper_interval_hours }}"
+                           min="1" max="168" required>
+                    <small class="muted">Hours between MTGO scraper runs (1–168)</small>
+                </label>
+            </fieldset>
+
+            <fieldset>
+                <legend>Version constants (read-only)</legend>
+                <label class="field">
+                    <span>Parser version</span>
+                    <input type="text" value="{{ tunables.parser_version }}" disabled>
+                </label>
+                <label class="field">
+                    <span>Reparse min version</span>
+                    <input type="text" value="{{ tunables.reparse_min_version }}" disabled>
+                </label>
+                <label class="field">
+                    <span>Minimum agent version</span>
+                    <input type="text" value="{{ tunables.min_agent_version }}" disabled>
+                </label>
+            </fieldset>
+
+            <button type="submit" class="btn btn-primary">Save tunables</button>
+        </form>
+    {% endif %}
 </section>
 {% endblock %}

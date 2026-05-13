@@ -8,6 +8,7 @@ independent and coexist in the compose stack.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import uuid
@@ -239,6 +240,10 @@ async def dashboard(
     opponent_stats: list[Any] = []
     match_list: Any = None
     stats_error = False
+    play_draw_stats: Any = None
+    preboard_postboard_stats: Any = None
+    mulligan_stats: Any = None
+    card_stats: Any = None
     try:
         stats_summary = await analytics_client.get_stats_summary(
             settings.analytics_service_url, user.token
@@ -266,6 +271,36 @@ async def dashboard(
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics stats call failed; rendering dashboard with error banner")
         stats_error = True
+
+    # v0.9.0 analytics widgets — each is independent so a failure in
+    # one doesn't block the others or the main dashboard.
+    try:
+        play_draw_stats = await analytics_client.get_play_draw_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("play/draw stats unavailable")
+
+    try:
+        preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("preboard/postboard stats unavailable")
+
+    try:
+        mulligan_stats = await analytics_client.get_mulligan_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("mulligan stats unavailable")
+
+    try:
+        card_stats = await analytics_client.get_card_stats(
+            settings.analytics_service_url, user.token, per_page=20, sort_by="games"
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("card stats unavailable")
 
     # Filters dict to persist across pagination
     filters = {
@@ -304,6 +339,10 @@ async def dashboard(
             "per_page": per_page,
             "filters": filters,
             "filter_qs": filter_qs,
+            "play_draw_stats": play_draw_stats,
+            "preboard_postboard_stats": preboard_postboard_stats,
+            "mulligan_stats": mulligan_stats,
+            "card_stats": card_stats,
         },
     )
 
@@ -831,6 +870,39 @@ async def match_detail_page(
                 "Cube",
             ],
         },
+    )
+
+
+@app.get("/matches/{match_id}/games/{game_number}/turns", response_class=HTMLResponse)
+async def match_game_turns(
+    match_id: uuid.UUID,
+    game_number: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """HTMX partial: per-game turn-by-turn state viewer."""
+    try:
+        turns_data = await analytics_client.get_game_turns(
+            settings.analytics_service_url,
+            user.token,
+            str(match_id),
+            game_number,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.exception(
+            "analytics GET /matches/%s/games/%s/turns call failed", match_id, game_number
+        )
+        return HTMLResponse(
+            "<p>Turn data unavailable — analytics service could not be reached.</p>",
+            status_code=503,
+        )
+    return templates.TemplateResponse(
+        request,
+        "_turn_viewer.html",
+        {"turns_data": turns_data},
     )
 
 
@@ -1414,8 +1486,11 @@ def _render_admin_settings(
     user: BrowserUser,
     *,
     mode: auth_client.RegistrationMode | None,
+    tunables: auth_client.TunablesResult | None = None,
     error: str | None,
     saved: bool,
+    tunables_saved: bool = False,
+    tunables_error: str | None = None,
     status_code: int,
 ) -> Response:
     return templates.TemplateResponse(
@@ -1424,10 +1499,13 @@ def _render_admin_settings(
         {
             "user": user,
             "mode": mode,
+            "tunables": tunables,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
             "saved": saved,
+            "tunables_saved": tunables_saved,
+            "tunables_error": tunables_error,
         },
         status_code=status_code,
     )
@@ -1439,10 +1517,15 @@ async def admin_settings(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
+    tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
+
+    mode: auth_client.RegistrationMode | None = None
+    tunables: auth_client.TunablesResult | None = None
+    error: str | None = None
 
     try:
         mode = await auth_client.admin_get_registration_mode(settings.auth_service_url, user.token)
@@ -1451,21 +1534,30 @@ async def admin_settings(
         return _admin_forbidden(request, user)
     except auth_client.AuthClientError:
         _log.exception("auth /admin/settings/registration-mode call failed")
-        return _render_admin_settings(
-            request,
-            user,
-            mode=None,
-            error="Authentication service unavailable. Please try again.",
-            saved=False,
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
+        error = "Authentication service unavailable. Please try again."
+
+    try:
+        tunables = await auth_client.admin_get_tunables(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.tunables.get.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth /admin/settings/tunables call failed")
+        if error is None:
+            error = "Authentication service unavailable. Please try again."
+
+    code = (
+        status.HTTP_503_SERVICE_UNAVAILABLE if error and mode is None and tunables is None else 200
+    )
     return _render_admin_settings(
         request,
         user,
         mode=mode,
-        error=None,
+        tunables=tunables,
+        error=error,
         saved=saved == 1,
-        status_code=200,
+        tunables_saved=tunables_saved == 1,
+        status_code=code,
     )
 
 
@@ -1533,6 +1625,68 @@ async def admin_settings_registration_mode(
         error=message,
         saved=False,
         status_code=code,
+    )
+
+
+@app.post("/admin/settings/tunables")
+async def admin_settings_tunables(
+    request: Request,
+    backfill_batch_size: Annotated[int, Form()],
+    backfill_interval_seconds: Annotated[int, Form()],
+    scryfall_sync_interval_days: Annotated[int, Form()],
+    mtgo_scraper_interval_hours: Annotated[int, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    updates = {
+        "backfill_batch_size": backfill_batch_size,
+        "backfill_interval_seconds": backfill_interval_seconds,
+        "scryfall_sync_interval_days": scryfall_sync_interval_days,
+        "mtgo_scraper_interval_hours": mtgo_scraper_interval_hours,
+    }
+
+    try:
+        result, err = await auth_client.admin_update_tunables(
+            settings.auth_service_url, user.token, updates
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.tunables.put.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth PATCH /admin/settings/tunables call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if result is not None:
+        return RedirectResponse(
+            url="/admin/settings?tunables_saved=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    # Inline error — re-fetch state for the page.  Best-effort:
+    # swallowing here is correct because the original mutation error is
+    # what we want to surface; list context underneath is nice-to-have.
+    mode: auth_client.RegistrationMode | None = None
+    tunables: auth_client.TunablesResult | None = None
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        mode = await auth_client.admin_get_registration_mode(settings.auth_service_url, user.token)
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        tunables = await auth_client.admin_get_tunables(settings.auth_service_url, user.token)
+
+    return _render_admin_settings(
+        request,
+        user,
+        mode=mode,
+        tunables=tunables,
+        error=None,
+        saved=False,
+        tunables_error="Invalid tunable values. Check ranges and try again.",
+        status_code=status.HTTP_400_BAD_REQUEST,
     )
 
 
@@ -1692,6 +1846,7 @@ async def admin_invites_list(
 async def admin_invites_create(
     request: Request,
     expires_in_hours: Annotated[int, Form(ge=1, le=_INVITE_MAX_EXPIRES_HOURS)],
+    max_uses: Annotated[int | None, Form()] = 1,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
@@ -1704,9 +1859,12 @@ async def admin_invites_create(
     if blocked is not None:
         return blocked
 
+    # Treat 0 or empty as unlimited (0 in the API).
+    effective_max_uses = max_uses if max_uses and max_uses > 0 else 0
+
     try:
         created = await auth_client.admin_create_invite(
-            settings.auth_service_url, user.token, expires_in_hours
+            settings.auth_service_url, user.token, expires_in_hours, effective_max_uses
         )
     except auth_client.AuthForbidden:
         _log.info("admin.invites.create.forbidden", extra={"user_id": user.user_id})

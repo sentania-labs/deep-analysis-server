@@ -755,8 +755,8 @@ async def register(
     if raw_token:
         # Lock the row for the duration of the transaction so two
         # concurrent /auth/register calls racing the same token can't
-        # both observe used_at IS NULL — the second waits, then sees
-        # the stamped row and is rejected.
+        # both see remaining capacity — the second waits, then sees
+        # the incremented use_count and is rejected if exhausted.
         invite = (
             await db.execute(
                 select(InviteToken)
@@ -765,11 +765,20 @@ async def register(
             )
         ).scalar_one_or_none()
         now = datetime.now(UTC)
-        if invite is None or invite.used_at is not None or invite.expires_at <= now:
-            code = "invalid_invite_token"
+        if invite is None or invite.expires_at <= now:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": code},
+                detail={"error": "invalid_invite_token"},
+            )
+        # Check whether the invite has remaining uses.
+        # max_uses=0 → unlimited (always allow, just check expiry above).
+        # max_uses IS NULL → legacy single-use, treat as max_uses=1.
+        # max_uses > 0 → normal multi-use, check use_count < max_uses.
+        effective_max = invite.max_uses if invite.max_uses is not None else 1
+        if effective_max > 0 and invite.use_count >= effective_max:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "invite_exhausted"},
             )
 
     # Email uniqueness check (case-insensitive). Done after token
@@ -799,6 +808,7 @@ async def register(
         await db.flush()
 
         if invite is not None:
+            invite.use_count += 1
             invite.used_at = datetime.now(UTC)
             invite.used_by_user_id = user.id
 

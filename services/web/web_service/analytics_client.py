@@ -467,6 +467,9 @@ class GameItem:
     game_number: int
     winner: str | None
     turns: int | None
+    on_play: bool | None = None
+    play_first: str | None = None
+    opening_hand_sizes: dict[str, int] | None = None
 
 
 @dataclass
@@ -480,10 +483,14 @@ class MatchDetail:
 
 def _to_game(payload: dict[str, Any]) -> GameItem:
     raw_turns = payload.get("turns")
+    raw_hand_sizes = payload.get("opening_hand_sizes")
     return GameItem(
         game_number=int(payload.get("game_number") or 0),
         winner=payload.get("winner"),
         turns=int(raw_turns) if raw_turns is not None else None,
+        on_play=payload.get("on_play"),
+        play_first=payload.get("play_first"),
+        opening_hand_sizes=dict(raw_hand_sizes) if raw_hand_sizes else None,
     )
 
 
@@ -668,3 +675,319 @@ async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatI
             f"analytics GET /stats/by-opponent returned {resp.status_code}: {resp.text}"
         )
     return [_to_opponent_stat(row) for row in resp.json()]
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — game-level analytics
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PlayDrawStats:
+    on_play_matches: int
+    on_play_wins: int
+    on_play_win_rate: float
+    on_draw_matches: int
+    on_draw_wins: int
+    on_draw_win_rate: float
+
+
+async def get_play_draw_stats(base_url: str, token: str) -> PlayDrawStats:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/play-draw",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/play-draw transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/play-draw returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/play-draw returned {resp.status_code}: {resp.text}"
+        )
+    d = resp.json()
+    return PlayDrawStats(
+        on_play_matches=int(d.get("on_play_matches") or 0),
+        on_play_wins=int(d.get("on_play_wins") or 0),
+        on_play_win_rate=float(d.get("on_play_win_rate") or 0.0),
+        on_draw_matches=int(d.get("on_draw_matches") or 0),
+        on_draw_wins=int(d.get("on_draw_wins") or 0),
+        on_draw_win_rate=float(d.get("on_draw_win_rate") or 0.0),
+    )
+
+
+@dataclass
+class PreboardPostboardStats:
+    game1_matches: int
+    game1_wins: int
+    game1_win_rate: float
+    games23_matches: int
+    games23_wins: int
+    games23_win_rate: float
+
+
+async def get_preboard_postboard_stats(base_url: str, token: str) -> PreboardPostboardStats:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/preboard-postboard",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/preboard-postboard transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /stats/preboard-postboard returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/preboard-postboard returned {resp.status_code}: {resp.text}"
+        )
+    d = resp.json()
+    return PreboardPostboardStats(
+        game1_matches=int(d.get("game1_matches") or 0),
+        game1_wins=int(d.get("game1_wins") or 0),
+        game1_win_rate=float(d.get("game1_win_rate") or 0.0),
+        games23_matches=int(d.get("games23_matches") or 0),
+        games23_wins=int(d.get("games23_wins") or 0),
+        games23_win_rate=float(d.get("games23_win_rate") or 0.0),
+    )
+
+
+@dataclass
+class MulliganBucket:
+    hand_size: int
+    games: int
+    wins: int
+    win_rate: float
+
+
+@dataclass
+class MulliganStats:
+    buckets: list[MulliganBucket]
+
+
+async def get_mulligan_stats(base_url: str, token: str) -> MulliganStats:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/mulligans",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/mulligans transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/mulligans returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/mulligans returned {resp.status_code}: {resp.text}"
+        )
+    # The analytics endpoint returns a bare JSON array of MulliganBucket
+    # objects (not wrapped in {"buckets": [...]}). Each bucket uses
+    # "total" for the game count, which we map to our client's "games".
+    raw = resp.json()
+    items: list[dict] = raw if isinstance(raw, list) else raw.get("buckets", [])
+    buckets = [
+        MulliganBucket(
+            hand_size=int(b.get("hand_size") or 0),
+            games=int(b.get("total") or b.get("games") or 0),
+            wins=int(b.get("wins") or 0),
+            win_rate=float(b.get("win_rate") or 0.0),
+        )
+        for b in items
+    ]
+    return MulliganStats(buckets=buckets)
+
+
+@dataclass
+class GameLengthStats:
+    buckets: list[dict[str, Any]]
+
+
+async def get_game_length_stats(base_url: str, token: str) -> GameLengthStats:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/game-length",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/game-length transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/game-length returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/game-length returned {resp.status_code}: {resp.text}"
+        )
+    d = resp.json()
+    return GameLengthStats(buckets=d.get("buckets", []))
+
+
+@dataclass
+class CardStatItem:
+    card_name: str
+    games: int
+    wins: int
+    win_rate: float
+    avg_cast_turn: float | None
+
+
+@dataclass
+class CardStatsResponse:
+    cards: list[CardStatItem]
+    total: int
+    page: int
+    per_page: int
+
+
+async def get_card_stats(
+    base_url: str,
+    token: str,
+    *,
+    page: int = 1,
+    per_page: int = 20,
+    sort_by: str = "games",
+) -> CardStatsResponse:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/cards",
+                params={"page": page, "per_page": per_page, "sort_by": sort_by},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /stats/cards transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /stats/cards returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /stats/cards returned {resp.status_code}: {resp.text}"
+        )
+    d = resp.json()
+    cards = [
+        CardStatItem(
+            card_name=str(c.get("card_name") or ""),
+            games=int(c.get("games") or 0),
+            wins=int(c.get("wins") or 0),
+            win_rate=float(c.get("win_rate") or 0.0),
+            avg_cast_turn=float(c["avg_cast_turn"]) if c.get("avg_cast_turn") is not None else None,
+        )
+        for c in d.get("cards", [])
+    ]
+    return CardStatsResponse(
+        cards=cards,
+        total=int(d.get("total") or 0),
+        page=int(d.get("page") or 1),
+        per_page=int(d.get("per_page") or 20),
+    )
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0 — turn viewer
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ZoneState:
+    battlefield: list[str] = field(default_factory=list)
+    hand: list[str] = field(default_factory=list)
+    graveyard: list[str] = field(default_factory=list)
+    exile: list[str] = field(default_factory=list)
+    library_count: int | None = None
+
+
+@dataclass
+class PlayerTurnState:
+    player: str
+    life: int | None = None
+    zones: ZoneState | None = None
+
+
+@dataclass
+class TurnData:
+    turn_number: int
+    active_player: str | None
+    player_states: list[PlayerTurnState] = field(default_factory=list)
+    stack: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GameTurnsResponse:
+    match_id: str
+    game_number: int
+    turns: list[TurnData] = field(default_factory=list)
+
+
+def _to_zone_state(payload: dict[str, Any] | None) -> ZoneState | None:
+    if not payload:
+        return None
+    return ZoneState(
+        battlefield=list(payload.get("battlefield") or []),
+        hand=list(payload.get("hand") or []),
+        graveyard=list(payload.get("graveyard") or []),
+        exile=list(payload.get("exile") or []),
+        library_count=(
+            int(payload["library_count"]) if payload.get("library_count") is not None else None
+        ),
+    )
+
+
+def _to_player_turn_state(payload: dict[str, Any]) -> PlayerTurnState:
+    raw_life = payload.get("life")
+    return PlayerTurnState(
+        player=str(payload.get("player") or ""),
+        life=int(raw_life) if raw_life is not None else None,
+        zones=_to_zone_state(payload.get("zones")),
+    )
+
+
+def _to_turn(payload: dict[str, Any]) -> TurnData:
+    return TurnData(
+        turn_number=int(payload.get("turn_number") or 0),
+        active_player=payload.get("active_player"),
+        player_states=[_to_player_turn_state(ps) for ps in payload.get("player_states", [])],
+        stack=list(payload.get("stack") or []),
+    )
+
+
+async def get_game_turns(
+    base_url: str,
+    token: str,
+    match_id: str,
+    game_number: int,
+) -> GameTurnsResponse:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/stats/matches/{match_id}/games/{game_number}/turns",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /matches/{{id}}/games/{{n}}/turns transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /matches/{{id}}/games/{{n}}/turns returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /matches/{{id}}/games/{{n}}/turns "
+            f"returned {resp.status_code}: {resp.text}"
+        )
+    d = resp.json()
+    return GameTurnsResponse(
+        match_id=str(d.get("match_id") or match_id),
+        game_number=int(d.get("game_number") or game_number),
+        turns=[_to_turn(t) for t in d.get("turns", [])],
+    )

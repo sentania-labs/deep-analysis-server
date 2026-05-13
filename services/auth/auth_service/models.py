@@ -158,7 +158,7 @@ class ServerSetting(Base):
 
 
 class InviteToken(Base):
-    """Single-use, hashed-at-rest user-invite token.
+    """Hashed-at-rest user-invite token with optional use limit.
 
     Pattern mirrors :class:`AgentRegistration`'s api token: the issuing
     endpoint returns plaintext once and persists only a SHA-256 hex
@@ -169,11 +169,19 @@ class InviteToken(Base):
     NULL`` so deleting an admin (issuer) or a user (consumer) doesn't
     cascade-wipe the invite history.
 
-    A row is "pending" when ``used_at IS NULL AND expires_at > now()``;
-    revocation is implemented by stamping ``expires_at = now()`` rather
-    than deleting the row, so the audit trail of who-minted-what
-    survives. The ``ix_invite_tokens_pending`` composite index covers
-    the pending-list query.
+    ``max_uses`` controls how many registrations can consume this token:
+    - ``0`` means unlimited uses.
+    - A positive integer caps the token at that many uses.
+    - ``None`` (NULL) is treated as single-use (``max_uses = 1``) for
+      backward compatibility with pre-migration rows.
+    ``use_count`` tracks how many registrations have consumed it so far.
+
+    A row is "pending" when ``max_uses = 0`` (unlimited) or
+    ``use_count < max_uses``, and ``expires_at > now()``. Revocation
+    is implemented by stamping
+    ``expires_at = now()`` rather than deleting the row, so the audit
+    trail of who-minted-what survives. The ``ix_invite_tokens_pending``
+    composite index covers the pending-list query.
     """
 
     __tablename__ = "invite_tokens"
@@ -199,6 +207,8 @@ class InviteToken(Base):
         ForeignKey("auth.users.id", ondelete="SET NULL"),
         nullable=True,
     )
+    max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_invite_tokens_token_hash"),

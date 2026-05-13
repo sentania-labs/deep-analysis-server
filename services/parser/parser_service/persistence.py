@@ -76,6 +76,9 @@ async def persist_match(
             game_number=parsed_game.game_number,
             winner=parsed_game.winner,
             result=parsed_game.result,
+            on_play=parsed_game.on_play,
+            play_first=parsed_game.play_first,
+            opening_hand_sizes=parsed_game.opening_hand_sizes,
         )
         session.add(game)
         await session.flush()  # populate game.id

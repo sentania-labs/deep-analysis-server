@@ -43,6 +43,11 @@
             <input type="number" name="expires_in_hours"
                    value="{{ default_hours }}" min="1" max="{{ max_hours }}" required>
         </label>
+        <label class="field">
+            <span>Max uses (0 = unlimited)</span>
+            <input type="number" name="max_uses"
+                   value="1" min="0" max="10000">
+        </label>
         <button type="submit" class="btn btn-primary">Create invite</button>
     </form>
 
@@ -57,6 +62,7 @@
                     <th>Created by</th>
                     <th>Created</th>
                     <th>Age</th>
+                    <th>Uses</th>
                     <th>Expires</th>
                     <th>Actions</th>
                 </tr>
@@ -68,6 +74,7 @@
                     <td>{{ i.created_by_email or "—" }}</td>
                     <td>{{ i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "—" }}</td>
                     <td>{{ i.age or "—" }}</td>
+                    <td>{{ i.use_count }} / {{ "&#8734;" if i.max_uses is none or i.max_uses == 0 else i.max_uses }}</td>
                     <td>{{ i.expires_at.strftime("%Y-%m-%d %H:%M") if i.expires_at else "—" }}</td>
                     <td>
                         <form method="post"

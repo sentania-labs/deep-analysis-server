@@ -181,6 +181,7 @@ class CreateInviteRequest(BaseModel):
         ge=1,
         le=INVITE_TOKEN_MAX_HOURS,
     )
+    max_uses: int = Field(default=1, ge=0, le=10000)
 
 
 class CreateInviteResponse(BaseModel):
@@ -190,6 +191,7 @@ class CreateInviteResponse(BaseModel):
     token: str
     expires_at: datetime
     created_at: datetime
+    max_uses: int
 
 
 class InviteView(BaseModel):
@@ -198,6 +200,8 @@ class InviteView(BaseModel):
     created_by_email: str | None
     created_at: datetime
     expires_at: datetime
+    max_uses: int
+    use_count: int
 
 
 class InviteListView(BaseModel):
@@ -221,3 +225,44 @@ class AgentRegisterWithCredentialsRequest(BaseModel):
     password: str = Field(min_length=1, json_schema_extra={"writeOnly": True})
     agent_name: str = Field(min_length=1, max_length=255)
     client_version: str = Field(min_length=1, max_length=64)
+
+
+# ---------------------------------------------------------------------------
+# Admin tunables — configurable server settings
+# ---------------------------------------------------------------------------
+
+
+class TunablesView(BaseModel):
+    """Current values of all tunables — both mutable (DB-stored) and
+    read-only code constants."""
+
+    backfill_batch_size: int
+    backfill_interval_seconds: int
+    scryfall_sync_interval_days: int
+    mtgo_scraper_interval_hours: int
+    reparse_min_version: str
+    min_agent_version: str
+    parser_version: str
+
+
+class UpdateTunablesRequest(BaseModel):
+    """Only the mutable tunables may be patched."""
+
+    backfill_batch_size: int | None = Field(default=None, ge=10, le=1000)
+    backfill_interval_seconds: int | None = Field(default=None, ge=60, le=3600)
+    scryfall_sync_interval_days: int | None = Field(default=None, ge=1, le=30)
+    mtgo_scraper_interval_hours: int | None = Field(default=None, ge=1, le=168)
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> UpdateTunablesRequest:
+        if all(
+            v is None
+            for v in (
+                self.backfill_batch_size,
+                self.backfill_interval_seconds,
+                self.scryfall_sync_interval_days,
+                self.mtgo_scraper_interval_hours,
+            )
+        ):
+            raise ValueError("at_least_one_field_required")
+        return self

@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from parser_service.consumer import ParserConsumer
-from parser_service.settings import REPARSE_MIN_VERSION
+from parser_service.settings import REPARSE_MIN_VERSION, get_settings
 
 _log = logging.getLogger("parser.backfill")
 
@@ -49,8 +49,10 @@ _UNPARSED_SQL = text(
 async def scan_unparsed(
     sm: async_sessionmaker[AsyncSession],
     consumer: ParserConsumer,
-    batch_size: int = 100,
+    batch_size: int | None = None,
 ) -> int:
+    if batch_size is None:
+        batch_size = get_settings().backfill_batch_size
     async with sm() as session:
         rows = (
             await session.execute(

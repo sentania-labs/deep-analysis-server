@@ -77,6 +77,7 @@ async def test_create_invite_returns_plaintext_and_hashes_at_rest(
     body = r.json()
     assert "token" in body
     assert "id" in body
+    assert body["max_uses"] == 1  # default single-use
     plaintext = body["token"]
     assert len(plaintext) >= 20  # opaque, URL-safe, 32 bytes of entropy
 
@@ -87,7 +88,8 @@ async def test_create_invite_returns_plaintext_and_hashes_at_rest(
     assert row.token_hash == hash_invite_token(plaintext)
     assert row.token_hash != plaintext
     assert row.created_by_user_id == 1
-    assert row.used_at is None
+    assert row.use_count == 0
+    assert row.max_uses == 1
     # Default 168h ≈ 7 days from now (allow 5 min slack for test runtime).
     delta = row.expires_at - datetime.now(UTC)
     assert timedelta(hours=167, minutes=55) < delta < timedelta(hours=168, minutes=5)
@@ -169,22 +171,27 @@ async def test_list_invites_returns_pending_only(client: Any, db_session: AsyncS
         created_by_user_id=admin_id,
         created_at=now,
         expires_at=now + timedelta(hours=168),
+        max_uses=5,
+        use_count=2,
     )
     expired = InviteToken(
         token_hash=hash_invite_token("expired-tok"),
         created_by_user_id=admin_id,
         created_at=now - timedelta(hours=200),
         expires_at=now - timedelta(hours=1),
+        max_uses=1,
     )
-    used = InviteToken(
+    exhausted = InviteToken(
         token_hash=hash_invite_token("used-tok"),
         created_by_user_id=admin_id,
         created_at=now,
         expires_at=now + timedelta(hours=168),
+        max_uses=1,
+        use_count=1,
         used_at=now,
         used_by_user_id=admin_id,
     )
-    db_session.add_all([pending, expired, used])
+    db_session.add_all([pending, expired, exhausted])
     await db_session.commit()
 
     r = await client.get("/admin/invites", headers=_h(token))
@@ -193,6 +200,8 @@ async def test_list_invites_returns_pending_only(client: Any, db_session: AsyncS
     assert body["total"] == 1
     assert len(body["invites"]) == 1
     assert body["invites"][0]["created_by_email"] == "root@example.com"
+    assert body["invites"][0]["max_uses"] == 5
+    assert body["invites"][0]["use_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -405,6 +414,7 @@ async def test_register_invite_only_happy_path_consumes_token(
     ).scalar_one()
     assert refreshed.used_at is not None
     assert refreshed.used_by_user_id == new_user_id
+    assert refreshed.use_count == 1
 
 
 @pytest.mark.asyncio
@@ -416,6 +426,7 @@ async def test_register_token_single_use_enforcement(client: Any, db_session: As
         created_by_user_id=admin_id,
         created_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=168),
+        max_uses=1,
     )
     db_session.add(invite)
     await db_session.commit()
@@ -431,7 +442,7 @@ async def test_register_token_single_use_enforcement(client: Any, db_session: As
     )
     assert r1.status_code == 201
 
-    # Second use fails — token already consumed.
+    # Second use fails — token exhausted.
     r2 = await client.post(
         "/auth/register",
         json={
@@ -441,7 +452,7 @@ async def test_register_token_single_use_enforcement(client: Any, db_session: As
         },
     )
     assert r2.status_code == 403
-    assert r2.json() == {"detail": {"error": "invalid_invite_token"}}
+    assert r2.json() == {"detail": {"error": "invite_exhausted"}}
 
 
 @pytest.mark.asyncio
@@ -449,8 +460,8 @@ async def test_register_concurrent_consumption_only_one_wins(
     client: Any, db_session: AsyncSession
 ) -> None:
     """Two parallel POST /auth/register calls racing the same token: one
-    wins (201), one loses (403 invalid_invite_token). Guards against the
-    SELECT-then-UPDATE race that lets both observe the row as unused.
+    wins (201), one loses (403 invite_exhausted). Guards against the
+    SELECT-then-UPDATE race that lets both observe remaining capacity.
     """
     import asyncio
 
@@ -461,6 +472,7 @@ async def test_register_concurrent_consumption_only_one_wins(
         created_by_user_id=admin_id,
         created_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=168),
+        max_uses=1,
     )
     db_session.add(invite)
     await db_session.commit()
@@ -483,7 +495,7 @@ async def test_register_concurrent_consumption_only_one_wins(
     assert statuses == [201, 403], (r1.status_code, r1.text, r2.status_code, r2.text)
 
     loser = r1 if r1.status_code == 403 else r2
-    assert loser.json() == {"detail": {"error": "invalid_invite_token"}}
+    assert loser.json() == {"detail": {"error": "invite_exhausted"}}
 
     # Exactly one user was created.
     users = (
@@ -557,6 +569,7 @@ async def test_register_open_mode_consumes_token_if_provided(
         created_by_user_id=admin_id,
         created_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=168),
+        max_uses=1,
     )
     db_session.add(invite)
     await db_session.commit()
@@ -578,6 +591,7 @@ async def test_register_open_mode_consumes_token_if_provided(
         await db_session.execute(select(InviteToken).where(InviteToken.id == invite_id))
     ).scalar_one()
     assert refreshed.used_at is not None
+    assert refreshed.use_count == 1
 
 
 @pytest.mark.asyncio
@@ -706,6 +720,117 @@ async def test_register_invite_only_password_complexity_still_enforced(
     )
     assert r.status_code == 400
     assert r.json() == {"detail": {"error": "weak_password"}}
+
+
+# ---------------------------------------------------------------------------
+# Multi-use invites
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_invite_with_max_uses(client: Any, db_session: AsyncSession) -> None:
+    await _seed_user(db_session, email="root@example.com", role="admin")
+    token = await _login(client, "root@example.com", "pw")
+
+    r = await client.post("/admin/invites", json={"max_uses": 20}, headers=_h(token))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["max_uses"] == 20
+
+    row = (
+        await db_session.execute(select(InviteToken).where(InviteToken.id == uuid.UUID(body["id"])))
+    ).scalar_one()
+    assert row.max_uses == 20
+    assert row.use_count == 0
+
+
+@pytest.mark.asyncio
+async def test_create_invite_unlimited(client: Any, db_session: AsyncSession) -> None:
+    """max_uses=0 means unlimited uses."""
+    await _seed_user(db_session, email="root@example.com", role="admin")
+    token = await _login(client, "root@example.com", "pw")
+
+    r = await client.post("/admin/invites", json={"max_uses": 0}, headers=_h(token))
+    assert r.status_code == 201, r.text
+    assert r.json()["max_uses"] == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_use_invite_allows_multiple_registrations(
+    client: Any, db_session: AsyncSession
+) -> None:
+    admin_id = await _seed_user(db_session, email="root@example.com", role="admin")
+    plaintext = "multi-use-tok-abc"
+    invite = InviteToken(
+        token_hash=hash_invite_token(plaintext),
+        created_by_user_id=admin_id,
+        created_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(hours=168),
+        max_uses=3,
+    )
+    db_session.add(invite)
+    await db_session.commit()
+    await db_session.refresh(invite)
+    invite_id = invite.id
+
+    # Three registrations should all succeed.
+    for i in range(3):
+        r = await client.post(
+            "/auth/register",
+            json={
+                "email": f"user{i}@example.com",
+                "password": "longenoughpw!!",
+                "token": plaintext,
+            },
+        )
+        assert r.status_code == 201, f"Registration {i} failed: {r.text}"
+
+    # Fourth should fail — exhausted.
+    r = await client.post(
+        "/auth/register",
+        json={
+            "email": "user3@example.com",
+            "password": "longenoughpw!!",
+            "token": plaintext,
+        },
+    )
+    assert r.status_code == 403
+    assert r.json() == {"detail": {"error": "invite_exhausted"}}
+
+    # Verify use_count.
+    db_session.expunge_all()
+    refreshed = (
+        await db_session.execute(select(InviteToken).where(InviteToken.id == invite_id))
+    ).scalar_one()
+    assert refreshed.use_count == 3
+
+
+@pytest.mark.asyncio
+async def test_unlimited_invite_allows_many_registrations(
+    client: Any, db_session: AsyncSession
+) -> None:
+    admin_id = await _seed_user(db_session, email="root@example.com", role="admin")
+    plaintext = "unlimited-tok-abc"
+    invite = InviteToken(
+        token_hash=hash_invite_token(plaintext),
+        created_by_user_id=admin_id,
+        created_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(hours=168),
+        max_uses=0,  # 0 = unlimited
+    )
+    db_session.add(invite)
+    await db_session.commit()
+
+    for i in range(5):
+        r = await client.post(
+            "/auth/register",
+            json={
+                "email": f"unlim{i}@example.com",
+                "password": "longenoughpw!!",
+                "token": plaintext,
+            },
+        )
+        assert r.status_code == 201, f"Registration {i} failed: {r.text}"
 
 
 # ---------------------------------------------------------------------------

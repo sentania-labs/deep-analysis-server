@@ -638,6 +638,8 @@ class InviteItem:
     created_by_email: str | None
     created_at: datetime | None
     expires_at: datetime | None
+    max_uses: int | None = None
+    use_count: int = 0
 
 
 @dataclass
@@ -646,12 +648,14 @@ class CreatedInvite:
     token: str
     expires_at: datetime | None
     created_at: datetime | None
+    max_uses: int | None = None
 
 
 async def admin_create_invite(
     base_url: str,
     token: str,
     expires_in_hours: int,
+    max_uses: int = 1,
 ) -> CreatedInvite:
     """Admin-only: mint a new invite token.
 
@@ -660,12 +664,13 @@ async def admin_create_invite(
     form already constrains the input, so a 422 here is unexpected and
     deserves to bubble up.
     """
+    payload: dict[str, Any] = {"expires_in_hours": expires_in_hours, "max_uses": max_uses}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{base_url}/admin/invites",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"expires_in_hours": expires_in_hours},
+                json=payload,
             )
     except httpx.HTTPError as exc:
         raise AuthClientError(f"auth POST /admin/invites transport error: {exc}") from exc
@@ -679,6 +684,7 @@ async def admin_create_invite(
         token=str(data["token"]),
         expires_at=_parse_dt(data.get("expires_at")),
         created_at=_parse_dt(data.get("created_at")),
+        max_uses=data.get("max_uses"),
     )
 
 
@@ -712,6 +718,8 @@ async def admin_list_invites(
             created_by_email=i.get("created_by_email"),
             created_at=_parse_dt(i.get("created_at")),
             expires_at=_parse_dt(i.get("expires_at")),
+            max_uses=i.get("max_uses"),
+            use_count=int(i.get("use_count", 0)),
         )
         for i in data.get("invites", [])
     ]
@@ -831,4 +839,89 @@ async def admin_reset_password(
         return None, "user_not_found"
     raise AuthClientError(
         f"auth /admin/users reset-password returned {resp.status_code}: {resp.text}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tunables — admin-configurable runtime parameters
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TunablesResult:
+    backfill_batch_size: int
+    backfill_interval_seconds: int
+    scryfall_sync_interval_days: int
+    mtgo_scraper_interval_hours: int
+    reparse_min_version: str
+    min_agent_version: str
+    parser_version: str
+
+
+async def admin_get_tunables(base_url: str, token: str) -> TunablesResult:
+    """Admin-only: read all tunables (mutable + read-only constants)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/settings/tunables",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth GET /admin/settings/tunables transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth GET /admin/settings/tunables returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(
+            f"auth GET /admin/settings/tunables returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return TunablesResult(
+        backfill_batch_size=int(data["backfill_batch_size"]),
+        backfill_interval_seconds=int(data["backfill_interval_seconds"]),
+        scryfall_sync_interval_days=int(data["scryfall_sync_interval_days"]),
+        mtgo_scraper_interval_hours=int(data["mtgo_scraper_interval_hours"]),
+        reparse_min_version=str(data["reparse_min_version"]),
+        min_agent_version=str(data["min_agent_version"]),
+        parser_version=str(data["parser_version"]),
+    )
+
+
+async def admin_update_tunables(
+    base_url: str,
+    token: str,
+    updates: dict[str, int],
+) -> tuple[TunablesResult | None, str | None]:
+    """Admin-only: patch mutable tunables. Returns (result, error_code).
+
+    - 200 -> (TunablesResult, None)
+    - 422 -> (None, "validation_error")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                f"{base_url}/admin/settings/tunables",
+                headers={"Authorization": f"Bearer {token}"},
+                json=updates,
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(
+            f"auth PATCH /admin/settings/tunables transport error: {exc}"
+        ) from exc
+    if resp.status_code == 200:
+        data = resp.json()
+        return TunablesResult(
+            backfill_batch_size=int(data["backfill_batch_size"]),
+            backfill_interval_seconds=int(data["backfill_interval_seconds"]),
+            scryfall_sync_interval_days=int(data["scryfall_sync_interval_days"]),
+            mtgo_scraper_interval_hours=int(data["mtgo_scraper_interval_hours"]),
+            reparse_min_version=str(data["reparse_min_version"]),
+            min_agent_version=str(data["min_agent_version"]),
+            parser_version=str(data["parser_version"]),
+        ), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth PATCH /admin/settings/tunables returned {resp.status_code}")
+    if resp.status_code in (400, 422):
+        return None, "validation_error"
+    raise AuthClientError(
+        f"auth PATCH /admin/settings/tunables returned {resp.status_code}: {resp.text}"
     )
