@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -811,8 +811,17 @@ async def agent_heartbeat(
     await db.commit()
     await db.refresh(row)
 
+    # Cross-schema read: count uploads attributed to this user so the
+    # agent can detect server-side data loss and trigger a re-sync.
+    upload_count_row = await db.execute(
+        text("SELECT COUNT(*) FROM ingest.user_uploads WHERE user_id = :user_id"),
+        {"user_id": agent.user_id},
+    )
+    upload_count: int = upload_count_row.scalar_one()
+
     return AgentHeartbeatResponse(
         status="ok",
         registered_at=row.created_at,
         revoked=row.revoked_at is not None,
+        upload_count=upload_count,
     )

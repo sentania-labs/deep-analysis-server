@@ -55,6 +55,7 @@ async def test_heartbeat_valid_token(
     body = r.json()
     assert body["status"] == "ok"
     assert body["revoked"] is False
+    assert body["upload_count"] == 0
 
     db_session.expire_all()
     after_row = (
