@@ -40,6 +40,7 @@
                 <tr>
                     <th>ID</th>
                     <th>Email</th>
+                    <th>MTGO</th>
                     <th>Role</th>
                     <th>Status</th>
                     <th>Must change pw</th>
@@ -52,6 +53,7 @@
                 <tr id="user-{{ u.id }}">
                     <td>{{ u.id }}</td>
                     <td>{{ u.email }}</td>
+                    <td>{{ u.mtgo_usernames | join(", ") if u.mtgo_usernames else "—" }}</td>
                     <td>{{ u.role }}</td>
                     <td>
                         {% if u.disabled %}disabled{% else %}active{% endif %}

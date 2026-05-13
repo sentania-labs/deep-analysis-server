@@ -87,6 +87,7 @@ class UserView(BaseModel):
     role: str
     disabled: bool
     must_change_password: bool
+    mtgo_usernames: list[str] | None = None
     created_at: datetime
     updated_at: datetime
 

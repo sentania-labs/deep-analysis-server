@@ -61,6 +61,7 @@ class UserItem:
     role: str
     disabled: bool
     must_change_password: bool
+    mtgo_usernames: list[str] | None
     created_at: datetime | None
     updated_at: datetime | None
 
@@ -374,6 +375,7 @@ async def admin_list_users(
             role=str(u["role"]),
             disabled=bool(u["disabled"]),
             must_change_password=bool(u["must_change_password"]),
+            mtgo_usernames=u.get("mtgo_usernames"),
             created_at=_parse_dt(u.get("created_at")),
             updated_at=_parse_dt(u.get("updated_at")),
         )
