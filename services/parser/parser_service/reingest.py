@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,7 +100,11 @@ async def _delete_matches_for_user(
 ) -> int:
     """Delete matches (and cascaded children) for a single user."""
     after_dt = _parse_iso_dt(after_raw)
+    if after_raw is not None and after_dt is None:
+        raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "after"})
     before_dt = _parse_iso_dt(before_raw)
+    if before_raw is not None and before_dt is None:
+        raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "before"})
 
     # Find matching match IDs first, then cascade-delete children
     # explicitly since bulk DELETE doesn't trigger ORM cascades.
@@ -136,7 +140,11 @@ async def _delete_all_matches(
 ) -> int:
     """Delete ALL matches (and cascaded children)."""
     after_dt = _parse_iso_dt(after_raw)
+    if after_raw is not None and after_dt is None:
+        raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "after"})
     before_dt = _parse_iso_dt(before_raw)
+    if before_raw is not None and before_dt is None:
+        raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "before"})
 
     conditions = []
     if after_dt is not None:

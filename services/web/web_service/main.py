@@ -13,6 +13,7 @@ import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -245,8 +246,9 @@ async def dashboard(
         "date_from": date_from,
         "date_to": date_to,
     }
-    # Build query string for pagination links
-    filter_qs = "&".join(f"{k}={v}" for k, v in filters.items() if v)
+    # Build query string for pagination links (URL-encoded so filter
+    # values containing &, =, +, % don't break the links).
+    filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
     return templates.TemplateResponse(
         request,
