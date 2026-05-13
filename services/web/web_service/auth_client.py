@@ -499,6 +499,76 @@ async def admin_revoke_agent(
 
 
 @dataclass
+class RotateKeyResult:
+    agent_id: str
+    api_token: str
+
+
+async def admin_rotate_agent_key(
+    base_url: str,
+    token: str,
+    agent_id: str,
+) -> tuple[RotateKeyResult | None, str | None]:
+    """Admin-only: rotate an agent's API token. Returns (result, error_code).
+
+    - 200 → (RotateKeyResult, None)
+    - 404 → (None, "agent_not_found")
+
+    401/403 raise :class:`AuthForbidden`; transport / 5xx raise
+    :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/agents/{agent_id}/rotate-key",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth /admin/agents rotate-key transport error: {exc}") from exc
+    if resp.status_code == 200:
+        data = resp.json()
+        return RotateKeyResult(
+            agent_id=str(data["agent_id"]),
+            api_token=str(data["api_token"]),
+        ), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth /admin/agents rotate-key returned {resp.status_code}")
+    if resp.status_code == 404:
+        return None, "agent_not_found"
+    raise AuthClientError(f"auth /admin/agents rotate-key returned {resp.status_code}: {resp.text}")
+
+
+async def admin_delete_agent(
+    base_url: str,
+    token: str,
+    agent_id: str,
+) -> tuple[bool, str | None]:
+    """Admin-only: permanently delete an agent registration.
+
+    - 204 → (True, None)
+    - 404 → (False, "agent_not_found")
+
+    401/403 raise :class:`AuthForbidden`; transport / 5xx raise
+    :class:`AuthClientError`.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/admin/agents/{agent_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth DELETE /admin/agents transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth DELETE /admin/agents returned {resp.status_code}")
+    if resp.status_code == 404:
+        return False, "agent_not_found"
+    raise AuthClientError(f"auth DELETE /admin/agents returned {resp.status_code}: {resp.text}")
+
+
+@dataclass
 class RegistrationCodeResult:
     code: str
     expires_at: datetime
@@ -640,6 +710,7 @@ class InviteItem:
     expires_at: datetime | None
     max_uses: int | None = None
     use_count: int = 0
+    role: str = "user"
 
 
 @dataclass
@@ -649,6 +720,7 @@ class CreatedInvite:
     expires_at: datetime | None
     created_at: datetime | None
     max_uses: int | None = None
+    role: str = "user"
 
 
 async def admin_create_invite(
@@ -656,6 +728,7 @@ async def admin_create_invite(
     token: str,
     expires_in_hours: int,
     max_uses: int = 1,
+    role: str = "user",
 ) -> CreatedInvite:
     """Admin-only: mint a new invite token.
 
@@ -664,7 +737,11 @@ async def admin_create_invite(
     form already constrains the input, so a 422 here is unexpected and
     deserves to bubble up.
     """
-    payload: dict[str, Any] = {"expires_in_hours": expires_in_hours, "max_uses": max_uses}
+    payload: dict[str, Any] = {
+        "expires_in_hours": expires_in_hours,
+        "max_uses": max_uses,
+        "role": role,
+    }
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -685,6 +762,7 @@ async def admin_create_invite(
         expires_at=_parse_dt(data.get("expires_at")),
         created_at=_parse_dt(data.get("created_at")),
         max_uses=data.get("max_uses"),
+        role=str(data.get("role", "user")),
     )
 
 
@@ -720,6 +798,7 @@ async def admin_list_invites(
             expires_at=_parse_dt(i.get("expires_at")),
             max_uses=i.get("max_uses"),
             use_count=int(i.get("use_count", 0)),
+            role=str(i.get("role", "user")),
         )
         for i in data.get("invites", [])
     ]
@@ -810,6 +889,150 @@ async def public_register(
             raise EmailAlreadyTaken()
         return False, code or "registration_failed"
     raise AuthClientError(f"auth POST /auth/register returned {resp.status_code}: {resp.text}")
+
+
+async def admin_create_user(
+    base_url: str,
+    token: str,
+    *,
+    email: str,
+    password: str,
+    role: str = "user",
+    must_change_password: bool = True,
+) -> tuple[UserItem | None, str | None]:
+    """Admin-only: create a new user."""
+    body = {
+        "email": email,
+        "password": password,
+        "role": role,
+        "must_change_password": must_change_password,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST /admin/users transport error: {exc}") from exc
+    if resp.status_code == 201:
+        u = resp.json()
+        return UserItem(
+            id=int(u["id"]),
+            email=str(u["email"]),
+            role=str(u["role"]),
+            disabled=bool(u["disabled"]),
+            must_change_password=bool(u["must_change_password"]),
+            mtgo_usernames=u.get("mtgo_usernames"),
+            created_at=_parse_dt(u.get("created_at")),
+            updated_at=_parse_dt(u.get("updated_at")),
+        ), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST /admin/users returned {resp.status_code}")
+    if resp.status_code == 409:
+        return None, "email_already_exists"
+    if resp.status_code in (400, 422):
+        return None, "invalid_input"
+    raise AuthClientError(f"auth POST /admin/users returned {resp.status_code}: {resp.text}")
+
+
+async def admin_update_user(
+    base_url: str,
+    token: str,
+    user_id: int,
+    *,
+    role: str | None = None,
+    disabled: bool | None = None,
+) -> tuple[UserItem | None, str | None]:
+    """Admin-only: patch a user role/disabled status."""
+    body: dict[str, object] = {}
+    if role is not None:
+        body["role"] = role
+    if disabled is not None:
+        body["disabled"] = disabled
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                f"{base_url}/admin/users/{user_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth PATCH /admin/users/{user_id} transport error: {exc}") from exc
+    if resp.status_code == 200:
+        u = resp.json()
+        return UserItem(
+            id=int(u["id"]),
+            email=str(u["email"]),
+            role=str(u["role"]),
+            disabled=bool(u["disabled"]),
+            must_change_password=bool(u["must_change_password"]),
+            mtgo_usernames=u.get("mtgo_usernames"),
+            created_at=_parse_dt(u.get("created_at")),
+            updated_at=_parse_dt(u.get("updated_at")),
+        ), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth PATCH /admin/users/{user_id} returned {resp.status_code}")
+    if resp.status_code == 404:
+        return None, "user_not_found"
+    if resp.status_code in (400, 422):
+        try:
+            detail = resp.json().get("detail") or {}
+            code = detail.get("error") if isinstance(detail, dict) else None
+        except ValueError:
+            code = None
+        return None, code or "update_failed"
+    raise AuthClientError(
+        f"auth PATCH /admin/users/{user_id} returned {resp.status_code}: {resp.text}"
+    )
+
+
+async def admin_revoke_user_sessions(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[int | None, str | None]:
+    """Admin-only: revoke all sessions for a user."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/users/{user_id}/revoke-sessions",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST revoke-sessions transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return int(resp.json().get("revoked_count", 0)), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST revoke-sessions returned {resp.status_code}")
+    if resp.status_code == 404:
+        return None, "user_not_found"
+    raise AuthClientError(f"auth POST revoke-sessions returned {resp.status_code}: {resp.text}")
+
+
+async def admin_cleanup_stale_agents(
+    base_url: str,
+    token: str,
+    stale_days: int = 90,
+) -> tuple[int | None, str | None]:
+    """Admin-only: revoke agents not seen for stale_days."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/agents/cleanup-stale",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"stale_days": stale_days},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST cleanup-stale transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return int(resp.json().get("revoked_count", 0)), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST cleanup-stale returned {resp.status_code}")
+    if resp.status_code in (400, 422):
+        return None, "invalid_input"
+    raise AuthClientError(f"auth POST cleanup-stale returned {resp.status_code}: {resp.text}")
 
 
 async def admin_reset_password(

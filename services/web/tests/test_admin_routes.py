@@ -633,3 +633,127 @@ async def test_get_admin_users_rejects_per_page_above_ceiling(
         _main.app.dependency_overrides.clear()
 
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# New admin user management tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_create_user_redirects_on_success(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_create(
+        _url: str, _token: str, **_kw: Any
+    ) -> tuple[auth_client.UserItem | None, str | None]:
+        return _sample_users()[1], None
+
+    monkeypatch.setattr(auth_client, "admin_create_user", fake_create)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(
+            "/admin/users/create",
+            data={"email": "new@test.com", "password": "StrongPass1234!", "role": "user"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 303
+    assert r.headers["location"].endswith("/admin/users")
+
+
+@pytest.mark.asyncio
+async def test_post_create_user_forbidden_for_non_admin(app_client: httpx.AsyncClient) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post(
+            "/admin/users/create",
+            data={"email": "a@b.com", "password": "StrongPass1234!", "role": "user"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_post_toggle_role_success(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update(
+        _url: str, _token: str, _uid: int, **_kw: Any
+    ) -> tuple[auth_client.UserItem | None, str | None]:
+        return _sample_users()[1], None
+
+    monkeypatch.setattr(auth_client, "admin_update_user", fake_update)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/users/2/toggle-role", data={"new_role": "admin"})
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_post_toggle_disabled_success(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_update(
+        _url: str, _token: str, _uid: int, **_kw: Any
+    ) -> tuple[auth_client.UserItem | None, str | None]:
+        return _sample_users()[1], None
+
+    monkeypatch.setattr(auth_client, "admin_update_user", fake_update)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/users/2/toggle-disabled", data={"disabled": "true"})
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_post_revoke_sessions_success(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_revoke(_url: str, _token: str, _uid: int) -> tuple[int | None, str | None]:
+        return 3, None
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.UserItem], int]:
+        return _sample_users(), 2
+
+    monkeypatch.setattr(auth_client, "admin_revoke_user_sessions", fake_revoke)
+    monkeypatch.setattr(auth_client, "admin_list_users", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/users/2/revoke-sessions")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 200
+    assert "3 session" in r.text

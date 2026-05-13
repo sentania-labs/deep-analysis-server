@@ -797,3 +797,94 @@ async def test_get_admin_agents_renders_local_and_parsed_counts(
     # Verify the Local Files and Parsed columns show the counts.
     assert ">15<" in r.text
     assert ">12<" in r.text
+
+
+# ---------------------------------------------------------------------------
+# New admin agent bulk tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_reingest_all_success(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import auth_client, parser_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_delete_all(_url: str, _token: str) -> parser_client.DeletedCountResult:
+        return parser_client.DeletedCountResult(deleted_count=42)
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return _sample_agents()
+
+    monkeypatch.setattr(parser_client, "admin_delete_all_matches", fake_delete_all)
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/reingest-all")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 200
+    assert "42 matches deleted" in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_reingest_all_forbidden(app_client: httpx.AsyncClient) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/reingest-all")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_post_cleanup_stale_success(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_cleanup(
+        _url: str, _token: str, stale_days: int = 90
+    ) -> tuple[int | None, str | None]:
+        return 5, None
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return _sample_agents()
+
+    monkeypatch.setattr(auth_client, "admin_cleanup_stale_agents", fake_cleanup)
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/cleanup-stale")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 200
+    assert "5 agent" in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_cleanup_stale_forbidden(app_client: httpx.AsyncClient) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/cleanup-stale")
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 403
