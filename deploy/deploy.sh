@@ -101,6 +101,11 @@ ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
 echo ">> pushing compose file to $DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
 scp "${SCP_OPTS[@]}" "$PROD_COMPOSE" "$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
 
+echo ">> pushing gateway Caddyfile to $DEPLOY_HOST:$DEPLOY_PATH/gateway/"
+ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" "mkdir -p $DEPLOY_PATH/gateway"
+scp "${SCP_OPTS[@]}" "$SCRIPT_DIR/../gateway/Caddyfile" \
+    "$DEPLOY_HOST:$DEPLOY_PATH/gateway/Caddyfile"
+
 echo ">> pushing fleet-caddy snippets to /srv/fleet-caddy/conf.d/deep-analysis-server/"
 scp "${SCP_OPTS[@]}" "$CADDY_SNIPPET" \
     "$DEPLOY_HOST:/srv/fleet-caddy/conf.d/deep-analysis-server/deep-analysis-server.caddy"
