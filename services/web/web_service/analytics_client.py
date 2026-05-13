@@ -790,15 +790,19 @@ async def get_mulligan_stats(base_url: str, token: str) -> MulliganStats:
         raise AnalyticsClientError(
             f"analytics GET /stats/mulligans returned {resp.status_code}: {resp.text}"
         )
-    d = resp.json()
+    # The analytics endpoint returns a bare JSON array of MulliganBucket
+    # objects (not wrapped in {"buckets": [...]}). Each bucket uses
+    # "total" for the game count, which we map to our client's "games".
+    raw = resp.json()
+    items: list[dict] = raw if isinstance(raw, list) else raw.get("buckets", [])
     buckets = [
         MulliganBucket(
             hand_size=int(b.get("hand_size") or 0),
-            games=int(b.get("games") or 0),
+            games=int(b.get("total") or b.get("games") or 0),
             wins=int(b.get("wins") or 0),
             win_rate=float(b.get("win_rate") or 0.0),
         )
-        for b in d.get("buckets", [])
+        for b in items
     ]
     return MulliganStats(buckets=buckets)
 
@@ -965,7 +969,7 @@ async def get_game_turns(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                f"{base_url}/analytics/matches/{match_id}/games/{game_number}/turns",
+                f"{base_url}/analytics/stats/matches/{match_id}/games/{game_number}/turns",
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:

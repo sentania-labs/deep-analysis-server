@@ -1,7 +1,7 @@
 """Add max_uses and use_count to invite_tokens.
 
-Revision ID: 013
-Revises: 012
+Revision ID: 008
+Revises: 007
 Create Date: 2026-05-13
 
 Supports multi-use invite tokens. max_uses NULL means unlimited;
@@ -12,8 +12,8 @@ from sqlalchemy import Column, Integer, text
 
 from alembic import op
 
-revision = "013"
-down_revision = "012"
+revision = "008"
+down_revision = "007"
 branch_labels = None
 depends_on = None
 
