@@ -181,7 +181,7 @@ class CreateInviteRequest(BaseModel):
         ge=1,
         le=INVITE_TOKEN_MAX_HOURS,
     )
-    max_uses: int | None = Field(default=1, ge=1, le=10000)
+    max_uses: int = Field(default=1, ge=0, le=10000)
 
 
 class CreateInviteResponse(BaseModel):
@@ -191,7 +191,7 @@ class CreateInviteResponse(BaseModel):
     token: str
     expires_at: datetime
     created_at: datetime
-    max_uses: int | None
+    max_uses: int
 
 
 class InviteView(BaseModel):
@@ -200,7 +200,7 @@ class InviteView(BaseModel):
     created_by_email: str | None
     created_at: datetime
     expires_at: datetime
-    max_uses: int | None
+    max_uses: int
     use_count: int
 
 

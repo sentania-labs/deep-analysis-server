@@ -1859,8 +1859,8 @@ async def admin_invites_create(
     if blocked is not None:
         return blocked
 
-    # Treat 0 or empty as unlimited (NULL).
-    effective_max_uses = max_uses if max_uses and max_uses > 0 else None
+    # Treat 0 or empty as unlimited (0 in the API).
+    effective_max_uses = max_uses if max_uses and max_uses > 0 else 0
 
     try:
         created = await auth_client.admin_create_invite(

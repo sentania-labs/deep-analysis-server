@@ -771,10 +771,11 @@ async def register(
                 detail={"error": "invalid_invite_token"},
             )
         # Check whether the invite has remaining uses.
-        # Pre-migration rows have max_uses=NULL — treat those as
-        # single-use (max_uses=1) for backward compatibility.
+        # max_uses=0 → unlimited (always allow, just check expiry above).
+        # max_uses IS NULL → legacy single-use, treat as max_uses=1.
+        # max_uses > 0 → normal multi-use, check use_count < max_uses.
         effective_max = invite.max_uses if invite.max_uses is not None else 1
-        if invite.use_count >= effective_max:
+        if effective_max > 0 and invite.use_count >= effective_max:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "invite_exhausted"},

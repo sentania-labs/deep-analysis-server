@@ -404,12 +404,15 @@ async def create_invite(
     plaintext = generate_invite_token()
     now = datetime.now(UTC)
     expires_at = now + timedelta(hours=body.expires_in_hours)
+    # 0 means unlimited; None (should not happen with the updated schema
+    # but guard defensively) also maps to 0.
+    stored_max_uses = body.max_uses if body.max_uses is not None else 0
     invite = InviteToken(
         token_hash=hash_invite_token(plaintext),
         created_by_user_id=admin.user_id,
         created_at=now,
         expires_at=expires_at,
-        max_uses=body.max_uses,
+        max_uses=stored_max_uses,
     )
     db.add(invite)
     await db.commit()
@@ -433,13 +436,15 @@ async def list_invites(
     """List pending invites (not exhausted, not expired)."""
     now = datetime.now(UTC)
     # An invite is pending when it hasn't expired and still has uses
-    # remaining: either max_uses is NULL (unlimited) or use_count < max_uses.
+    # remaining: max_uses=0 means unlimited, NULL is legacy unlimited,
+    # positive max_uses requires use_count < max_uses.
     from sqlalchemy import or_
 
     pending = (
         InviteToken.expires_at > now,
         or_(
             InviteToken.max_uses.is_(None),
+            InviteToken.max_uses == 0,
             InviteToken.use_count < InviteToken.max_uses,
         ),
     )
@@ -484,8 +489,9 @@ async def revoke_invite(
         raise _error(status.HTTP_404_NOT_FOUND, "invite_not_found")
     now = datetime.now(UTC)
     # Revoke if not expired and still has remaining uses.
+    # max_uses 0 or NULL = unlimited (always active until expired).
     still_active = invite.expires_at > now and (
-        invite.max_uses is None or invite.use_count < invite.max_uses
+        invite.max_uses is None or invite.max_uses == 0 or invite.use_count < invite.max_uses
     )
     if still_active:
         invite.expires_at = now

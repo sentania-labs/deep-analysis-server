@@ -170,13 +170,15 @@ class InviteToken(Base):
     cascade-wipe the invite history.
 
     ``max_uses`` controls how many registrations can consume this token:
-    - ``None`` (NULL) means unlimited uses.
+    - ``0`` means unlimited uses.
     - A positive integer caps the token at that many uses.
+    - ``None`` (NULL) is treated as single-use (``max_uses = 1``) for
+      backward compatibility with pre-migration rows.
     ``use_count`` tracks how many registrations have consumed it so far.
 
-    A row is "pending" when ``use_count < max_uses`` (or ``max_uses``
-    is NULL) and ``expires_at > now()``. Legacy single-use tokens set
-    ``max_uses = 1``. Revocation is implemented by stamping
+    A row is "pending" when ``max_uses = 0`` (unlimited) or
+    ``use_count < max_uses``, and ``expires_at > now()``. Revocation
+    is implemented by stamping
     ``expires_at = now()`` rather than deleting the row, so the audit
     trail of who-minted-what survives. The ``ix_invite_tokens_pending``
     composite index covers the pending-list query.

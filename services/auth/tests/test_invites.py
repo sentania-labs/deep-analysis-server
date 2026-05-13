@@ -746,13 +746,13 @@ async def test_create_invite_with_max_uses(client: Any, db_session: AsyncSession
 
 @pytest.mark.asyncio
 async def test_create_invite_unlimited(client: Any, db_session: AsyncSession) -> None:
-    """max_uses=null means unlimited uses."""
+    """max_uses=0 means unlimited uses."""
     await _seed_user(db_session, email="root@example.com", role="admin")
     token = await _login(client, "root@example.com", "pw")
 
-    r = await client.post("/admin/invites", json={"max_uses": None}, headers=_h(token))
+    r = await client.post("/admin/invites", json={"max_uses": 0}, headers=_h(token))
     assert r.status_code == 201, r.text
-    assert r.json()["max_uses"] is None
+    assert r.json()["max_uses"] == 0
 
 
 @pytest.mark.asyncio
@@ -816,7 +816,7 @@ async def test_unlimited_invite_allows_many_registrations(
         created_by_user_id=admin_id,
         created_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=168),
-        max_uses=None,
+        max_uses=0,  # 0 = unlimited
     )
     db_session.add(invite)
     await db_session.commit()

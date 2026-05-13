@@ -74,7 +74,7 @@
                     <td>{{ i.created_by_email or "—" }}</td>
                     <td>{{ i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "—" }}</td>
                     <td>{{ i.age or "—" }}</td>
-                    <td>{{ i.use_count }} / {{ i.max_uses if i.max_uses is not none else "&#8734;" }}</td>
+                    <td>{{ i.use_count }} / {{ "&#8734;" if i.max_uses is none or i.max_uses == 0 else i.max_uses }}</td>
                     <td>{{ i.expires_at.strftime("%Y-%m-%d %H:%M") if i.expires_at else "—" }}</td>
                     <td>
                         <form method="post"

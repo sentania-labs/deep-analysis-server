@@ -655,7 +655,7 @@ async def admin_create_invite(
     base_url: str,
     token: str,
     expires_in_hours: int,
-    max_uses: int | None = 1,
+    max_uses: int = 1,
 ) -> CreatedInvite:
     """Admin-only: mint a new invite token.
 
@@ -664,11 +664,7 @@ async def admin_create_invite(
     form already constrains the input, so a 422 here is unexpected and
     deserves to bubble up.
     """
-    payload: dict[str, Any] = {"expires_in_hours": expires_in_hours}
-    if max_uses is not None:
-        payload["max_uses"] = max_uses
-    else:
-        payload["max_uses"] = None
+    payload: dict[str, Any] = {"expires_in_hours": expires_in_hours, "max_uses": max_uses}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
