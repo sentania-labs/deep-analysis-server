@@ -9,6 +9,7 @@ the "hero" player via ``auth.users.mtgo_usernames``, falling back to
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -129,7 +130,7 @@ async def _load_games_with_context(
         params["format"] = format_filter
     if opponent:
         where += " AND m.players @> :opp_json::jsonb"
-        params["opp_json"] = f'["{opponent}"]'
+        params["opp_json"] = json.dumps([opponent])
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
@@ -329,7 +330,7 @@ async def get_game_length(
         params["format"] = format
     if opponent:
         where += " AND m.players @> :opp_json::jsonb"
-        params["opp_json"] = f'["{opponent}"]'
+        params["opp_json"] = json.dumps([opponent])
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
