@@ -1,19 +1,44 @@
 {% extends "base.html" %}
 
-{% block title %}Deep Analysis{% endblock %}
+{% block title %}Deep Analysis — MTGO Match Analytics{% endblock %}
 
 {% block content %}
-<section class="auth-card">
-    <h1>Deep Analysis</h1>
-    <p class="muted">
-        MTGO match analytics &mdash; track your performance, identify
-        patterns, improve your game.
-    </p>
-    <div class="form-actions">
-        <a href="/login" class="btn btn-primary">Sign in</a>
-        {% if registration_open %}
-            <a href="/register" class="btn">Register</a>
-        {% endif %}
-    </div>
-</section>
+<div class="landing">
+    <section class="landing-hero">
+        <h1>Deep Analysis</h1>
+        <p class="landing-tagline">
+            Self-hosted match analytics for Magic: The Gathering Online
+        </p>
+    </section>
+
+    <section class="landing-features">
+        <ul class="landing-feature-list">
+            <li>
+                <strong>Match tracking</strong> — automatically capture every
+                match from your MTGO game logs
+            </li>
+            <li>
+                <strong>Performance analytics</strong> — win rates, format
+                breakdowns, and opponent history at a glance
+            </li>
+            <li>
+                <strong>Format detection</strong> — Standard, Modern, Legacy,
+                Vintage, Pauper, and more identified automatically
+            </li>
+            <li>
+                <strong>Play/draw and sideboard stats</strong> — see how your
+                decisions before and after boarding affect your results
+            </li>
+        </ul>
+    </section>
+
+    <section class="auth-card landing-cta">
+        <div class="form-actions">
+            <a href="/login" class="btn btn-primary">Sign in</a>
+            {% if registration_open %}
+                <a href="/register" class="btn btn-secondary">Register</a>
+            {% endif %}
+        </div>
+    </section>
+</div>
 {% endblock %}

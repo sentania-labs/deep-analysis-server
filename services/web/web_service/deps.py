@@ -37,6 +37,14 @@ class BrowserUser:
     # Raw JWT — needed for service-to-service calls (password change,
     # logout) where we forward the user's token as a Bearer header.
     token: str
+    mtgo_usernames: list[str] | None = None
+
+    @property
+    def display_name(self) -> str:
+        """Nav-friendly display: first MTGO username if set, else email."""
+        if self.mtgo_usernames:
+            return self.mtgo_usernames[0]
+        return self.email or f"user #{self.user_id}"
 
 
 class BrowserAuthRedirect(Exception):
@@ -106,6 +114,14 @@ def _resolve_browser_user(request: Request, settings: WebSettings) -> BrowserUse
     email_claim = claims.get("email")
     email = str(email_claim) if email_claim else ""
 
+    # mtgo_usernames is included in the JWT since v0.9.1 so the nav
+    # can display a player name without a network call to auth.  Older
+    # tokens simply lack the claim — fall back to None.
+    raw_names = claims.get("mtgo_usernames")
+    mtgo_usernames: list[str] | None = None
+    if isinstance(raw_names, list) and all(isinstance(n, str) for n in raw_names):
+        mtgo_usernames = raw_names or None
+
     return BrowserUser(
         user_id=user_id,
         email=email,
@@ -113,6 +129,7 @@ def _resolve_browser_user(request: Request, settings: WebSettings) -> BrowserUse
         must_change_password=scope == PASSWORD_CHANGE_SCOPE,
         scope=scope,
         token=token,
+        mtgo_usernames=mtgo_usernames,
     )
 
 

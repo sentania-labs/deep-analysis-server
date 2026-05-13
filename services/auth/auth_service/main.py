@@ -183,7 +183,13 @@ async def login(
             )
             expires_in = settings.password_change_token_ttl_seconds
         else:
-            access = issue_access_token(user.id, user.role, session_row.id, email=user.email)
+            access = issue_access_token(
+                user.id,
+                user.role,
+                session_row.id,
+                email=user.email,
+                mtgo_usernames=user.mtgo_usernames,
+            )
             expires_in = settings.access_token_ttl_seconds
 
         return TokenResponse(
@@ -245,7 +251,13 @@ async def refresh(
     await db.commit()
     await db.refresh(new_session)
 
-    access = issue_access_token(user.id, user.role, new_session.id, email=user.email)
+    access = issue_access_token(
+        user.id,
+        user.role,
+        new_session.id,
+        email=user.email,
+        mtgo_usernames=user.mtgo_usernames,
+    )
     return TokenResponse(
         access_token=access,
         refresh_token=new_refresh,
@@ -347,15 +359,17 @@ async def update_me(
     await db.commit()
     await db.refresh(user)
 
-    # Email is a JWT claim; the caller's existing token is now stale.
-    # Mint a fresh access token bound to the same session_id so the
-    # web layer can rotate the cookie without forcing a re-login.
+    # Email and mtgo_usernames are JWT claims; the caller's existing
+    # token is now stale.  Mint a fresh access token bound to the same
+    # session_id so the web layer can rotate the cookie without forcing
+    # a re-login.
     settings = get_settings()
     fresh_access = issue_access_token(
         user.id,
         user.role,
         caller.session_id,
         email=user.email,
+        mtgo_usernames=user.mtgo_usernames,
     )
 
     _log.info("auth.me.updated", extra={"user_id": user.id})
