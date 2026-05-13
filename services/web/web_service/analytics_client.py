@@ -699,6 +699,93 @@ async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatI
 
 
 # ---------------------------------------------------------------------------
+# Admin matches — system-wide match listing
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AdminMatchItem:
+    match_id: str
+    user_id: int
+    user_email: str | None
+    format_: str | None
+    players: list[str]
+    match_result: str | None
+    winner: str | None
+    game_count: int
+    played_at: datetime | None
+
+
+@dataclass
+class AdminMatchListResponse:
+    matches: list[AdminMatchItem]
+    total: int
+    page: int
+    per_page: int
+
+
+def _to_admin_match(payload: dict[str, Any]) -> AdminMatchItem:
+    return AdminMatchItem(
+        match_id=str(payload.get("match_id", "")),
+        user_id=int(payload.get("user_id") or 0),
+        user_email=payload.get("user_email"),
+        format_=payload.get("format"),
+        players=[str(p) for p in (payload.get("players") or [])],
+        match_result=payload.get("match_result"),
+        winner=payload.get("winner"),
+        game_count=int(payload.get("game_count") or 0),
+        played_at=_parse_dt(payload.get("played_at")),
+    )
+
+
+async def admin_list_matches(
+    base_url: str,
+    token: str,
+    *,
+    page: int = 1,
+    per_page: int = 20,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    result: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> AdminMatchListResponse:
+    params: dict[str, Any] = {"page": page, "per_page": per_page}
+    if format_filter and format_filter.lower() != "all":
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if result and result.lower() != "all":
+        params["result"] = result
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/matches",
+                params=params,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /admin/matches transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /admin/matches returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/matches returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return AdminMatchListResponse(
+        matches=[_to_admin_match(m) for m in data.get("matches", [])],
+        total=int(data.get("total", 0)),
+        page=int(data.get("page", 1)),
+        per_page=int(data.get("per_page", 20)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # v0.9.0 — game-level analytics
 # ---------------------------------------------------------------------------
 

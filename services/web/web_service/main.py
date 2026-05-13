@@ -2461,6 +2461,103 @@ async def admin_invites_revoke(
 
 
 # ---------------------------------------------------------------------------
+# Admin matches — system-wide match view (ROADMAP #11)
+# ---------------------------------------------------------------------------
+
+
+_ADMIN_MATCHES_DEFAULT_PER_PAGE = 20
+_ADMIN_MATCHES_MAX_PER_PAGE = 100
+
+_MATCH_FORMAT_OPTIONS = [
+    "Standard",
+    "Pioneer",
+    "Modern",
+    "Legacy",
+    "Vintage",
+    "Pauper",
+    "Commander",
+    "Draft",
+    "Sealed",
+    "Historic",
+    "Premodern",
+    "Cube",
+]
+
+
+@app.get("/admin/matches", response_class=HTMLResponse)
+async def admin_matches_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_MATCHES_MAX_PER_PAGE),
+    ] = _ADMIN_MATCHES_DEFAULT_PER_PAGE,
+    format: Annotated[str, Query(alias="format")] = "",
+    opponent: Annotated[str, Query()] = "",
+    result: Annotated[str, Query()] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    filters = {
+        "format": format,
+        "opponent": opponent,
+        "result": result,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    filter_qs = urlencode({k: v for k, v in filters.items() if v})
+
+    try:
+        match_list = await analytics_client.admin_list_matches(
+            settings.analytics_service_url,
+            user.token,
+            page=page,
+            per_page=per_page,
+            format_filter=format or None,
+            opponent=opponent or None,
+            result=result or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.matches.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/matches call failed")
+        return templates.TemplateResponse(
+            request,
+            "admin_matches.html",
+            {
+                "user": user,
+                "match_list": None,
+                "filters": filters,
+                "filter_qs": filter_qs,
+                "format_options": _MATCH_FORMAT_OPTIONS,
+                "error": "Analytics service unavailable. Please try again.",
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_matches.html",
+        {
+            "user": user,
+            "match_list": match_list,
+            "filters": filters,
+            "filter_qs": filter_qs,
+            "format_options": _MATCH_FORMAT_OPTIONS,
+            "error": None,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Admin archetype catalog
 # ---------------------------------------------------------------------------
 

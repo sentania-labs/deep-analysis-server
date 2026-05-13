@@ -4,10 +4,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import UTC, date, datetime, timedelta
+from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from analytics_service.archetypes import router as archetypes_router
@@ -230,6 +231,140 @@ async def cards_status(
         "card_count": card_count,
         "last_sync_at": last_sync_at.isoformat() if last_sync_at is not None else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin matches — system-wide match listing (ROADMAP #11)
+# ---------------------------------------------------------------------------
+
+_ADMIN_MATCHES_DEFAULT_PER_PAGE = 20
+_ADMIN_MATCHES_MAX_PER_PAGE = 100
+
+
+class AdminMatchItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    match_id: str
+    user_id: int
+    user_email: str | None = None
+    format_: str | None = Field(default=None, alias="format")
+    players: list[str] = Field(default_factory=list)
+    match_result: str | None = None
+    winner: str | None = None
+    game_count: int = 0
+    played_at: datetime | None = None
+
+
+class AdminMatchListResponse(BaseModel):
+    matches: list[AdminMatchItem] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    per_page: int = _ADMIN_MATCHES_DEFAULT_PER_PAGE
+
+
+@admin_router.get("/matches", response_model=AdminMatchListResponse)
+async def admin_list_matches(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_MATCHES_MAX_PER_PAGE)
+    ] = _ADMIN_MATCHES_DEFAULT_PER_PAGE,
+    format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    result: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+) -> AdminMatchListResponse:
+    """System-wide match listing for admins — all users' matches."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        # Build WHERE clauses dynamically
+        conditions: list[str] = []
+        params: dict[str, Any] = {}
+        if format and format.lower() != "all":
+            conditions.append("LOWER(m.format) = :format")
+            params["format"] = format.lower()
+        if date_from:
+            conditions.append("COALESCE(m.played_at, m.parsed_at) >= :date_from")
+            params["date_from"] = datetime.combine(date_from, datetime.min.time())
+        if date_to:
+            conditions.append("COALESCE(m.played_at, m.parsed_at) < :date_to")
+            params["date_to"] = datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+        if opponent:
+            conditions.append("m.players::text ILIKE :opponent")
+            params["opponent"] = f"%{opponent}%"
+
+        where_clause = (" AND " + " AND ".join(conditions)) if conditions else ""
+
+        # Count total
+        count_sql = text(f"SELECT COUNT(*) FROM parser.matches m WHERE 1=1{where_clause}")
+        total = int((await session.execute(count_sql, params)).scalar_one())
+
+        # Fetch page with user email join
+        offset = (page - 1) * per_page
+        fetch_sql = text(
+            f"""
+            SELECT m.id, m.user_id, u.email, m.format, m.players,
+                   m.match_result, m.winner, m.game_count,
+                   COALESCE(m.played_at, m.parsed_at) AS played_at
+            FROM parser.matches m
+            LEFT JOIN auth.users u ON u.id = m.user_id
+            WHERE 1=1{where_clause}
+            ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
+            LIMIT :limit OFFSET :offset
+            """
+        )
+        params["limit"] = per_page
+        params["offset"] = offset
+        rows = (await session.execute(fetch_sql, params)).all()
+
+    # Post-filter by result if requested (W/L/D classification needs
+    # game-winner counts which are expensive to do in SQL; since we're
+    # paginated and the filter is rare, we accept slightly imprecise
+    # total counts when a result filter is active).
+    # For the result filter, classify using match_result string.
+    items: list[AdminMatchItem] = []
+    for row in rows:
+        (
+            match_id,
+            user_id,
+            email,
+            fmt,
+            players,
+            match_result,
+            winner,
+            game_count,
+            played_at,
+        ) = row
+        item = AdminMatchItem(
+            match_id=str(match_id),
+            user_id=int(user_id),
+            user_email=email,
+            format=fmt,
+            players=[str(p) for p in (players or [])],
+            match_result=match_result,
+            winner=winner,
+            game_count=int(game_count) if game_count else 0,
+            played_at=played_at,
+        )
+        items.append(item)
+
+    # Result filtering on the fetched page
+    if result and result.lower() != "all":
+        result_key = result.lower()
+        filtered: list[AdminMatchItem] = []
+        for item in items:
+            if result_key in ("w", "wins") and item.winner and item.players:
+                if item.winner == (item.players[0] if item.players else ""):
+                    filtered.append(item)
+            elif result_key in ("l", "losses") and item.winner and item.players:
+                if item.winner != (item.players[0] if item.players else ""):
+                    filtered.append(item)
+            elif result_key in ("d", "draws") and not item.winner and item.game_count > 0:
+                filtered.append(item)
+        items = filtered
+
+    return AdminMatchListResponse(matches=items, total=total, page=page, per_page=per_page)
 
 
 app.include_router(admin_router)

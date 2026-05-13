@@ -97,6 +97,10 @@ _MATCH_WIN_RE = re.compile(
     re.IGNORECASE,
 )
 _MATCH_LOSE_RE = re.compile(r"(?P<player>\S[^\n]*?)\s+loses\s+the\s+match", re.IGNORECASE)
+_MATCH_CONCEDE_RE = re.compile(
+    r"(?P<player>\S[^\n]*?)\s+has\s+conceded\s+from\s+the\s+match",
+    re.IGNORECASE,
+)
 _MANA_FLOAT_RE = re.compile(
     r"^(?P<player>[^\n]+?)\s+(?:has|now\s+has)\s+(?P<pool>[WUBRGC0-9]+)"
     r"\s+(?:in(?:\s+(?:their|his|her))?\s+)?mana\s+pool",
@@ -271,6 +275,14 @@ class MTGODatStrategy(LogFormatStrategy):
                     match.winner = best_player
                     match.match_result = f"{best_count}-{opp_count}"
 
+        # Synthesize a score when the winner was resolved (e.g. from a
+        # match-level concession) but no score string was captured.
+        if match.winner and not match.match_result and match.games:
+            w_count = sum(1 for g in match.games if g.winner == match.winner)
+            l_count = sum(1 for g in match.games if g.winner and g.winner != match.winner)
+            if w_count or l_count:
+                match.match_result = f"{w_count}-{l_count}"
+
         return match
 
     @staticmethod
@@ -312,6 +324,15 @@ class MTGODatStrategy(LogFormatStrategy):
         if (m := win_re.search(text)) is not None:
             score = f"{m.group(2)}-{m.group(3)}"
             return m.group(1), score, False
+        # Match-level concession: "@P<player> has conceded from the match."
+        # The conceder loses; opponent is the winner. No score is given in
+        # the log so we leave it None for the fallback to synthesize from
+        # per-game results.
+        concede_match_re = re.compile(rf"@P({alt}) has conceded from the match\.")
+        if (m := concede_match_re.search(text)) is not None:
+            conceder = m.group(1)
+            winner = next((p for p in players if p != conceder), None)
+            return winner, None, False
         # ``Match Tied`` lines are not @P-prefixed in the raw stream.
         tie_re = re.compile(r"Match Tied (\d)-(\d)")
         if (m := tie_re.search(text)) is not None:
@@ -555,6 +576,9 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             match.winner = _normalize_player(m.group("player"))
             if m.group("score"):
                 match.match_result = re.sub(r"\s+", "", m.group("score"))
+        elif (m := _MATCH_CONCEDE_RE.search(text)) is not None:
+            conceder = _normalize_player(m.group("player"))
+            match.winner = next((str(p) for p in match.players if str(p) != conceder), None)
         elif _MATCH_LOSE_RE.search(text):
             # Fallback: if we know who lost, opponent is winner — but we
             # only set match_result if we had a score.
