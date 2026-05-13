@@ -8,6 +8,7 @@ independent and coexist in the compose stack.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import uuid
@@ -1546,9 +1547,7 @@ async def admin_settings(
             error = "Authentication service unavailable. Please try again."
 
     code = (
-        status.HTTP_503_SERVICE_UNAVAILABLE
-        if error and mode is None and tunables is None
-        else 200
+        status.HTTP_503_SERVICE_UNAVAILABLE if error and mode is None and tunables is None else 200
     )
     return _render_admin_settings(
         request,
@@ -1626,6 +1625,68 @@ async def admin_settings_registration_mode(
         error=message,
         saved=False,
         status_code=code,
+    )
+
+
+@app.post("/admin/settings/tunables")
+async def admin_settings_tunables(
+    request: Request,
+    backfill_batch_size: Annotated[int, Form()],
+    backfill_interval_seconds: Annotated[int, Form()],
+    scryfall_sync_interval_days: Annotated[int, Form()],
+    mtgo_scraper_interval_hours: Annotated[int, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    updates = {
+        "backfill_batch_size": backfill_batch_size,
+        "backfill_interval_seconds": backfill_interval_seconds,
+        "scryfall_sync_interval_days": scryfall_sync_interval_days,
+        "mtgo_scraper_interval_hours": mtgo_scraper_interval_hours,
+    }
+
+    try:
+        result, err = await auth_client.admin_update_tunables(
+            settings.auth_service_url, user.token, updates
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.tunables.put.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth PATCH /admin/settings/tunables call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if result is not None:
+        return RedirectResponse(
+            url="/admin/settings?tunables_saved=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    # Inline error — re-fetch state for the page.  Best-effort:
+    # swallowing here is correct because the original mutation error is
+    # what we want to surface; list context underneath is nice-to-have.
+    mode: auth_client.RegistrationMode | None = None
+    tunables: auth_client.TunablesResult | None = None
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        mode = await auth_client.admin_get_registration_mode(settings.auth_service_url, user.token)
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        tunables = await auth_client.admin_get_tunables(settings.auth_service_url, user.token)
+
+    return _render_admin_settings(
+        request,
+        user,
+        mode=mode,
+        tunables=tunables,
+        error=None,
+        saved=False,
+        tunables_error="Invalid tunable values. Check ranges and try again.",
+        status_code=status.HTTP_400_BAD_REQUEST,
     )
 
 

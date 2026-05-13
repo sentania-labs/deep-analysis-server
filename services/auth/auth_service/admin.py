@@ -34,6 +34,8 @@ from auth_service.schemas import (
     RevokeSessionsResponse,
     SetRegistrationModeRequest,
     StaleCleanupResponse,
+    TunablesView,
+    UpdateTunablesRequest,
     UpdateUserRequest,
     UserListView,
     UserView,
@@ -501,3 +503,99 @@ async def cleanup_stale_agents(
         r.revoked_at = now
     await db.commit()
     return StaleCleanupResponse(revoked_count=len(rows), cutoff_date=cutoff.isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Tunables — admin-configurable runtime parameters
+# ---------------------------------------------------------------------------
+
+# Mutable tunables stored as individual keys in server_settings.
+# The key prefix groups them together and the default value is used
+# both when no DB row exists and for initial display.
+_TUNABLE_DEFAULTS: dict[str, int] = {
+    "backfill_batch_size": 100,
+    "backfill_interval_seconds": 300,
+    "scryfall_sync_interval_days": 7,
+    "mtgo_scraper_interval_hours": 24,
+}
+
+# Read-only constants surfaced in the tunables view for admin visibility
+# but not persisted to server_settings — they live in code.
+_PARSER_VERSION = "0.9.0"
+_REPARSE_MIN_VERSION = "0.9.0"
+_MIN_AGENT_VERSION = "0.4.14"
+
+
+async def _read_tunable(db: AsyncSession, key: str) -> int:
+    """Read a single tunable from server_settings, falling back to the
+    compiled default."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == f"tunable:{key}"))
+    ).scalar_one_or_none()
+    if row is None:
+        return _TUNABLE_DEFAULTS[key]
+    try:
+        return int(row.value)
+    except (TypeError, ValueError):
+        return _TUNABLE_DEFAULTS[key]
+
+
+async def _read_all_tunables(db: AsyncSession) -> TunablesView:
+    return TunablesView(
+        backfill_batch_size=await _read_tunable(db, "backfill_batch_size"),
+        backfill_interval_seconds=await _read_tunable(db, "backfill_interval_seconds"),
+        scryfall_sync_interval_days=await _read_tunable(db, "scryfall_sync_interval_days"),
+        mtgo_scraper_interval_hours=await _read_tunable(db, "mtgo_scraper_interval_hours"),
+        reparse_min_version=_REPARSE_MIN_VERSION,
+        min_agent_version=_MIN_AGENT_VERSION,
+        parser_version=_PARSER_VERSION,
+    )
+
+
+@router.get("/settings/tunables", response_model=TunablesView)
+async def get_tunables(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> TunablesView:
+    """Read the current values of all tunables. Any admin may read."""
+    return await _read_all_tunables(db)
+
+
+@router.patch("/settings/tunables", response_model=TunablesView)
+async def update_tunables(
+    body: UpdateTunablesRequest,
+    admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> TunablesView:
+    """Update one or more mutable tunables. Any admin may write."""
+    now = datetime.now(UTC)
+    updates: dict[str, int] = {}
+    if body.backfill_batch_size is not None:
+        updates["backfill_batch_size"] = body.backfill_batch_size
+    if body.backfill_interval_seconds is not None:
+        updates["backfill_interval_seconds"] = body.backfill_interval_seconds
+    if body.scryfall_sync_interval_days is not None:
+        updates["scryfall_sync_interval_days"] = body.scryfall_sync_interval_days
+    if body.mtgo_scraper_interval_hours is not None:
+        updates["mtgo_scraper_interval_hours"] = body.mtgo_scraper_interval_hours
+
+    for key, value in updates.items():
+        db_key = f"tunable:{key}"
+        row = (
+            await db.execute(select(ServerSetting).where(ServerSetting.key == db_key))
+        ).scalar_one_or_none()
+        if row is None:
+            row = ServerSetting(
+                key=db_key,
+                value=value,
+                updated_at=now,
+                updated_by_user_id=admin.user_id,
+            )
+            db.add(row)
+        else:
+            row.value = value
+            row.updated_at = now
+            row.updated_by_user_id = admin.user_id
+
+    await db.commit()
+    return await _read_all_tunables(db)
