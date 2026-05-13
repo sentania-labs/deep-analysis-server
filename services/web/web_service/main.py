@@ -619,18 +619,21 @@ async def profile_agents_generate_code(
     )
 
 
-@app.post("/profile/agents/reingest")
+@app.post("/profile/agents/{agent_id}/reingest")
 async def profile_agents_reingest(
+    agent_id: uuid.UUID,
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
-    """Force reingest: delete all parsed matches for the current user."""
+    """Force reingest: delete parsed matches uploaded by a specific agent."""
     bounce = _bounce_admin_to_panel(user)
     if bounce is not None:
         return bounce
     try:
-        result = await parser_client.delete_my_matches(settings.parser_service_url, user.token)
+        result = await parser_client.delete_my_matches(
+            settings.parser_service_url, user.token, agent_id=str(agent_id)
+        )
     except parser_client.ParserForbidden:
         _log.info("profile.agents.reingest.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -1240,9 +1243,9 @@ async def admin_agents_list(
     )
 
 
-@app.post("/admin/agents/{user_id}/reingest")
+@app.post("/admin/agents/{agent_id}/reingest")
 async def admin_agent_reingest(
-    user_id: int,
+    agent_id: uuid.UUID,
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
@@ -1251,21 +1254,26 @@ async def admin_agent_reingest(
         int,
         Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
     ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+    user_id: Annotated[int, Query(ge=1)] = 0,
 ) -> Response:
-    """Admin: force reingest for a specific user."""
+    """Admin: force reingest for a specific agent."""
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
 
     try:
         result = await parser_client.admin_delete_user_matches(
-            settings.parser_service_url, user.token, user_id
+            settings.parser_service_url, user.token, user_id, agent_id=str(agent_id)
         )
     except parser_client.ParserForbidden:
         _log.info("admin.agents.reingest.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
     except parser_client.ParserClientError:
-        _log.exception("parser DELETE /parser/admin/matches/%s call failed", user_id)
+        _log.exception(
+            "parser DELETE /parser/admin/matches/%s?agent_id=%s call failed",
+            user_id,
+            agent_id,
+        )
         return Response(
             content="Parser service unavailable. Please try again.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

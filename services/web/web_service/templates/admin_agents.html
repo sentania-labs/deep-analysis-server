@@ -78,7 +78,7 @@
                             <button type="submit" class="btn btn-danger">Revoke</button>
                         </form>
                         <form method="post"
-                              action="/admin/agents/{{ a.user_id }}/reingest?page={{ page }}&per_page={{ per_page }}"
+                              action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}"
                               class="inline-form reingest-form"
                               data-user-email="{{ a.user_email }}">
                             <button type="submit" class="btn">Reingest</button>
@@ -136,7 +136,7 @@
         form.addEventListener('submit', function (e) {
             var ue = form.dataset.userEmail || '';
             var msg = 'Force reingest for ' + ue +
-                '? This deletes all parsed matches for this user. ' +
+                '? This deletes parsed matches uploaded by this agent. ' +
                 'The backfill scanner will re-parse them.';
             if (!window.confirm(msg)) {
                 e.preventDefault();

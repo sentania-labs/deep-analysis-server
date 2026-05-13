@@ -27,16 +27,23 @@ class DeletedCountResult:
 async def delete_my_matches(
     base_url: str,
     token: str,
+    *,
+    agent_id: str | None = None,
 ) -> DeletedCountResult:
-    """Delete all parsed matches for the authenticated user.
+    """Delete parsed matches for the authenticated user.
 
-    Returns the count of deleted matches.
+    When *agent_id* is provided, only matches uploaded by that agent
+    are deleted.  Returns the count of deleted matches.
     """
+    params: dict[str, str] = {}
+    if agent_id is not None:
+        params["agent_id"] = agent_id
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.delete(
                 f"{base_url}/parser/matches",
                 headers={"Authorization": f"Bearer {token}"},
+                params=params,
             )
     except httpx.HTTPError as exc:
         raise ParserClientError(f"parser DELETE /parser/matches transport error: {exc}") from exc
@@ -54,13 +61,23 @@ async def admin_delete_user_matches(
     base_url: str,
     token: str,
     user_id: int,
+    *,
+    agent_id: str | None = None,
 ) -> DeletedCountResult:
-    """Admin: delete all parsed matches for a specific user."""
+    """Admin: delete parsed matches for a specific user.
+
+    When *agent_id* is provided, only matches uploaded by that agent
+    are deleted.
+    """
+    params: dict[str, str] = {}
+    if agent_id is not None:
+        params["agent_id"] = agent_id
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.delete(
                 f"{base_url}/parser/admin/matches/{user_id}",
                 headers={"Authorization": f"Bearer {token}"},
+                params=params,
             )
     except httpx.HTTPError as exc:
         raise ParserClientError(
