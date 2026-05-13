@@ -684,7 +684,9 @@ async def test_post_reingest_success_renders_result(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_delete(_url: str, _token: str, user_id: int) -> parser_client.DeletedCountResult:
+    async def fake_delete(
+        _url: str, _token: str, user_id: int, *, agent_id: str | None = None
+    ) -> parser_client.DeletedCountResult:
         return parser_client.DeletedCountResult(deleted_count=7)
 
     async def fake_list(
@@ -696,8 +698,9 @@ async def test_post_reingest_success_renders_result(
     monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
     dep, _ = _override_admin()
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post("/admin/agents/2/reingest")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
@@ -714,8 +717,9 @@ async def test_post_reingest_forbidden_for_non_admin(
 
     dep, _ = _override_non_admin()
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post("/admin/agents/2/reingest")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
@@ -737,8 +741,9 @@ async def test_post_reingest_503_when_parser_unreachable(
     monkeypatch.setattr(parser_client, "admin_delete_user_matches", boom)
     dep, _ = _override_admin()
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post("/admin/agents/2/reingest")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
