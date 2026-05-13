@@ -11,9 +11,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI
 from sqlalchemy import text
 
 from analytics_service.archetypes import router as archetypes_router
+from analytics_service.card_stats import router as card_stats_router
 from analytics_service.cards import router as cards_router
 from analytics_service.db import get_sessionmaker
 from analytics_service.deps import AuthenticatedUser, require_admin
+from analytics_service.game_stats import router as game_stats_router
 from analytics_service.matches import router as matches_router
 from analytics_service.mtgo_scraper import SCRAPER_NAME as MTGO_SCRAPER_NAME
 from analytics_service.mtgo_scraper import get_health as get_mtgo_health
@@ -164,6 +166,8 @@ app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 app.include_router(archetypes_router)
 app.include_router(stats_router)
+app.include_router(game_stats_router)
+app.include_router(card_stats_router)
 app.include_router(cards_router)
 app.include_router(matches_router)
 

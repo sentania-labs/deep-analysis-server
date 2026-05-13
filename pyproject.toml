@@ -59,6 +59,8 @@ ignore = []
 "services/analytics/analytics_service/main.py" = ["B008"]
 "services/analytics/analytics_service/cards.py" = ["B008"]
 "services/analytics/analytics_service/matches.py" = ["B008"]
+"services/analytics/analytics_service/game_stats.py" = ["B008"]
+"services/analytics/analytics_service/card_stats.py" = ["B008"]
 "services/parser/parser_service/reingest.py" = ["B008"]
 "services/parser/parser_service/deps.py" = ["B008"]
 
