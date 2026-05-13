@@ -61,9 +61,9 @@ class UserItem:
     role: str
     disabled: bool
     must_change_password: bool
-    mtgo_usernames: list[str] | None
-    created_at: datetime | None
-    updated_at: datetime | None
+    mtgo_usernames: list[str] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass

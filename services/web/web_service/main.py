@@ -411,7 +411,7 @@ async def profile_edit_submit(
             settings.auth_service_url,
             user.token,
             submitted,
-            mtgo_usernames=names_list or None,
+            mtgo_usernames=names_list,
         )
     except auth_client.AuthForbidden:
         _log.info("profile.edit.update_me.forbidden", extra={"user_id": user.user_id})

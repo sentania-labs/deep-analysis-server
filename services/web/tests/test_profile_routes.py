@@ -140,7 +140,9 @@ async def test_post_profile_edit_success_redirects(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+    async def fake_update_me(
+        _url: str, _token: str, _email: str, **_kw: Any
+    ) -> auth_client.UpdateMeResult:
         return auth_client.UpdateMeResult(
             ok=True,
             error=None,
@@ -176,7 +178,9 @@ async def test_post_profile_edit_success_rotates_session_cookie(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+    async def fake_update_me(
+        _url: str, _token: str, _email: str, **_kw: Any
+    ) -> auth_client.UpdateMeResult:
         return auth_client.UpdateMeResult(
             ok=True,
             error=None,
@@ -207,7 +211,9 @@ async def test_post_profile_edit_email_taken_renders_inline(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+    async def fake_update_me(
+        _url: str, _token: str, _email: str, **_kw: Any
+    ) -> auth_client.UpdateMeResult:
         return auth_client.UpdateMeResult(ok=False, error="email_taken")
 
     monkeypatch.setattr(auth_client, "update_me", fake_update_me)
@@ -236,7 +242,9 @@ async def test_post_profile_edit_invalid_email_renders_inline(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_update_me(_url: str, _token: str, _email: str) -> auth_client.UpdateMeResult:
+    async def fake_update_me(
+        _url: str, _token: str, _email: str, **_kw: Any
+    ) -> auth_client.UpdateMeResult:
         return auth_client.UpdateMeResult(ok=False, error="invalid_email")
 
     monkeypatch.setattr(auth_client, "update_me", fake_update_me)
@@ -711,7 +719,9 @@ async def test_email_change_then_password_change_chain_uses_new_email(
     async def dep() -> _deps.BrowserUser:
         return state["user"]
 
-    async def fake_update_me(_url: str, _token: str, email: str) -> auth_client.UpdateMeResult:
+    async def fake_update_me(
+        _url: str, _token: str, email: str, **_kw: Any
+    ) -> auth_client.UpdateMeResult:
         # Auth mints a new token for the rotated email claim; web
         # sets the cookie. Mirror the post-rotation user state so the
         # next request resolves the new identity.
