@@ -49,7 +49,7 @@ _log = logging.getLogger("analytics.mtgo_scraper")
 
 USER_AGENT = "DeepAnalysis/0.8 (personal MTGO analytics; contact: ops@sentania.net)"
 LISTING_URL = "https://www.mtgo.com/decklists"
-REQUEST_TIMEOUT = 30.0
+REQUEST_TIMEOUT = 60.0
 POLITE_DELAY_SECONDS = 2.0
 BROKEN_THRESHOLD = 3
 SCRAPER_NAME = "mtgo"
@@ -610,15 +610,41 @@ def _strip_placement(text_value: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+_RETRY_ATTEMPTS = 2
+_RETRY_BACKOFF_SECONDS = 5.0
+
+
+async def _get_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+) -> httpx.Response:
+    """GET *url* with a single retry on timeout errors."""
+    last_exc: httpx.TimeoutException | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return await client.get(url)
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            if attempt + 1 < _RETRY_ATTEMPTS:
+                _log.warning(
+                    "request timed out, retrying in %.0fs url=%s attempt=%d",
+                    _RETRY_BACKOFF_SECONDS,
+                    url,
+                    attempt + 1,
+                )
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+    raise last_exc  # type: ignore[misc]
+
+
 async def fetch_event_listing(client: httpx.AsyncClient) -> tuple[int, str]:
-    response = await client.get(LISTING_URL)
+    response = await _get_with_retry(client, LISTING_URL)
     return response.status_code, response.text
 
 
 async def fetch_event_page(client: httpx.AsyncClient, url: str) -> tuple[int, str]:
     """Fetch a single event page after a polite delay."""
     await asyncio.sleep(POLITE_DELAY_SECONDS)
-    response = await client.get(url)
+    response = await _get_with_retry(client, url)
     return response.status_code, response.text
 
 

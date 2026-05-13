@@ -32,6 +32,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -66,6 +67,7 @@ class Match(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
