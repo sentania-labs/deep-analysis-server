@@ -212,7 +212,9 @@ async def test_post_create_invite_renders_plaintext_and_invite_url(
     plaintext = "test-plaintext-tok-abc"
     invite_id = str(uuid.uuid4())
 
-    async def fake_create(_url: str, _token: str, _hours: int) -> auth_client.CreatedInvite:
+    async def fake_create(
+        _url: str, _token: str, _hours: int, **_kw: Any
+    ) -> auth_client.CreatedInvite:
         return auth_client.CreatedInvite(
             id=invite_id,
             token=plaintext,

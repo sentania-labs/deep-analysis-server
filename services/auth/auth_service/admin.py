@@ -379,8 +379,8 @@ def _invite_view(row: InviteToken, creator_email: str | None) -> InviteView:
         created_by_email=creator_email,
         created_at=row.created_at,
         expires_at=row.expires_at,
-        max_uses=row.max_uses,
-        use_count=row.use_count,
+        max_uses=row.max_uses if row.max_uses is not None else 1,
+        use_count=row.use_count or 0,
     )
 
 
