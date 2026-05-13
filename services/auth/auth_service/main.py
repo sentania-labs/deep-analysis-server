@@ -825,11 +825,19 @@ async def agent_heartbeat(
 
     # Cross-schema read: count uploads attributed to this user so the
     # agent can detect server-side data loss and trigger a re-sync.
-    upload_count_row = await db.execute(
-        text("SELECT COUNT(*) FROM ingest.user_uploads WHERE user_id = :user_id"),
-        {"user_id": agent.user_id},
-    )
-    upload_count: int = upload_count_row.scalar_one()
+    # Wrapped in try/except: the ingest schema may not be migrated yet
+    # or the DB role may lack cross-schema permissions.
+    try:
+        upload_count = int(
+            (
+                await db.execute(
+                    text("SELECT COUNT(*) FROM ingest.user_uploads WHERE user_id = :user_id"),
+                    {"user_id": agent.user_id},
+                )
+            ).scalar_one()
+        )
+    except Exception:
+        upload_count = 0
 
     return AgentHeartbeatResponse(
         status="ok",

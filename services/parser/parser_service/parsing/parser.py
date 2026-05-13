@@ -242,18 +242,21 @@ class MTGODatStrategy(LogFormatStrategy):
         match.games = self._parse_games(text, seen_order)
 
         # Fallback: infer match winner from per-game results when the
-        # log is truncated (no "wins the match" line).  If one player
-        # has won at least 2 games, they won the match.
-        if match.winner is None and match.games:
+        # log is truncated (no "wins the match" line).  Skip when the
+        # match was explicitly tied — None is the correct winner for
+        # ties. Require strictly more wins than the runner-up so equal
+        # game counts (e.g. 1-1 unfinished) don't produce a false
+        # positive.
+        if match.winner is None and not match_tied and match.games:
             wins: Counter[str] = Counter()
             for g in match.games:
                 if g.winner:
                     wins[g.winner] += 1
             if wins:
                 best_player, best_count = wins.most_common(1)[0]
-                if best_count >= 2:
+                opp_count = max((c for p, c in wins.items() if p != best_player), default=0)
+                if best_count >= 2 and best_count > opp_count:
                     match.winner = best_player
-                    opp_count = max((c for p, c in wins.items() if p != best_player), default=0)
                     match.match_result = f"{best_count}-{opp_count}"
 
         return match
