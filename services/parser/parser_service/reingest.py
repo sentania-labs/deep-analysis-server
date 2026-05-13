@@ -10,6 +10,7 @@ Routes:
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -106,6 +107,17 @@ async def admin_delete_all_matches(
     return DeletedCountResponse(deleted_count=count)
 
 
+def _validate_uuid(value: str, field: str) -> None:
+    """Raise 422 if *value* is not a valid UUID."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_uuid", "field": field},
+        ) from None
+
+
 async def _delete_matches_for_user(
     db: AsyncSession,
     user_id: int,
@@ -119,6 +131,9 @@ async def _delete_matches_for_user(
     When *agent_id* is provided, only matches whose ``sha256`` exists
     in ``ingest.user_uploads`` for that agent are deleted.
     """
+    if agent_id is not None:
+        _validate_uuid(agent_id, "agent_id")
+
     after_dt = _parse_iso_dt(after_raw)
     if after_raw is not None and after_dt is None:
         raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "after"})

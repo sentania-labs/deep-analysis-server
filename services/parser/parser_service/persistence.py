@@ -44,7 +44,7 @@ async def persist_match(
         played_at=parsed.played_at,
         parsed_with_version=PARSER_VERSION,
     )
-    insert_stmt = insert_stmt.on_conflict_do_update(
+    upsert_stmt = insert_stmt.on_conflict_do_update(
         constraint="uq_matches_sha256_user",
         set_={
             "format": insert_stmt.excluded.format,
@@ -59,7 +59,7 @@ async def persist_match(
         },
     ).returning(Match.id)
 
-    match_id = (await session.execute(insert_stmt)).scalar_one()
+    match_id = (await session.execute(upsert_stmt)).scalar_one()
 
     # If this was an upsert (reparse), the id is the existing row's id,
     # not new_id. Either way we need to (re-)write children.

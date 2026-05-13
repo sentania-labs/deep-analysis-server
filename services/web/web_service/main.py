@@ -1261,6 +1261,7 @@ async def admin_agents_list(
 async def admin_agent_reingest(
     agent_id: uuid.UUID,
     request: Request,
+    user_id: Annotated[int, Query(ge=1)],
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
@@ -1268,7 +1269,6 @@ async def admin_agent_reingest(
         int,
         Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
     ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
-    user_id: Annotated[int, Query(ge=1)] = 0,
 ) -> Response:
     """Admin: force reingest for a specific agent."""
     blocked = _require_admin_or_403(request, user)
