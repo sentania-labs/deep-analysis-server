@@ -692,11 +692,29 @@ class PlayDrawStats:
     on_draw_win_rate: float
 
 
-async def get_play_draw_stats(base_url: str, token: str) -> PlayDrawStats:
+async def get_play_draw_stats(
+    base_url: str,
+    token: str,
+    *,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> PlayDrawStats:
+    params: dict[str, str] = {}
+    if format_filter:
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/play-draw",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
@@ -710,13 +728,15 @@ async def get_play_draw_stats(base_url: str, token: str) -> PlayDrawStats:
             f"analytics GET /stats/play-draw returned {resp.status_code}: {resp.text}"
         )
     d = resp.json()
+    on_play = d.get("on_play") or {}
+    on_draw = d.get("on_draw") or {}
     return PlayDrawStats(
-        on_play_matches=int(d.get("on_play_matches") or 0),
-        on_play_wins=int(d.get("on_play_wins") or 0),
-        on_play_win_rate=float(d.get("on_play_win_rate") or 0.0),
-        on_draw_matches=int(d.get("on_draw_matches") or 0),
-        on_draw_wins=int(d.get("on_draw_wins") or 0),
-        on_draw_win_rate=float(d.get("on_draw_win_rate") or 0.0),
+        on_play_matches=int(on_play.get("total") or 0),
+        on_play_wins=int(on_play.get("wins") or 0),
+        on_play_win_rate=float(on_play.get("win_rate") or 0.0),
+        on_draw_matches=int(on_draw.get("total") or 0),
+        on_draw_wins=int(on_draw.get("wins") or 0),
+        on_draw_win_rate=float(on_draw.get("win_rate") or 0.0),
     )
 
 
@@ -730,11 +750,29 @@ class PreboardPostboardStats:
     games23_win_rate: float
 
 
-async def get_preboard_postboard_stats(base_url: str, token: str) -> PreboardPostboardStats:
+async def get_preboard_postboard_stats(
+    base_url: str,
+    token: str,
+    *,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> PreboardPostboardStats:
+    params: dict[str, str] = {}
+    if format_filter:
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/preboard-postboard",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
@@ -750,13 +788,15 @@ async def get_preboard_postboard_stats(base_url: str, token: str) -> PreboardPos
             f"analytics GET /stats/preboard-postboard returned {resp.status_code}: {resp.text}"
         )
     d = resp.json()
+    preboard = d.get("preboard") or {}
+    postboard = d.get("postboard") or {}
     return PreboardPostboardStats(
-        game1_matches=int(d.get("game1_matches") or 0),
-        game1_wins=int(d.get("game1_wins") or 0),
-        game1_win_rate=float(d.get("game1_win_rate") or 0.0),
-        games23_matches=int(d.get("games23_matches") or 0),
-        games23_wins=int(d.get("games23_wins") or 0),
-        games23_win_rate=float(d.get("games23_win_rate") or 0.0),
+        game1_matches=int(preboard.get("total") or 0),
+        game1_wins=int(preboard.get("wins") or 0),
+        game1_win_rate=float(preboard.get("win_rate") or 0.0),
+        games23_matches=int(postboard.get("total") or 0),
+        games23_wins=int(postboard.get("wins") or 0),
+        games23_win_rate=float(postboard.get("win_rate") or 0.0),
     )
 
 
@@ -773,11 +813,29 @@ class MulliganStats:
     buckets: list[MulliganBucket]
 
 
-async def get_mulligan_stats(base_url: str, token: str) -> MulliganStats:
+async def get_mulligan_stats(
+    base_url: str,
+    token: str,
+    *,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> MulliganStats:
+    params: dict[str, str] = {}
+    if format_filter:
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/mulligans",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
@@ -857,12 +915,25 @@ async def get_card_stats(
     page: int = 1,
     per_page: int = 20,
     sort_by: str = "games",
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> CardStatsResponse:
+    params: dict[str, Any] = {"page": page, "per_page": per_page, "sort_by": sort_by}
+    if format_filter:
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/cards",
-                params={"page": page, "per_page": per_page, "sort_by": sort_by},
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
@@ -876,8 +947,8 @@ async def get_card_stats(
     d = resp.json()
     cards = [
         CardStatItem(
-            card_name=str(c.get("card_name") or ""),
-            games=int(c.get("games") or 0),
+            card_name=str(c.get("name") or c.get("card_name") or ""),
+            games=int(c.get("cast_count") or c.get("games") or 0),
             wins=int(c.get("wins") or 0),
             win_rate=float(c.get("win_rate") or 0.0),
             avg_cast_turn=float(c["avg_cast_turn"]) if c.get("avg_cast_turn") is not None else None,
@@ -952,10 +1023,21 @@ def _to_player_turn_state(payload: dict[str, Any]) -> PlayerTurnState:
 
 
 def _to_turn(payload: dict[str, Any]) -> TurnData:
+    # The analytics endpoint returns player data as a dict keyed by
+    # player name (``"players": {"name": {...}}``), while the web
+    # client expects a flat list of player state objects.
+    raw_states = payload.get("player_states") or []
+    if not raw_states:
+        players_dict = payload.get("players") or {}
+        if isinstance(players_dict, dict):
+            raw_states = [
+                {"player": name, **(data if isinstance(data, dict) else {})}
+                for name, data in players_dict.items()
+            ]
     return TurnData(
         turn_number=int(payload.get("turn_number") or 0),
         active_player=payload.get("active_player"),
-        player_states=[_to_player_turn_state(ps) for ps in payload.get("player_states", [])],
+        player_states=[_to_player_turn_state(ps) for ps in raw_states],
         stack=list(payload.get("stack") or []),
     )
 
@@ -986,8 +1068,20 @@ async def get_game_turns(
             f"returned {resp.status_code}: {resp.text}"
         )
     d = resp.json()
+    # The analytics endpoint returns either a bare JSON array of turn
+    # objects or a wrapped object with match_id/game_number/turns keys.
+    if isinstance(d, list):
+        turns = [_to_turn(t) for t in d]
+    else:
+        turns = [_to_turn(t) for t in d.get("turns", [])]
+    if isinstance(d, dict):
+        resolved_match_id = str(d.get("match_id") or match_id)
+        resolved_game_number = int(d.get("game_number") or game_number)
+    else:
+        resolved_match_id = str(match_id)
+        resolved_game_number = game_number
     return GameTurnsResponse(
-        match_id=str(d.get("match_id") or match_id),
-        game_number=int(d.get("game_number") or game_number),
-        turns=[_to_turn(t) for t in d.get("turns", [])],
+        match_id=resolved_match_id,
+        game_number=resolved_game_number,
+        turns=turns,
     )

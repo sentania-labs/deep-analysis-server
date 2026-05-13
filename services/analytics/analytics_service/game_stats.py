@@ -113,6 +113,9 @@ async def _load_games_with_context(
     db: AsyncSession,
     user_id: int,
     format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load all games with match context for a user.
 
@@ -124,6 +127,15 @@ async def _load_games_with_context(
     if format_filter:
         where += " AND LOWER(m.format) = LOWER(:format)"
         params["format"] = format_filter
+    if opponent:
+        where += " AND m.players @> :opp_json::jsonb"
+        params["opp_json"] = f'["{opponent}"]'
+    if date_from:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date_from
+    if date_to:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date_to
 
     rows = (
         await db.execute(
@@ -165,9 +177,14 @@ async def get_play_draw(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> PlayDrawResponse:
     """Win rate on the play vs on the draw."""
-    games = await _load_games_with_context(db, user.user_id, format)
+    games = await _load_games_with_context(
+        db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
+    )
     names = await _load_mtgo_usernames(db, user.user_id)
 
     play_wins = play_total = 0
@@ -204,9 +221,14 @@ async def get_preboard_postboard(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> PrePostBoardResponse:
     """Win rate in game 1 (pre-board) vs games 2-3 (post-board)."""
-    games = await _load_games_with_context(db, user.user_id, format)
+    games = await _load_games_with_context(
+        db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
+    )
     names = await _load_mtgo_usernames(db, user.user_id)
 
     pre_wins = pre_total = 0
@@ -239,9 +261,14 @@ async def get_mulligans(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> list[MulliganBucket]:
     """Frequency and win rate by opening hand size."""
-    games = await _load_games_with_context(db, user.user_id, format)
+    games = await _load_games_with_context(
+        db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
+    )
     names = await _load_mtgo_usernames(db, user.user_id)
 
     buckets: dict[int, dict[str, int]] = {}
@@ -288,6 +315,9 @@ async def get_game_length(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> list[GameLengthBucket]:
     """Turns distribution bucketed into ranges."""
     names = await _load_mtgo_usernames(db, user.user_id)
@@ -297,6 +327,15 @@ async def get_game_length(
     if format:
         where += " AND LOWER(m.format) = LOWER(:format)"
         params["format"] = format
+    if opponent:
+        where += " AND m.players @> :opp_json::jsonb"
+        params["opp_json"] = f'["{opponent}"]'
+    if date_from:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date_from
+    if date_to:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date_to
 
     rows = (
         await db.execute(

@@ -108,6 +108,10 @@ async def _load_card_appearances(
     user_id: int,
     mtgo_usernames: list[str] | None,
     card_name: str | None = None,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load per-game card appearance data from game_states.
 
@@ -115,20 +119,35 @@ async def _load_card_appearances(
     in any turn snapshot. Returns a list of dicts with keys: game_id,
     winner, players, format, card_name, first_turn.
     """
+    where = "WHERE m.user_id = :user_id"
+    params: dict[str, Any] = {"user_id": user_id}
+    if format_filter:
+        where += " AND LOWER(m.format) = LOWER(:format)"
+        params["format"] = format_filter
+    if opponent:
+        where += " AND m.players @> :opp_json::jsonb"
+        params["opp_json"] = f'["{opponent}"]'
+    if date_from:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date_from
+    if date_to:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date_to
+
     rows = (
         await db.execute(
             text(
-                """
+                f"""
                 SELECT g.id AS game_id, g.winner, m.players, m.format,
                        gs.turn_number, gs.player_states
                 FROM parser.game_states gs
                 JOIN parser.games g ON g.id = gs.game_id
                 JOIN parser.matches m ON m.id = g.match_id
-                WHERE m.user_id = :user_id
+                {where}
                 ORDER BY g.id, gs.turn_number
                 """
             ),
-            {"user_id": user_id},
+            params,
         )
     ).all()
 
@@ -205,10 +224,22 @@ async def get_card_stats(
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=_MAX_PER_PAGE)] = _DEFAULT_PER_PAGE,
     sort: Annotated[str, Query()] = "cast_count",
+    format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> CardStatsResponse:
     """Per-card performance across all matches."""
     names = await _load_mtgo_usernames(db, user.user_id)
-    appearances = await _load_card_appearances(db, user.user_id, names)
+    appearances = await _load_card_appearances(
+        db,
+        user.user_id,
+        names,
+        format_filter=format,
+        opponent=opponent,
+        date_from=date_from,
+        date_to=date_to,
+    )
 
     # Aggregate per card
     agg: dict[str, dict[str, Any]] = {}

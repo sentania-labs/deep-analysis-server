@@ -150,7 +150,7 @@ async def test_dashboard_renders_with_stats(
             per_page=20,
         )
 
-    async def fake_play_draw(_url: str, _token: str) -> Any:
+    async def fake_play_draw(_url: str, _token: str, **_kw: Any) -> Any:
         return analytics_client.PlayDrawStats(
             on_play_matches=10,
             on_play_wins=6,
@@ -160,7 +160,7 @@ async def test_dashboard_renders_with_stats(
             on_draw_win_rate=37.5,
         )
 
-    async def fake_preboard(_url: str, _token: str) -> Any:
+    async def fake_preboard(_url: str, _token: str, **_kw: Any) -> Any:
         return analytics_client.PreboardPostboardStats(
             game1_matches=10,
             game1_wins=5,
@@ -170,7 +170,7 @@ async def test_dashboard_renders_with_stats(
             games23_win_rate=50.0,
         )
 
-    async def fake_mulligan(_url: str, _token: str) -> Any:
+    async def fake_mulligan(_url: str, _token: str, **_kw: Any) -> Any:
         return analytics_client.MulliganStats(
             buckets=[
                 analytics_client.MulliganBucket(hand_size=7, games=12, wins=8, win_rate=66.7),
