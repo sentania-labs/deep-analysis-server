@@ -32,6 +32,9 @@ class ParserSettings(BaseServiceSettings):
     parser_raw_path: Path = Path("/data/raw/")
     # Hard ceiling on log size we'll buffer in memory while parsing.
     parser_max_log_bytes: int = 50 * 1024 * 1024
+    # Base URL for the analytics service (archetype classifier).
+    # Empty string disables classification.
+    analytics_service_url: str = "http://analytics:8000"
     # Interval (seconds) between backfill scans for ingested-but-not-parsed files.
     backfill_interval_seconds: int = 300
     # Maximum number of unparsed files to process per backfill scan.

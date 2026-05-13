@@ -69,6 +69,7 @@ class Match(Base):
     )
     played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),

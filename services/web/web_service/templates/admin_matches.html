@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · Matches · Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="panel">
+    <h1>Matches</h1>
+    <nav class="admin-subnav">
+        <a href="/admin/users">Users</a>
+        <span class="muted"> · </span>
+        <a href="/admin/agents">Agents</a>
+        <span class="muted"> · </span>
+        <a href="/admin/matches" aria-current="page"><strong>Matches</strong></a>
+        <span class="muted"> · </span>
+        <a href="/admin/archetypes">Archetypes</a>
+        <span class="muted"> · </span>
+        <a href="/admin/cards">Cards</a>
+        <span class="muted"> · </span>
+        <a href="/admin/invites">Invites</a>
+        <span class="muted"> · </span>
+        <a href="/admin/settings">Settings</a>
+    </nav>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form method="get" action="/admin/matches" class="filter-form">
+        <label class="field field-inline">
+            <span>Format</span>
+            <select name="format">
+                <option value="">All</option>
+                {% for f in format_options %}
+                <option value="{{ f }}" {% if filters.format == f %}selected{% endif %}>{{ f }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="field field-inline">
+            <span>Opponent</span>
+            <input type="text" name="opponent" value="{{ filters.opponent }}" placeholder="Search...">
+        </label>
+        <label class="field field-inline">
+            <span>Result</span>
+            <select name="result">
+                <option value="">All</option>
+                <option value="wins" {% if filters.result == "wins" %}selected{% endif %}>Wins</option>
+                <option value="losses" {% if filters.result == "losses" %}selected{% endif %}>Losses</option>
+                <option value="draws" {% if filters.result == "draws" %}selected{% endif %}>Draws</option>
+            </select>
+        </label>
+        <label class="field field-inline">
+            <span>From</span>
+            <input type="date" name="date_from" value="{{ filters.date_from }}">
+        </label>
+        <label class="field field-inline">
+            <span>To</span>
+            <input type="date" name="date_to" value="{{ filters.date_to }}">
+        </label>
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <a class="btn" href="/admin/matches">Clear</a>
+    </form>
+
+    {% if not match_list or not match_list.matches %}
+        <p>No matches found.</p>
+    {% else %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>User</th>
+                    <th>Players</th>
+                    <th>Format</th>
+                    <th>Result</th>
+                    <th>Games</th>
+                    <th>Played</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in match_list.matches %}
+                <tr>
+                    <td>{{ m.user_email or ("UID " ~ m.user_id) }}</td>
+                    <td>
+                        {% if m.players|length >= 2 %}
+                            {{ m.players[0] }} vs {{ m.players[1] }}
+                        {% elif m.players %}
+                            {{ m.players[0] }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{{ m.format_ or "—" }}</td>
+                    <td>
+                        {% if m.winner %}
+                            {{ m.match_result or "—" }}
+                            <span class="muted">({{ m.winner }})</span>
+                        {% elif m.game_count > 0 %}
+                            {{ m.match_result or "Draw" }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{{ m.game_count }}</td>
+                    <td>
+                        {% if m.played_at %}
+                            <a href="/matches/{{ m.match_id }}">{{ m.played_at.strftime("%Y-%m-%d %H:%M") }}</a>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% set first_idx = (match_list.page - 1) * match_list.per_page + 1 %}
+        {% set last_idx = first_idx + match_list.matches|length - 1 %}
+        {% set has_prev = match_list.page > 1 %}
+        {% set has_next = last_idx < match_list.total %}
+        <nav class="pagination" aria-label="Match list pagination">
+            <p class="muted">
+                Showing {{ first_idx }}–{{ last_idx }} of
+                {{ match_list.total }} match{{ "" if match_list.total == 1 else "es" }}.
+            </p>
+            {% if has_prev or has_next %}
+            <p>
+                {% if has_prev %}
+                <a class="btn"
+                   href="/admin/matches?page={{ match_list.page - 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+                   rel="prev">&larr; Previous</a>
+                {% endif %}
+                <span class="muted">Page {{ match_list.page }}</span>
+                {% if has_next %}
+                <a class="btn"
+                   href="/admin/matches?page={{ match_list.page + 1 }}&per_page={{ match_list.per_page }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+                   rel="next">Next &rarr;</a>
+                {% endif %}
+            </p>
+            {% endif %}
+        </nav>
+    {% endif %}
+</section>
+{% endblock %}
