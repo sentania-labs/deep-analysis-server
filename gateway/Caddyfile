@@ -1,9 +1,6 @@
-# gateway/Caddyfile — slot-internal reverse proxy.
-#
-# Fleet-caddy on the host terminates TLS for the public FQDN and
-# forwards to this container over the edge-slots bridge network.
-# This gateway runs plaintext only — no ACME, no TLS.
 {
+	# Slot-internal reverse proxy. Fleet-caddy terminates TLS;
+	# this gateway runs plaintext only.
 	auto_https off
 }
 
