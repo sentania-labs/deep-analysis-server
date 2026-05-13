@@ -3,12 +3,19 @@
 # Fleet-caddy on the host terminates TLS for the public FQDN and
 # forwards to this container over the edge-slots bridge network.
 # This gateway runs plaintext only — no ACME, no TLS.
-
 {
-    auto_https off
+	auto_https off
 }
 
 :8080 {
+    # Security headers applied to all responses.
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
     handle /health {
         respond "ok" 200
     }
@@ -32,4 +39,10 @@
     handle {
         reverse_proxy web:8000
     }
+
+    # NOTE: Rate limiting on auth endpoints (e.g. /auth/login) is
+    # deferred. Caddy's rate_limit directive requires the caddy-ext/
+    # ratelimit module (custom build). Until we build a custom Caddy
+    # image or implement rate limiting in the auth service directly,
+    # this is not enforced at the gateway layer.
 }

@@ -1,27 +1,6 @@
-handle /auth/* {
-    reverse_proxy deep-analysis-auth-1:8000 {
-        health_uri /healthz
-        health_interval 30s
-    }
-}
-
-handle /ingest/* {
-    reverse_proxy deep-analysis-ingest-1:8000 {
-        health_uri /healthz
-        health_interval 30s
-    }
-}
-
-handle /analytics/* {
-    reverse_proxy deep-analysis-analytics-1:8000 {
-        health_uri /healthz
-        health_interval 30s
-    }
-}
-
 handle {
-    reverse_proxy deep-analysis-web-1:8000 {
-        health_uri /healthz
+    reverse_proxy deep-analysis-gateway-1:8080 {
+        health_uri /health
         health_interval 30s
     }
 }
