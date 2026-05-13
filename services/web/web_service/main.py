@@ -274,30 +274,42 @@ async def dashboard(
 
     # v0.9.0 analytics widgets — each is independent so a failure in
     # one doesn't block the others or the main dashboard.
+    # Build filter kwargs for analytics widget calls
+    _widget_filters = {
+        "format_filter": format or None,
+        "opponent": opponent or None,
+        "date_from": date_from or None,
+        "date_to": date_to or None,
+    }
+
     try:
         play_draw_stats = await analytics_client.get_play_draw_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, **_widget_filters
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("play/draw stats unavailable")
 
     try:
         preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, **_widget_filters
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("preboard/postboard stats unavailable")
 
     try:
         mulligan_stats = await analytics_client.get_mulligan_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, **_widget_filters
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("mulligan stats unavailable")
 
     try:
         card_stats = await analytics_client.get_card_stats(
-            settings.analytics_service_url, user.token, per_page=20, sort_by="games"
+            settings.analytics_service_url,
+            user.token,
+            per_page=20,
+            sort_by="games",
+            **_widget_filters,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("card stats unavailable")

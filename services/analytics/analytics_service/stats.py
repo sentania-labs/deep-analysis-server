@@ -328,10 +328,11 @@ async def get_username_suggestion(
         await db.execute(
             text(
                 """
-                SELECT name, COUNT(*) AS n
-                FROM parser.matches, jsonb_array_elements_text(players) AS name
-                WHERE user_id = :user_id
-                GROUP BY name
+                SELECT pname, COUNT(DISTINCT m.id) AS n
+                FROM parser.matches m
+                CROSS JOIN LATERAL jsonb_array_elements_text(m.players) AS pname
+                WHERE m.user_id = :user_id
+                GROUP BY pname
                 ORDER BY n DESC
                 LIMIT 5
                 """
