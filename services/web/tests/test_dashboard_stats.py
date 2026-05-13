@@ -132,9 +132,28 @@ async def test_dashboard_renders_with_stats(
     async def fake_opponent(_url: str, _token: str) -> Any:
         return _sample_opponent_stats()
 
+    async def fake_match_list(_url: str, _token: str, **_kw: Any) -> Any:
+        return analytics_client.MatchListResponse(
+            matches=[
+                analytics_client.MatchListItem(
+                    match_id="abc-123",
+                    played_at=datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
+                    opponent="bob",
+                    result="W",
+                    format_="Modern",
+                    player_wins=2,
+                    player_losses=1,
+                ),
+            ],
+            total=1,
+            page=1,
+            per_page=20,
+        )
+
     monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
     monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", fake_opponent)
+    monkeypatch.setattr(analytics_client, "get_match_list", fake_match_list)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:
@@ -147,7 +166,7 @@ async def test_dashboard_renders_with_stats(
     assert "Total matches" in text
     assert "Win rate" in text
     assert "66.7%" in text
-    # Recent match table should include the sample row
+    # Match history table should include the sample row
     assert "bob" in text
     assert "Modern" in text
     # Format/opponent breakdowns
@@ -175,9 +194,13 @@ async def test_dashboard_empty_state_no_matches(
     async def fake_opponent(_url: str, _token: str) -> Any:
         return []
 
+    async def fake_match_list(_url: str, _token: str, **_kw: Any) -> Any:
+        return analytics_client.MatchListResponse(matches=[], total=0, page=1, per_page=20)
+
     monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
     monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", fake_opponent)
+    monkeypatch.setattr(analytics_client, "get_match_list", fake_match_list)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:
@@ -207,6 +230,7 @@ async def test_dashboard_renders_error_banner_on_analytics_failure(
     monkeypatch.setattr(analytics_client, "get_stats_summary", boom)
     monkeypatch.setattr(analytics_client, "get_stats_by_format", boom)
     monkeypatch.setattr(analytics_client, "get_stats_by_opponent", boom)
+    monkeypatch.setattr(analytics_client, "get_match_list", boom)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
     try:

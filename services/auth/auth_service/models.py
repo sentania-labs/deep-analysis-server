@@ -120,6 +120,7 @@ class AgentRegistration(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     client_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    local_file_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("api_token_hash", name="uq_agent_registrations_api_token_hash"),

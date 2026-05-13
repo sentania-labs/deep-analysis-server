@@ -55,6 +55,7 @@ async def test_heartbeat_valid_token(
     body = r.json()
     assert body["status"] == "ok"
     assert body["revoked"] is False
+    assert body["upload_count"] == 0
 
     db_session.expire_all()
     after_row = (
@@ -96,3 +97,56 @@ async def test_heartbeat_updates_client_version(
         )
     ).scalar_one()
     assert row.client_version == "0.4.1"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_saves_local_file_count(
+    client: Any, db_session: AsyncSession, seed_user: dict[str, Any]
+) -> None:
+    agent = await _register_agent(client, seed_user)
+
+    r = await client.post(
+        "/auth/agent/heartbeat",
+        headers={"Authorization": f"Bearer {agent['api_token']}"},
+        json={"local_file_count": 42},
+    )
+    assert r.status_code == 200
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(AgentRegistration).where(AgentRegistration.id == uuid.UUID(agent["agent_id"]))
+        )
+    ).scalar_one()
+    assert row.local_file_count == 42
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_ignores_null_local_file_count(
+    client: Any, db_session: AsyncSession, seed_user: dict[str, Any]
+) -> None:
+    agent = await _register_agent(client, seed_user)
+
+    # First set a value
+    r = await client.post(
+        "/auth/agent/heartbeat",
+        headers={"Authorization": f"Bearer {agent['api_token']}"},
+        json={"local_file_count": 10},
+    )
+    assert r.status_code == 200
+
+    # Then send without local_file_count — should not overwrite
+    r = await client.post(
+        "/auth/agent/heartbeat",
+        headers={"Authorization": f"Bearer {agent['api_token']}"},
+        json={},
+    )
+    assert r.status_code == 200
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(AgentRegistration).where(AgentRegistration.id == uuid.UUID(agent["agent_id"]))
+        )
+    ).scalar_one()
+    assert row.local_file_count == 10

@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_service.db import get_session
@@ -233,6 +233,25 @@ async def list_agents(
             .offset(offset)
         )
     ).all()
+
+    # Cross-schema read: count parsed matches per user so the admin
+    # agents page can compare local_file_count vs parsed_count.
+    user_ids = list({a.user_id for a, _ in rows})
+    parsed_counts: dict[int, int] = {}
+    if user_ids:
+        pc_rows = (
+            await db.execute(
+                text(
+                    "SELECT user_id, COUNT(*) AS cnt"
+                    " FROM parser.matches"
+                    " WHERE user_id = ANY(:uids)"
+                    " GROUP BY user_id"
+                ),
+                {"uids": user_ids},
+            )
+        ).all()
+        parsed_counts = {int(r[0]): int(r[1]) for r in pc_rows}
+
     agents = [
         AgentView(
             agent_id=a.id,
@@ -240,6 +259,8 @@ async def list_agents(
             user_email=email,
             machine_name=a.machine_name,
             client_version=a.client_version,
+            local_file_count=a.local_file_count,
+            parsed_count=parsed_counts.get(a.user_id, 0),
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,

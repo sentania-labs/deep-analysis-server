@@ -40,6 +40,8 @@ class AgentItem:
     created_at: datetime | None
     last_seen_at: datetime | None
     revoked_at: datetime | None
+    local_file_count: int | None = None
+    parsed_count: int | None = None
 
 
 @dataclass
@@ -52,6 +54,8 @@ class AdminAgentItem:
     created_at: datetime | None
     last_seen_at: datetime | None
     revoked_at: datetime | None
+    local_file_count: int | None = None
+    parsed_count: int | None = None
 
 
 @dataclass
@@ -256,6 +260,8 @@ async def list_my_agents(
             created_at=_parse_dt(a.get("created_at")),
             last_seen_at=_parse_dt(a.get("last_seen_at")),
             revoked_at=_parse_dt(a.get("revoked_at")),
+            local_file_count=a.get("local_file_count"),
+            parsed_count=a.get("parsed_count"),
         )
         for a in data.get("agents", [])
     ]
@@ -454,6 +460,8 @@ async def admin_list_agents(
             created_at=_parse_dt(a.get("created_at")),
             last_seen_at=_parse_dt(a.get("last_seen_at")),
             revoked_at=_parse_dt(a.get("revoked_at")),
+            local_file_count=a.get("local_file_count"),
+            parsed_count=a.get("parsed_count"),
         )
         for a in data.get("agents", [])
     ]

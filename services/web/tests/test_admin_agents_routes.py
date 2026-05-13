@@ -668,3 +668,127 @@ async def test_admin_list_revoke_refresh_flow(
         assert f"/admin/agents/{items[1].agent_id}/revoke" in r3.text
     finally:
         _main.app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Admin reingest — POST /admin/agents/{user_id}/reingest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_reingest_success_renders_result(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client, parser_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_delete(_url: str, _token: str, user_id: int) -> parser_client.DeletedCountResult:
+        return parser_client.DeletedCountResult(deleted_count=7)
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return _sample_agents()
+
+    monkeypatch.setattr(parser_client, "admin_delete_user_matches", fake_delete)
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/2/reingest")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "7 matches deleted" in r.text
+
+
+@pytest.mark.asyncio
+async def test_post_reingest_forbidden_for_non_admin(
+    app_client: httpx.AsyncClient,
+) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/2/reingest")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_post_reingest_503_when_parser_unreachable(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+    from web_service import parser_client
+
+    async def boom(*_a: Any, **_kw: Any) -> Any:
+        raise parser_client.ParserClientError("simulated outage")
+
+    monkeypatch.setattr(parser_client, "admin_delete_user_matches", boom)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/agents/2/reingest")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Admin agents: local_file_count and parsed_count columns
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_admin_agents_renders_local_and_parsed_counts(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_list(
+        _url: str, _token: str, limit: int = 50, offset: int = 0
+    ) -> tuple[list[auth_client.AdminAgentItem], int]:
+        return (
+            [
+                auth_client.AdminAgentItem(
+                    agent_id="11111111-1111-1111-1111-111111111111",
+                    user_id=2,
+                    user_email="alice@example.com",
+                    machine_name="alice-laptop",
+                    client_version="0.4.0",
+                    created_at=datetime(2026, 4, 26, 12, 0, tzinfo=UTC),
+                    last_seen_at=datetime(2026, 4, 26, 12, 30, tzinfo=UTC),
+                    revoked_at=None,
+                    local_file_count=15,
+                    parsed_count=12,
+                ),
+            ],
+            1,
+        )
+
+    monkeypatch.setattr(auth_client, "admin_list_agents", fake_list)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/agents")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # Verify the Local Files and Parsed columns show the counts.
+    assert ">15<" in r.text
+    assert ">12<" in r.text

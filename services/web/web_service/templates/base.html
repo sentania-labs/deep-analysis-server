@@ -14,14 +14,28 @@
             <nav class="site-nav">
                 {% if user %}
                     <a class="nav-link" href="/cards">Cards</a>
-                    {% if user.email %}
-                        <span class="nav-user">{{ user.email }}</span>
-                    {% else %}
-                        <span class="nav-user">user #{{ user.user_id }}</span>
-                    {% endif %}
-                    <form class="nav-logout" method="post" action="/logout">
-                        <button type="submit" class="linklike">Log out</button>
-                    </form>
+                    <div class="nav-dropdown" tabindex="0">
+                        <button type="button" class="nav-dropdown-trigger" aria-haspopup="true">
+                            {% if user.email %}{{ user.email }}{% else %}user #{{ user.user_id }}{% endif %}
+                            <span class="nav-dropdown-arrow" aria-hidden="true">&#9662;</span>
+                        </button>
+                        <ul class="nav-dropdown-menu" role="menu">
+                            {% if user.role != "admin" %}
+                            <li role="none"><a role="menuitem" href="/profile">Profile</a></li>
+                            <li role="none"><a role="menuitem" href="/settings/password">Change password</a></li>
+                            <li role="none"><a role="menuitem" href="/profile/agents">My agents</a></li>
+                            {% else %}
+                            <li role="none"><a role="menuitem" href="/admin/users">Admin panel</a></li>
+                            <li role="none"><a role="menuitem" href="/settings/password">Change password</a></li>
+                            {% endif %}
+                            <li role="none" class="nav-dropdown-divider"></li>
+                            <li role="none">
+                                <form method="post" action="/logout" class="nav-dropdown-form">
+                                    <button type="submit" role="menuitem" class="nav-dropdown-btn">Log out</button>
+                                </form>
+                            </li>
+                        </ul>
+                    </div>
                 {% endif %}
             </nav>
         </div>

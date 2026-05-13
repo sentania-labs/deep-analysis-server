@@ -115,7 +115,7 @@ services:
     restart: "no"
 
   gateway:
-    image: caddy:2-alpine
+    image: caddy:2.9-alpine
     restart: unless-stopped
     logging: *default-logging
     volumes:
@@ -144,7 +144,6 @@ services:
     logging: *default-logging
     networks:
       - backend
-      - edge-slots
     environment:
       DA_SERVICE_NAME: auth
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -179,7 +178,6 @@ services:
     logging: *default-logging
     networks:
       - backend
-      - edge-slots
     environment:
       DA_SERVICE_NAME: ingest
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -242,7 +240,6 @@ services:
     logging: *default-logging
     networks:
       - backend
-      - edge-slots
     environment:
       DA_SERVICE_NAME: analytics
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
@@ -272,7 +269,6 @@ services:
     networks:
       - frontend
       - backend
-      - edge-slots
     environment:
       DA_SERVICE_NAME: web
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}

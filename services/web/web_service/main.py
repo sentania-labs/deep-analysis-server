@@ -13,15 +13,16 @@ import os
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, Query, Request, Response, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import mount_metrics
-from web_service import analytics_client, auth_client
+from web_service import analytics_client, auth_client, parser_client
 from web_service.deps import (
     BrowserAuthRedirect,
     BrowserUser,
@@ -184,11 +185,22 @@ async def login_submit(
     return redirect
 
 
+_DASHBOARD_DEFAULT_PER_PAGE = 20
+_DASHBOARD_MAX_PER_PAGE = 100
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=_DASHBOARD_MAX_PER_PAGE)] = _DASHBOARD_DEFAULT_PER_PAGE,
+    format: Annotated[str, Query(alias="format")] = "",
+    opponent: Annotated[str, Query()] = "",
+    result: Annotated[str, Query()] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
@@ -196,6 +208,7 @@ async def dashboard(
     stats_summary: Any = None
     format_stats: list[Any] = []
     opponent_stats: list[Any] = []
+    match_list: Any = None
     stats_error = False
     try:
         stats_summary = await analytics_client.get_stats_summary(
@@ -207,12 +220,35 @@ async def dashboard(
         opponent_stats = await analytics_client.get_stats_by_opponent(
             settings.analytics_service_url, user.token
         )
+        match_list = await analytics_client.get_match_list(
+            settings.analytics_service_url,
+            user.token,
+            page=page,
+            per_page=per_page,
+            format_filter=format or None,
+            opponent=opponent or None,
+            result=result or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+        )
     except analytics_client.AnalyticsForbidden:
         # Treat as logged-out: bounce to /login so the user can re-auth.
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics stats call failed; rendering dashboard with error banner")
         stats_error = True
+
+    # Filters dict to persist across pagination
+    filters = {
+        "format": format,
+        "opponent": opponent,
+        "result": result,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    # Build query string for pagination links (URL-encoded so filter
+    # values containing &, =, +, % don't break the links).
+    filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
     return templates.TemplateResponse(
         request,
@@ -222,7 +258,12 @@ async def dashboard(
             "stats_summary": stats_summary,
             "format_stats": format_stats,
             "opponent_stats": opponent_stats,
+            "match_list": match_list,
             "stats_error": stats_error,
+            "page": page,
+            "per_page": per_page,
+            "filters": filters,
+            "filter_qs": filter_qs,
         },
     )
 
@@ -373,6 +414,31 @@ async def profile_edit_form(
             "mtgo_usernames_str": names_str,
             "error": None,
         },
+    )
+
+
+@app.get("/profile/username-suggestions")
+async def profile_username_suggestions(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """JSON endpoint returning MTGO username suggestions from match data."""
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+    try:
+        suggestions = await analytics_client.get_username_suggestions(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return JSONResponse([], status_code=status.HTTP_401_UNAUTHORIZED)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /stats/username-suggestion call failed")
+        return JSONResponse([], status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return JSONResponse(
+        [{"username": s.username, "match_count": s.match_count} for s in suggestions]
     )
 
 
@@ -549,6 +615,52 @@ async def profile_agents_generate_code(
             "per_page": per_page,
             "registration_code": result.code,
             "registration_code_expires_at": result.expires_at,
+        },
+    )
+
+
+@app.post("/profile/agents/reingest")
+async def profile_agents_reingest(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Force reingest: delete all parsed matches for the current user."""
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+    try:
+        result = await parser_client.delete_my_matches(settings.parser_service_url, user.token)
+    except parser_client.ParserForbidden:
+        _log.info("profile.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except parser_client.ParserClientError:
+        _log.exception("parser DELETE /parser/matches call failed")
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    # Re-render the agents page with the reingest result.
+    offset = 0
+    per_page = _PROFILE_AGENTS_DEFAULT_PER_PAGE
+    try:
+        agents, total = await auth_client.list_my_agents(
+            settings.auth_service_url, user.token, limit=per_page, offset=offset
+        )
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        agents, total = [], 0
+
+    return templates.TemplateResponse(
+        request,
+        "profile_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": 1,
+            "per_page": per_page,
+            "reingest_result": result,
         },
     )
 
@@ -1125,6 +1237,53 @@ async def admin_agents_list(
         per_page=per_page,
         error=None,
         status_code=200,
+    )
+
+
+@app.post("/admin/agents/{user_id}/reingest")
+async def admin_agent_reingest(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int,
+        Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: force reingest for a specific user."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result = await parser_client.admin_delete_user_matches(
+            settings.parser_service_url, user.token, user_id
+        )
+    except parser_client.ParserForbidden:
+        _log.info("admin.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except parser_client.ParserClientError:
+        _log.exception("parser DELETE /parser/admin/matches/%s call failed", user_id)
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    return templates.TemplateResponse(
+        request,
+        "admin_agents.html",
+        {
+            "user": user,
+            "agents": agents,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "error": None,
+            "reingest_result": result,
+        },
     )
 
 
