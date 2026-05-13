@@ -187,6 +187,8 @@ async def login_submit(
 
 _DASHBOARD_DEFAULT_PER_PAGE = 20
 _DASHBOARD_MAX_PER_PAGE = 100
+_OPPONENT_DEFAULT_PER_PAGE = 20
+_OPPONENT_MAX_PER_PAGE = 100
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -196,6 +198,7 @@ async def dashboard(
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=_DASHBOARD_MAX_PER_PAGE)] = _DASHBOARD_DEFAULT_PER_PAGE,
+    opp_page: Annotated[int, Query(ge=1)] = 1,
     format: Annotated[str, Query(alias="format")] = "",
     opponent: Annotated[str, Query()] = "",
     result: Annotated[str, Query()] = "",
@@ -250,6 +253,14 @@ async def dashboard(
     # values containing &, =, +, % don't break the links).
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
+    # Paginate the "By opponent" table client-side.  The analytics
+    # endpoint returns the full list (already sorted by match count
+    # descending) so we slice here rather than adding server-side
+    # limit/offset — the list is typically small (<200 opponents).
+    opp_per_page = _OPPONENT_DEFAULT_PER_PAGE
+    opp_offset = (opp_page - 1) * opp_per_page
+    opponent_page = opponent_stats[opp_offset : opp_offset + opp_per_page]
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -258,6 +269,9 @@ async def dashboard(
             "stats_summary": stats_summary,
             "format_stats": format_stats,
             "opponent_stats": opponent_stats,
+            "opponent_page": opponent_page,
+            "opp_page": opp_page,
+            "opp_per_page": opp_per_page,
             "match_list": match_list,
             "stats_error": stats_error,
             "page": page,

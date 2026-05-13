@@ -852,9 +852,11 @@ async def agent_heartbeat(
     except Exception:
         upload_count = 0
 
+    settings = get_settings()
     return AgentHeartbeatResponse(
         status="ok",
         registered_at=row.created_at,
         revoked=row.revoked_at is not None,
         upload_count=upload_count,
+        min_agent_version=settings.MIN_AGENT_VERSION,
     )

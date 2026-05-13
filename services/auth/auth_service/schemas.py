@@ -81,6 +81,7 @@ class AgentHeartbeatResponse(BaseModel):
     registered_at: datetime
     revoked: bool
     upload_count: int = 0
+    min_agent_version: str | None = None
 
 
 class UserView(BaseModel):

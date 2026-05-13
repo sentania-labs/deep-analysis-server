@@ -49,6 +49,12 @@ class AuthSettings(BaseServiceSettings):
     )
     initial_admin_secret_path: Path = Path("/data/secrets/initial_admin.txt")
 
+    # Minimum agent version the server considers current.  Returned in
+    # heartbeat responses so the agent can warn or self-update.  This is
+    # a code-level constant, NOT admin-configurable — bump it here when
+    # a new agent release ships a breaking change or required fix.
+    MIN_AGENT_VERSION: str = "0.4.14"
+
 
 _settings: AuthSettings | None = None
 
