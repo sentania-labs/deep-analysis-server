@@ -105,8 +105,8 @@
                         {{ match.played_at.strftime("%Y-%m-%d") if match.played_at else match.match_id[:8] }}
                     </a>
                 </td>
-                <td>{{ match.opponent or "&mdash;" }}</td>
-                <td>{{ match.format_ or "&mdash;" }}</td>
+                <td>{% if match.opponent %}<a href="/dashboard?opponent={{ match.opponent|urlencode }}">{{ match.opponent }}</a>{% else %}&mdash;{% endif %}</td>
+                <td>{{ match.format_ or "—" }}</td>
                 <td>
                     {% if match.result == "W" %}
                         <span class="result-badge result-win">W</span>
@@ -200,7 +200,7 @@
         <tbody>
             {% for row in opponent_stats[:5] %}
             <tr>
-                <td>{{ row.opponent }}</td>
+                <td><a href="/dashboard?opponent={{ row.opponent|urlencode }}">{{ row.opponent }}</a></td>
                 <td>{{ row.matches }}</td>
                 <td>{{ row.wins }}W / {{ row.losses }}L / {{ row.draws }}D</td>
                 <td>{{ "%.1f"|format(row.win_rate) }}%</td>
@@ -224,9 +224,9 @@
             </tr>
         </thead>
         <tbody>
-            {% for row in opponent_stats %}
+            {% for row in opponent_page %}
             <tr>
-                <td>{{ row.opponent }}</td>
+                <td><a href="/dashboard?opponent={{ row.opponent|urlencode }}">{{ row.opponent }}</a></td>
                 <td>{{ row.matches }}</td>
                 <td>{{ row.wins }}</td>
                 <td>{{ row.losses }}</td>
@@ -236,6 +236,35 @@
             {% endfor %}
         </tbody>
     </table>
+
+    {% set opp_total = opponent_stats|length %}
+    {% set opp_first = (opp_page - 1) * opp_per_page + 1 %}
+    {% set opp_last = opp_first + opponent_page|length - 1 %}
+    {% set opp_has_prev = opp_page > 1 %}
+    {% set opp_has_next = opp_last < opp_total %}
+    {% if opponent_page %}
+    <nav class="pagination" aria-label="Opponent list pagination">
+        <p class="muted">
+            Showing {{ opp_first }}&ndash;{{ opp_last }} of
+            {{ opp_total }} opponent{{ "" if opp_total == 1 else "s" }}.
+        </p>
+        {% if opp_has_prev or opp_has_next %}
+        <p>
+            {% if opp_has_prev %}
+            <a class="btn"
+               href="/dashboard?opp_page={{ opp_page - 1 }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+               rel="prev">&larr; Previous</a>
+            {% endif %}
+            <span class="muted">Page {{ opp_page }}</span>
+            {% if opp_has_next %}
+            <a class="btn"
+               href="/dashboard?opp_page={{ opp_page + 1 }}{% if filter_qs %}&{{ filter_qs }}{% endif %}"
+               rel="next">Next &rarr;</a>
+            {% endif %}
+        </p>
+        {% endif %}
+    </nav>
+    {% endif %}
 </section>
 {% endif %}
 {% endif %}

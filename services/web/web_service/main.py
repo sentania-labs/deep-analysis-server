@@ -125,6 +125,32 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
+@app.get("/", response_class=HTMLResponse)
+async def landing(
+    request: Request,
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Public landing page.
+
+    Logged-in users are redirected straight to /dashboard (or the admin
+    panel for admins). Everyone else sees the marketing landing page.
+    """
+    try:
+        user = await get_current_browser_user(request, settings)
+    except BrowserAuthRedirect:
+        # No valid session — render the public landing page.
+        mode = await auth_client.public_get_registration_mode(settings.auth_service_url)
+        return templates.TemplateResponse(
+            request,
+            "landing.html",
+            {"user": None, "registration_open": mode != "closed"},
+        )
+    # Logged in — bounce to the appropriate home.
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url="/dashboard", status_code=status.HTTP_302_FOUND)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request, next: str | None = None) -> HTMLResponse:
     return templates.TemplateResponse(
@@ -187,6 +213,8 @@ async def login_submit(
 
 _DASHBOARD_DEFAULT_PER_PAGE = 20
 _DASHBOARD_MAX_PER_PAGE = 100
+_OPPONENT_DEFAULT_PER_PAGE = 20
+_OPPONENT_MAX_PER_PAGE = 100
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -196,6 +224,7 @@ async def dashboard(
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=_DASHBOARD_MAX_PER_PAGE)] = _DASHBOARD_DEFAULT_PER_PAGE,
+    opp_page: Annotated[int, Query(ge=1)] = 1,
     format: Annotated[str, Query(alias="format")] = "",
     opponent: Annotated[str, Query()] = "",
     result: Annotated[str, Query()] = "",
@@ -250,6 +279,14 @@ async def dashboard(
     # values containing &, =, +, % don't break the links).
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
+    # Paginate the "By opponent" table client-side.  The analytics
+    # endpoint returns the full list (already sorted by match count
+    # descending) so we slice here rather than adding server-side
+    # limit/offset — the list is typically small (<200 opponents).
+    opp_per_page = _OPPONENT_DEFAULT_PER_PAGE
+    opp_offset = (opp_page - 1) * opp_per_page
+    opponent_page = opponent_stats[opp_offset : opp_offset + opp_per_page]
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -258,6 +295,9 @@ async def dashboard(
             "stats_summary": stats_summary,
             "format_stats": format_stats,
             "opponent_stats": opponent_stats,
+            "opponent_page": opponent_page,
+            "opp_page": opp_page,
+            "opp_per_page": opp_per_page,
             "match_list": match_list,
             "stats_error": stats_error,
             "page": page,
@@ -619,18 +659,21 @@ async def profile_agents_generate_code(
     )
 
 
-@app.post("/profile/agents/reingest")
+@app.post("/profile/agents/{agent_id}/reingest")
 async def profile_agents_reingest(
+    agent_id: uuid.UUID,
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
-    """Force reingest: delete all parsed matches for the current user."""
+    """Force reingest: delete parsed matches uploaded by a specific agent."""
     bounce = _bounce_admin_to_panel(user)
     if bounce is not None:
         return bounce
     try:
-        result = await parser_client.delete_my_matches(settings.parser_service_url, user.token)
+        result = await parser_client.delete_my_matches(
+            settings.parser_service_url, user.token, agent_id=str(agent_id)
+        )
     except parser_client.ParserForbidden:
         _log.info("profile.agents.reingest.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -1240,10 +1283,11 @@ async def admin_agents_list(
     )
 
 
-@app.post("/admin/agents/{user_id}/reingest")
+@app.post("/admin/agents/{agent_id}/reingest")
 async def admin_agent_reingest(
-    user_id: int,
+    agent_id: uuid.UUID,
     request: Request,
+    user_id: Annotated[int, Query(ge=1)],
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
@@ -1252,20 +1296,24 @@ async def admin_agent_reingest(
         Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
     ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
 ) -> Response:
-    """Admin: force reingest for a specific user."""
+    """Admin: force reingest for a specific agent."""
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
 
     try:
         result = await parser_client.admin_delete_user_matches(
-            settings.parser_service_url, user.token, user_id
+            settings.parser_service_url, user.token, user_id, agent_id=str(agent_id)
         )
     except parser_client.ParserForbidden:
         _log.info("admin.agents.reingest.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
     except parser_client.ParserClientError:
-        _log.exception("parser DELETE /parser/admin/matches/%s call failed", user_id)
+        _log.exception(
+            "parser DELETE /parser/admin/matches/%s?agent_id=%s call failed",
+            user_id,
+            agent_id,
+        )
         return Response(
             content="Parser service unavailable. Please try again.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

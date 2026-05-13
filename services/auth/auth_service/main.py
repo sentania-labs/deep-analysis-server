@@ -399,13 +399,26 @@ async def list_my_agents(
         .scalars()
         .all()
     )
-    # Cross-schema read: count parsed matches per user so the agent
-    # page can compare local_file_count vs parsed_count.
-    parsed_row = await db.execute(
-        text("SELECT COUNT(*) FROM parser.matches WHERE user_id = :uid"),
-        {"uid": caller.user_id},
-    )
-    parsed_count: int = parsed_row.scalar_one()
+    # Cross-schema read: count parsed matches *per agent* by joining
+    # through ingest.user_uploads so each row shows only the matches
+    # that were uploaded by that specific agent.
+    agent_ids = [a.id for a in rows]
+    parsed_counts: dict[str, int] = {}
+    if agent_ids:
+        pc_rows = (
+            await db.execute(
+                text(
+                    "SELECT u.agent_registration_id, COUNT(DISTINCT m.id) AS cnt"
+                    " FROM parser.matches m"
+                    " JOIN ingest.user_uploads u"
+                    "   ON u.sha256 = m.sha256 AND u.user_id = m.user_id"
+                    " WHERE u.agent_registration_id = ANY(:aids)"
+                    " GROUP BY u.agent_registration_id"
+                ),
+                {"aids": [str(a) for a in agent_ids]},
+            )
+        ).all()
+        parsed_counts = {str(r[0]): int(r[1]) for r in pc_rows}
 
     agents = [
         AgentView(
@@ -415,7 +428,7 @@ async def list_my_agents(
             machine_name=a.machine_name,
             client_version=a.client_version,
             local_file_count=a.local_file_count,
-            parsed_count=parsed_count,
+            parsed_count=parsed_counts.get(str(a.id), 0),
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,
@@ -839,9 +852,11 @@ async def agent_heartbeat(
     except Exception:
         upload_count = 0
 
+    settings = get_settings()
     return AgentHeartbeatResponse(
         status="ok",
         registered_at=row.created_at,
         revoked=row.revoked_at is not None,
         upload_count=upload_count,
+        min_agent_version=settings.MIN_AGENT_VERSION,
     )

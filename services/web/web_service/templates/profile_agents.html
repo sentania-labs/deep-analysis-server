@@ -109,7 +109,7 @@
                             <button type="submit" class="btn btn-danger">Revoke</button>
                         </form>
                         <form method="post"
-                              action="/profile/agents/reingest"
+                              action="/profile/agents/{{ a.agent_id }}/reingest"
                               class="inline-form reingest-form">
                             <button type="submit" class="btn">Reingest</button>
                         </form>
@@ -156,7 +156,7 @@
     });
     document.querySelectorAll('.reingest-form').forEach(function (form) {
         form.addEventListener('submit', function (e) {
-            if (!window.confirm('Force reingest? This deletes all your parsed matches. The backfill scanner will re-parse them.')) {
+            if (!window.confirm('Force reingest? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them.')) {
                 e.preventDefault();
             }
         });

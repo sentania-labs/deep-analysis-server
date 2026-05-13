@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Deep Analysis{% endblock %}
+
+{% block content %}
+<section class="auth-card">
+    <h1>Deep Analysis</h1>
+    <p class="muted">
+        MTGO match analytics &mdash; track your performance, identify
+        patterns, improve your game.
+    </p>
+    <div class="form-actions">
+        <a href="/login" class="btn btn-primary">Sign in</a>
+        {% if registration_open %}
+            <a href="/register" class="btn">Register</a>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

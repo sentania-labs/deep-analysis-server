@@ -14,10 +14,6 @@
         respond "ok" 200
     }
 
-    handle / {
-        redir /dashboard 302
-    }
-
     handle /auth/* {
         reverse_proxy auth:8000
     }

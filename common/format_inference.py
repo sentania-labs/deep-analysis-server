@@ -26,8 +26,11 @@ _FORMAT_HIERARCHY: list[str] = [
     "standard",
     "pioneer",
     "modern",
+    "pauper",
     "legacy",
     "vintage",
+    # Limited/Draft and Cube are not detectable by legality alone —
+    # they need set-code analysis or cube-list matching (v0.9.x).
 ]
 
 _BASIC_LANDS = frozenset(

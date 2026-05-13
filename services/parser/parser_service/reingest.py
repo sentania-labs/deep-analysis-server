@@ -10,6 +10,7 @@ Routes:
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -43,18 +44,24 @@ def _parse_iso_dt(raw: str | None) -> datetime | None:
 async def delete_my_matches(
     after: str | None = Query(default=None, description="ISO date lower bound on played_at"),
     before: str | None = Query(default=None, description="ISO date upper bound on played_at"),
+    agent_id: str | None = Query(
+        default=None,
+        description="Scope deletion to matches uploaded by this agent",
+    ),
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
 ) -> DeletedCountResponse:
     """Delete all parsed matches for the authenticated user.
 
     Games and game_states are CASCADE-deleted by the FK constraints.
-    Optional date filtering on played_at.
+    Optional date filtering on played_at.  When ``agent_id`` is
+    provided, only matches whose sha256 was uploaded by that agent
+    are deleted.
     """
-    count = await _delete_matches_for_user(db, user.user_id, after, before)
+    count = await _delete_matches_for_user(db, user.user_id, after, before, agent_id=agent_id)
     _log.info(
         "parser.reingest.user",
-        extra={"user_id": user.user_id, "deleted_count": count},
+        extra={"user_id": user.user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
 
@@ -64,14 +71,22 @@ async def admin_delete_user_matches(
     user_id: int,
     after: str | None = Query(default=None, description="ISO date lower bound on played_at"),
     before: str | None = Query(default=None, description="ISO date upper bound on played_at"),
+    agent_id: str | None = Query(
+        default=None,
+        description="Scope deletion to matches uploaded by this agent",
+    ),
     _admin: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_session),
 ) -> DeletedCountResponse:
-    """Admin: delete all parsed matches for a specific user."""
-    count = await _delete_matches_for_user(db, user_id, after, before)
+    """Admin: delete parsed matches for a specific user.
+
+    When ``agent_id`` is provided, only matches whose sha256 was
+    uploaded by that agent are deleted.
+    """
+    count = await _delete_matches_for_user(db, user_id, after, before, agent_id=agent_id)
     _log.info(
         "parser.reingest.admin_user",
-        extra={"target_user_id": user_id, "deleted_count": count},
+        extra={"target_user_id": user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
 
@@ -92,13 +107,33 @@ async def admin_delete_all_matches(
     return DeletedCountResponse(deleted_count=count)
 
 
+def _validate_uuid(value: str, field: str) -> None:
+    """Raise 422 if *value* is not a valid UUID."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_uuid", "field": field},
+        ) from None
+
+
 async def _delete_matches_for_user(
     db: AsyncSession,
     user_id: int,
     after_raw: str | None,
     before_raw: str | None,
+    *,
+    agent_id: str | None = None,
 ) -> int:
-    """Delete matches (and cascaded children) for a single user."""
+    """Delete matches (and cascaded children) for a single user.
+
+    When *agent_id* is provided, only matches whose ``sha256`` exists
+    in ``ingest.user_uploads`` for that agent are deleted.
+    """
+    if agent_id is not None:
+        _validate_uuid(agent_id, "agent_id")
+
     after_dt = _parse_iso_dt(after_raw)
     if after_raw is not None and after_dt is None:
         raise HTTPException(status_code=422, detail={"error": "invalid_date", "field": "after"})
@@ -108,7 +143,26 @@ async def _delete_matches_for_user(
 
     # Find matching match IDs first, then cascade-delete children
     # explicitly since bulk DELETE doesn't trigger ORM cascades.
-    conditions = [Match.user_id == user_id]
+    if agent_id is not None:
+        # Scope to matches uploaded by this specific agent via the
+        # ingest.user_uploads join table.
+        from sqlalchemy import text as _text
+
+        sha_rows = await db.execute(
+            _text(
+                "SELECT sha256 FROM ingest.user_uploads"
+                " WHERE agent_registration_id = :agent_id"
+                " AND user_id = :user_id"
+            ),
+            {"agent_id": agent_id, "user_id": user_id},
+        )
+        agent_shas = [r[0] for r in sha_rows.all()]
+        if not agent_shas:
+            return 0
+        conditions = [Match.user_id == user_id, Match.sha256.in_(agent_shas)]
+    else:
+        conditions = [Match.user_id == user_id]
+
     if after_dt is not None:
         conditions.append(Match.played_at >= after_dt)
     if before_dt is not None:

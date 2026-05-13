@@ -8,6 +8,10 @@ exist in ``ingest.user_uploads`` but have no corresponding row in
 This closes the reliability gap in the Redis pub/sub delivery: if the
 parser misses a ``file.ingested`` event (downtime, DB outage, Redis
 blip), the backfill scan picks it up on the next pass.
+
+Additionally, matches where ``parsed_with_version`` is NULL or older
+than :data:`~parser_service.settings.REPARSE_MIN_VERSION` are queued
+for reparse so that parser improvements can be applied retroactively.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from parser_service.consumer import ParserConsumer
+from parser_service.settings import REPARSE_MIN_VERSION
 
 _log = logging.getLogger("parser.backfill")
 
@@ -30,8 +35,12 @@ _UNPARSED_SQL = text(
       JOIN ingest.game_log_files g ON g.sha256 = u.sha256
       LEFT JOIN parser.matches m
         ON m.sha256 = u.sha256 AND m.user_id = u.user_id
-     WHERE m.id IS NULL
-       AND g.content_type = 'match-log'
+     WHERE g.content_type = 'match-log'
+       AND (
+           m.id IS NULL
+           OR m.parsed_with_version IS NULL
+           OR m.parsed_with_version < :min_version
+       )
      LIMIT :batch_size
     """
 )
@@ -43,7 +52,12 @@ async def scan_unparsed(
     batch_size: int = 100,
 ) -> int:
     async with sm() as session:
-        rows = (await session.execute(_UNPARSED_SQL, {"batch_size": batch_size})).all()
+        rows = (
+            await session.execute(
+                _UNPARSED_SQL,
+                {"batch_size": batch_size, "min_version": REPARSE_MIN_VERSION},
+            )
+        ).all()
 
     if not rows:
         return 0

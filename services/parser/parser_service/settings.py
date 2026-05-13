@@ -8,6 +8,15 @@ from pydantic_settings import SettingsConfigDict
 
 from common.settings import BaseServiceSettings
 
+# Stamped on every match row at parse time so we can detect matches
+# parsed by an older version and queue them for reparse.
+PARSER_VERSION = "0.8.8"
+
+# Backfill scanner picks up matches where ``parsed_with_version`` is
+# NULL or less than this threshold, ensuring they get re-parsed with
+# the current parser logic.
+REPARSE_MIN_VERSION = "0.8.8"
+
 
 class ParserSettings(BaseServiceSettings):
     model_config = SettingsConfigDict(
