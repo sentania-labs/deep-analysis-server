@@ -1,68 +1,113 @@
 {% extends "base.html" %}
 {% block title %}Admin · Agents · Deep Analysis{% endblock %}
 {% block content %}
-<section class="panel">
-    <h1>Agents</h1>
-    <nav class="admin-subnav">
-        <a href="/admin/users">Users</a>
-        <span class="muted"> · </span><a href="/admin/agents" aria-current="page"><strong>Agents</strong></a>
-        <span class="muted"> · </span><a href="/admin/matches">Matches</a>
-        <span class="muted"> · </span><a href="/admin/archetypes">Archetypes</a>
-        <span class="muted"> · </span><a href="/admin/cards">Cards</a>
-        <span class="muted"> · </span><a href="/admin/invites">Invites</a>
-        <span class="muted"> · </span><a href="/admin/settings">Settings</a>
-    </nav>
-    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
-    {% if reingest_result is defined and reingest_result %}
-    <div class="alert alert-info" role="status">Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them shortly.</div>
-    {% endif %}
-    {% if cleanup_result is defined and cleanup_result %}
-    <div class="alert alert-info" role="status">Stale agent cleanup complete: {{ cleanup_result.revoked_count }} agent{{ "" if cleanup_result.revoked_count == 1 else "s" }} revoked.</div>
-    {% endif %}
-    {% if rotated_key is defined and rotated_key %}
-    <div class="alert alert-info" role="status">
-        <p>Key rotated for agent <code>{{ rotated_key.agent_id }}</code>. The new token is shown <strong>only once</strong> — copy it now.</p>
-        <p>New API token: <code class="temp-password">{{ rotated_key.api_token }}</code></p>
-    </div>
-    {% endif %}
-    <div class="bulk-actions">
-        <form method="post" action="/admin/agents/reingest-all?page={{ page }}&per_page={{ per_page }}" class="inline-form reingest-all-form"><button type="submit" class="btn btn-danger">Reingest all matches</button></form>
-        <form method="post" action="/admin/agents/cleanup-stale?page={{ page }}&per_page={{ per_page }}" class="inline-form cleanup-stale-form"><button type="submit" class="btn">Cleanup stale agents</button></form>
-    </div>
-    <table class="data-table">
-        <thead><tr><th>Agent ID</th><th>Owner</th><th>Machine</th><th>Client version</th><th>Local Files</th><th>Parsed</th><th>Created</th><th>Last seen</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody>
-            {% if not agents %}<tr><td colspan="10" class="muted">No agents registered.</td></tr>{% else %}
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Agents</h1>
+</div>
+
+{# Admin tabs #}
+<nav class="flex gap-1 border-b dark:border-border border-border-light mb-6 overflow-x-auto">
+    <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
+    <a href="/admin/agents" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Agents</a>
+    <a href="/admin/matches" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Matches</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/cards" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Cards</a>
+    <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
+    <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
+</nav>
+
+{% if error %}<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>{% endif %}
+
+{% if reingest_result is defined and reingest_result %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them shortly.</div>
+{% endif %}
+{% if cleanup_result is defined and cleanup_result %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Stale agent cleanup complete: {{ cleanup_result.revoked_count }} agent{{ "" if cleanup_result.revoked_count == 1 else "s" }} revoked.</div>
+{% endif %}
+{% if rotated_key is defined and rotated_key %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
+    <p>Key rotated for agent <code class="font-mono dark:bg-surface-3 bg-surface-light-3 px-1 rounded">{{ rotated_key.agent_id }}</code>. The new token is shown <strong>only once</strong> -- copy it now.</p>
+    <p class="mt-1">New API token: <code class="font-mono dark:bg-surface-3 bg-surface-light-3 px-2 py-1 rounded text-sm break-all">{{ rotated_key.api_token }}</code></p>
+</div>
+{% endif %}
+
+{# Bulk actions #}
+<div class="flex gap-2 mb-4">
+    <form method="post" action="/admin/agents/reingest-all?page={{ page }}&per_page={{ per_page }}" class="inline reingest-all-form">
+        <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">Reingest all matches</button>
+    </form>
+    <form method="post" action="/admin/agents/cleanup-stale?page={{ page }}&per_page={{ per_page }}" class="inline cleanup-stale-form">
+        <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">Cleanup stale agents</button>
+    </form>
+</div>
+
+{# Agents table #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Agent ID</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Owner</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Machine</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Client</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Local</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Parsed</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Created</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Last Seen</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Status</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not agents %}
+                <tr><td colspan="10" class="px-4 py-6 text-sm dark:text-txt-secondary text-txt-secondary-light">No agents registered.</td></tr>
+                {% else %}
                 {% for a in agents %}
-                <tr>
-                    <td><code>{{ a.agent_id }}</code></td>
-                    <td><a href="/admin/users#user-{{ a.user_id }}">{{ a.user_email }}</a></td>
-                    <td>{{ a.machine_name }}</td><td>{{ a.client_version or "---" }}</td>
-                    <td>{{ a.local_file_count if a.local_file_count is not none else "---" }}</td>
-                    <td>{{ a.parsed_count if a.parsed_count is not none else "---" }}</td>
-                    <td>{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "---" }}</td>
-                    <td>{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M") if a.last_seen_at else "---" }}</td>
-                    <td>{% if a.revoked_at %}<span class="muted">revoked</span>{% else %}active{% endif %}</td>
-                    <td>{% if not a.revoked_at %}
-                        <form method="post" action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}" class="inline-form revoke-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="btn btn-danger">Revoke</button></form>
-                        <form method="post" action="/admin/agents/{{ a.agent_id }}/rotate-key?page={{ page }}&per_page={{ per_page }}" class="inline-form rotate-key-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="btn">Rotate Key</button></form>
-                        <form method="post" action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline-form reingest-form" data-user-email="{{ a.user_email }}"><button type="submit" class="btn">Reingest</button></form>
-                    {% endif %}
-                        <form method="post" action="/admin/agents/{{ a.agent_id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline-form delete-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="btn btn-danger">Delete</button></form>
+                <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-xs font-mono dark:text-txt-secondary text-txt-secondary-light"><code>{{ a.agent_id }}</code></td>
+                    <td class="px-4 py-2.5 text-sm"><a href="/admin/users#user-{{ a.user_id }}" class="text-accent hover:text-accent-hover">{{ a.user_email }}</a></td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">{{ a.machine_name }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.client_version or "---" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ a.local_file_count if a.local_file_count is not none else "---" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ a.parsed_count if a.parsed_count is not none else "---" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.created_at.strftime("%Y-%m-%d") if a.created_at else "---" }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ a.last_seen_at.strftime("%Y-%m-%d %H:%M") if a.last_seen_at else "---" }}</td>
+                    <td class="px-4 py-2.5 text-sm">
+                        {% if a.revoked_at %}
+                        <span class="bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">revoked</span>
+                        {% else %}
+                        <span class="bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">active</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2.5 text-right">
+                        <div class="flex gap-1 justify-end flex-wrap">
+                        {% if not a.revoked_at %}
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}" class="inline revoke-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/rotate-key?page={{ page }}&per_page={{ per_page }}" class="inline rotate-key-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Rotate Key</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline reingest-form" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button></form>
+                        {% endif %}
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline delete-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button></form>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
-            {% endif %}
-        </tbody>
-    </table>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
     {% if agents %}
-        {% set first_idx = (page - 1) * per_page + 1 %}{% set last_idx = first_idx + agents|length - 1 %}{% set has_prev = page > 1 %}{% set has_next = last_idx < total %}
-        <nav class="pagination" aria-label="Agent list pagination">
-            <p class="muted">Showing {{ first_idx }}--{{ last_idx }} of {{ total }} agent{{ "" if total == 1 else "s" }}.</p>
-            {% if has_prev or has_next %}<p>{% if has_prev %}<a class="btn" href="/admin/agents?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Previous</a>{% endif %}<span class="muted">Page {{ page }}</span>{% if has_next %}<a class="btn" href="/admin/agents?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</p>{% endif %}
+    {% set first_idx = (page - 1) * per_page + 1 %}{% set last_idx = first_idx + agents|length - 1 %}{% set has_prev = page > 1 %}{% set has_next = last_idx < total %}
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <nav class="flex items-center justify-between" aria-label="Agent list pagination">
+            <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">Showing <span class="font-mono">{{ first_idx }}</span>--<span class="font-mono">{{ last_idx }}</span> of <span class="font-mono">{{ total }}</span> agent{{ "" if total == 1 else "s" }}.</p>
+            {% if has_prev or has_next %}<div class="flex items-center gap-2">{% if has_prev %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page - 1 }}&per_page={{ per_page }}" rel="prev">&larr; Prev</a>{% endif %}<span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ page }}</span>{% if has_next %}<a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/agents?page={{ page + 1 }}&per_page={{ per_page }}" rel="next">Next &rarr;</a>{% endif %}</div>{% endif %}
         </nav>
+    </div>
     {% endif %}
-</section>
+</div>
+
 <script>
     document.querySelectorAll('.revoke-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Revoke agent '+(form.dataset.machineName||'')+' owned by '+(form.dataset.userEmail||'')+'? The agent will lose access immediately.'))e.preventDefault();});});
     document.querySelectorAll('.rotate-key-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Rotate API key for agent '+(form.dataset.machineName||'')+' owned by '+(form.dataset.userEmail||'')+'? The old key will stop working immediately.'))e.preventDefault();});});

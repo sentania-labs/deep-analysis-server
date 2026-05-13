@@ -3,99 +3,96 @@
 {% block title %}Admin · Cards · Deep Analysis{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <h1>Cards</h1>
-    <nav class="admin-subnav">
-        <a href="/admin/users">Users</a>
-        <span class="muted"> · </span>
-        <a href="/admin/agents">Agents</a>
-        <span class="muted"> · </span>
-        <a href="/admin/matches">Matches</a>
-        <span class="muted"> · </span>
-        <a href="/admin/archetypes">Archetypes</a>
-        <span class="muted"> · </span>
-        <a href="/admin/cards" aria-current="page"><strong>Cards</strong></a>
-        <span class="muted"> · </span>
-        <a href="/admin/invites">Invites</a>
-        <span class="muted"> · </span>
-        <a href="/admin/settings">Settings</a>
-    </nav>
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Cards</h1>
+</div>
 
-    {% if error %}
-    <div class="alert alert-error" role="alert">{{ error }}</div>
-    {% endif %}
+{# Admin tabs #}
+<nav class="flex gap-1 border-b dark:border-border border-border-light mb-6 overflow-x-auto">
+    <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
+    <a href="/admin/agents" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Agents</a>
+    <a href="/admin/matches" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Matches</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/cards" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Cards</a>
+    <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
+    <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
+</nav>
 
-    {% if synced %}
-    <div class="alert alert-info" role="status">
-        Sync started. Card mirror refresh runs in the background; reload in a few minutes to see updated totals.
-    </div>
-    {% endif %}
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
+{% endif %}
 
-    <h2>Card mirror</h2>
+{% if synced %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
+    Sync started. Card mirror refresh runs in the background; reload in a few minutes to see updated totals.
+</div>
+{% endif %}
+
+{# Card mirror #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
+    <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">Card Mirror</h2>
     {% if cards_status %}
-    <ul class="stats-summary">
-        <li><strong>Cards in database:</strong> {{ cards_status.card_count }}</li>
-        <li><strong>Last sync:</strong>
-            {% if cards_status.last_sync_at %}
-                {{ cards_status.last_sync_at.strftime("%Y-%m-%d %H:%M UTC") }}
-            {% else %}
-                Never
-            {% endif %}
-        </li>
-    </ul>
+    <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Cards in database</div>
+            <div class="text-lg font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ cards_status.card_count }}</div>
+        </div>
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Last sync</div>
+            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">
+                {% if cards_status.last_sync_at %}
+                    {{ cards_status.last_sync_at.strftime("%Y-%m-%d %H:%M UTC") }}
+                {% else %}
+                    Never
+                {% endif %}
+            </div>
+        </div>
+    </div>
     {% else %}
-        <p class="muted">Card mirror status unavailable.</p>
+        <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mb-3">Card mirror status unavailable.</p>
     {% endif %}
-
-    <form method="post" action="/admin/cards/sync" class="inline-form">
-        <button type="submit" class="btn btn-primary">Sync Now</button>
+    <form method="post" action="/admin/cards/sync" class="inline">
+        <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">Sync Now</button>
     </form>
+</div>
 
-    <h2>MTGO scraper health</h2>
+{# MTGO scraper health #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
+    <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">MTGO Scraper Health</h2>
     {% if scraper_health %}
-    <ul class="stats-summary">
-        <li><strong>Last run:</strong>
-            {% if scraper_health.last_run_at %}
-                {{ scraper_health.last_run_at.strftime("%Y-%m-%d %H:%M UTC") }}
-            {% else %}
-                Never
-            {% endif %}
-        </li>
-        <li><strong>Last success:</strong>
-            {% if scraper_health.last_success_at %}
-                {{ scraper_health.last_success_at.strftime("%Y-%m-%d %H:%M UTC") }}
-            {% else %}
-                Never
-            {% endif %}
-        </li>
-        <li><strong>Status:</strong>
-            {% if scraper_health.is_broken %}
-                <span class="result-badge result-loss">Broken</span>
-            {% else %}
-                <span class="result-badge result-win">OK</span>
-            {% endif %}
-        </li>
-        <li><strong>Consecutive failures:</strong> {{ scraper_health.consecutive_failures }}</li>
-    </ul>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Last run</div>
+            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">
+                {% if scraper_health.last_run_at %}{{ scraper_health.last_run_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Never{% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Last success</div>
+            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">
+                {% if scraper_health.last_success_at %}{{ scraper_health.last_success_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Never{% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Status</div>
+            <div class="mt-0.5">
+                {% if scraper_health.is_broken %}
+                    <span class="bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">Broken</span>
+                {% else %}
+                    <span class="bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">OK</span>
+                {% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Consecutive failures</div>
+            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">{{ scraper_health.consecutive_failures }}</div>
+        </div>
+    </div>
     {% if scraper_health.last_error %}
-    <p class="muted">Last error: {{ scraper_health.last_error }}</p>
+    <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Last error: {{ scraper_health.last_error }}</p>
     {% endif %}
     {% else %}
-        <p class="muted">Scraper health unavailable.</p>
+        <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">Scraper health unavailable.</p>
     {% endif %}
-</section>
-
-<style>
-.stats-summary { list-style: none; padding: 0; display: flex; gap: 2rem; flex-wrap: wrap; }
-.stats-summary li { padding: 0.5rem 0; }
-.result-badge {
-    display: inline-block;
-    padding: 0.1rem 0.4rem;
-    text-align: center;
-    font-weight: bold;
-    border-radius: 3px;
-}
-.result-win { background: #d4edda; color: #155724; }
-.result-loss { background: #f8d7da; color: #721c24; }
-</style>
+</div>
 {% endblock %}

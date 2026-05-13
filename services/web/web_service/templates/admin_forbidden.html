@@ -1,11 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Admin only &middot; Deep Analysis{% endblock %}
+{% block title %}Admin only · Deep Analysis{% endblock %}
 
 {% block content %}
-<section class="panel">
-    <h1>Admin access required</h1>
-    <p>This page is only available to administrators.</p>
-    <p><a href="/dashboard">Return to dashboard</a></p>
-</section>
+<div class="flex items-center justify-center min-h-[60vh]">
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-8 max-w-md text-center">
+        <svg class="w-12 h-12 mx-auto mb-4 dark:text-txt-tertiary text-txt-secondary-light" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+        </svg>
+        <h1 class="text-lg font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Admin access required</h1>
+        <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mb-4">This page is only available to administrators.</p>
+        <a href="/dashboard" class="inline-block bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-1.5 text-sm font-medium transition-colors no-underline">Return to dashboard</a>
+    </div>
+</div>
 {% endblock %}

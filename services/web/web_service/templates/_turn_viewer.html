@@ -1,80 +1,80 @@
 {# HTMX partial — no {% extends %} #}
 {% if not turns_data or not turns_data.turns %}
-<p class="muted" style="padding: 8px 0;">No turn data available for this game.</p>
+<p class="text-sm dark:text-txt-secondary text-txt-secondary-light py-2 px-4">No turn data available for this game.</p>
 {% else %}
-<div class="turn-viewer">
-    <table class="data-table">
+<div class="py-2 px-4">
+    <table class="w-full">
         <thead>
-            <tr>
-                <th>Turn</th>
-                <th>Active Player</th>
+            <tr class="border-b dark:border-border border-border-light">
+                <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-3 py-2">Turn</th>
+                <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-3 py-2">Active Player</th>
                 {% for ps in turns_data.turns[0].player_states %}
-                <th>{{ ps.player }} Life</th>
+                <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-3 py-2">{{ ps.player }} Life</th>
                 {% endfor %}
-                <th></th>
+                <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-3 py-2"></th>
             </tr>
         </thead>
         <tbody>
             {% for turn in turns_data.turns %}
             {% set turn_idx = loop.index0 %}
-            <tr>
-                <td>{{ turn.turn_number }}</td>
-                <td>{{ turn.active_player or "—" }}</td>
+            <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                <td class="px-3 py-2 text-sm font-mono dark:text-txt-primary text-txt-primary-light">{{ turn.turn_number }}</td>
+                <td class="px-3 py-2 text-sm dark:text-txt-primary text-txt-primary-light">{{ turn.active_player or "—" }}</td>
                 {% for ps in turn.player_states %}
-                <td>
+                <td class="px-3 py-2 text-sm font-mono text-right">
                     {% if ps.life is not none %}
                         {% if turn_idx > 0 and loop.index0 < turns_data.turns[turn_idx - 1].player_states|length %}
                             {% set prev_life = turns_data.turns[turn_idx - 1].player_states[loop.index0].life %}
                             {% if prev_life is not none and ps.life < prev_life %}
-                                <span style="color: #a4252b; font-weight: 500;">{{ ps.life }}</span>
+                                <span class="text-danger font-medium">{{ ps.life }}</span>
                             {% elif prev_life is not none and ps.life > prev_life %}
-                                <span style="color: #155724; font-weight: 500;">{{ ps.life }}</span>
+                                <span class="text-success font-medium">{{ ps.life }}</span>
                             {% else %}
-                                {{ ps.life }}
+                                <span class="dark:text-txt-primary text-txt-primary-light">{{ ps.life }}</span>
                             {% endif %}
                         {% else %}
-                            {{ ps.life }}
+                            <span class="dark:text-txt-primary text-txt-primary-light">{{ ps.life }}</span>
                         {% endif %}
                     {% else %}
-                        —
+                        <span class="dark:text-txt-secondary text-txt-secondary-light">—</span>
                     {% endif %}
                 </td>
                 {% endfor %}
-                <td>
-                    <button class="btn btn-secondary btn-sm turn-detail-toggle"
+                <td class="px-3 py-2 text-right">
+                    <button class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors cursor-pointer"
                             onclick="var el=document.getElementById('turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}'); el.style.display = el.style.display === 'none' ? 'table-row' : 'none';">
                         Details
                     </button>
                 </td>
             </tr>
             <tr id="turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}" style="display: none;">
-                <td colspan="{{ 3 + turn.player_states|length }}" style="background: #f9fafb; padding: 12px;">
+                <td colspan="{{ 3 + turn.player_states|length }}" class="dark:bg-surface-2 bg-surface-light-2 px-4 py-3">
                     {% for ps in turn.player_states %}
-                    <div style="margin-bottom: 8px;">
-                        <strong>{{ ps.player }}</strong>
+                    <div class="mb-2 last:mb-0">
+                        <span class="text-xs font-semibold dark:text-txt-primary text-txt-primary-light">{{ ps.player }}</span>
                         {% if ps.zones %}
-                        <ul style="list-style: none; padding-left: 12px; margin: 4px 0;">
+                        <ul class="list-none pl-3 mt-1 space-y-0.5">
                             {% if ps.zones.hand %}
-                            <li><strong>Hand:</strong> {{ ps.zones.hand|join(", ") }}</li>
+                            <li class="text-xs"><span class="dark:text-txt-secondary text-txt-secondary-light font-medium">Hand:</span> <span class="font-mono dark:text-txt-primary text-txt-primary-light">{{ ps.zones.hand|join(", ") }}</span></li>
                             {% endif %}
                             {% if ps.zones.battlefield %}
-                            <li><strong>Battlefield:</strong> {{ ps.zones.battlefield|join(", ") }}</li>
+                            <li class="text-xs"><span class="dark:text-txt-secondary text-txt-secondary-light font-medium">Battlefield:</span> <span class="font-mono dark:text-txt-primary text-txt-primary-light">{{ ps.zones.battlefield|join(", ") }}</span></li>
                             {% endif %}
                             {% if ps.zones.graveyard %}
-                            <li><strong>Graveyard:</strong> {{ ps.zones.graveyard|join(", ") }}</li>
+                            <li class="text-xs"><span class="dark:text-txt-secondary text-txt-secondary-light font-medium">Graveyard:</span> <span class="font-mono dark:text-txt-primary text-txt-primary-light">{{ ps.zones.graveyard|join(", ") }}</span></li>
                             {% endif %}
                             {% if ps.zones.exile %}
-                            <li><strong>Exile:</strong> {{ ps.zones.exile|join(", ") }}</li>
+                            <li class="text-xs"><span class="dark:text-txt-secondary text-txt-secondary-light font-medium">Exile:</span> <span class="font-mono dark:text-txt-primary text-txt-primary-light">{{ ps.zones.exile|join(", ") }}</span></li>
                             {% endif %}
                         </ul>
                         {% else %}
-                        <span class="muted"> — no zone data</span>
+                        <span class="text-xs dark:text-txt-secondary text-txt-secondary-light"> — no zone data</span>
                         {% endif %}
                     </div>
                     {% endfor %}
                     {% if turn.stack %}
-                    <div>
-                        <strong>Stack:</strong> {{ turn.stack|join(", ") }}
+                    <div class="text-xs mt-2">
+                        <span class="dark:text-txt-secondary text-txt-secondary-light font-medium">Stack:</span> <span class="font-mono dark:text-txt-primary text-txt-primary-light">{{ turn.stack|join(", ") }}</span>
                     </div>
                     {% endif %}
                 </td>
@@ -82,14 +82,8 @@
             {% endfor %}
         </tbody>
     </table>
-    <p class="muted" style="font-size: 11px; margin-top: 4px;">
+    <p class="text-[11px] dark:text-txt-tertiary text-txt-secondary-light mt-2">
         Life totals are best-effort for .dat files (tracks payments only, not combat damage).
     </p>
 </div>
 {% endif %}
-
-<style>
-.turn-viewer { padding: 8px 0; }
-.turn-detail-toggle { cursor: pointer; }
-.btn-sm { padding: 4px 8px; font-size: 12px; }
-</style>
