@@ -807,10 +807,13 @@ async def register(
             detail={"error": "email_already_exists"},
         )
 
+    # If an invite specifies a role, the new user inherits it;
+    # otherwise default to "user".
+    assigned_role = invite.role if invite is not None else "user"
     user = User(
         email=submitted_email,
         password_hash=hash_password(body.password),
-        role="user",
+        role=assigned_role,
         must_change_password=False,
     )
     db.add(user)

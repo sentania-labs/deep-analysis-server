@@ -209,6 +209,7 @@ class InviteToken(Base):
     )
     max_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     use_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    role: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'user'"))
 
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_invite_tokens_token_hash"),

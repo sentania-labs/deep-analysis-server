@@ -797,8 +797,8 @@ async def admin_list_invites(
             created_at=_parse_dt(i.get("created_at")),
             expires_at=_parse_dt(i.get("expires_at")),
             max_uses=i.get("max_uses"),
-            use_count=int(i.get("use_count", 0)),
             role=str(i.get("role", "user")),
+            use_count=int(i.get("use_count", 0)),
         )
         for i in data.get("invites", [])
     ]

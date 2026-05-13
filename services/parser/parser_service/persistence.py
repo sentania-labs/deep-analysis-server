@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,10 +44,21 @@ async def persist_match(
         played_at=parsed.played_at,
         parsed_with_version=PARSER_VERSION,
     )
+    # Preserve manual format overrides during reparse: if an admin has
+    # set format_source='manual', the UPSERT must keep the existing
+    # format and format_source rather than overwriting with the parsed
+    # (or null) value.
     upsert_stmt = insert_stmt.on_conflict_do_update(
         constraint="uq_matches_sha256_user",
         set_={
-            "format": insert_stmt.excluded.format,
+            "format": text(
+                "CASE WHEN matches.format_source = 'manual'"
+                " THEN matches.format ELSE EXCLUDED.format END"
+            ),
+            "format_source": text(
+                "CASE WHEN matches.format_source = 'manual'"
+                " THEN matches.format_source ELSE EXCLUDED.format_source END"
+            ),
             "event_type": insert_stmt.excluded.event_type,
             "players": insert_stmt.excluded.players,
             "match_result": insert_stmt.excluded.match_result,
