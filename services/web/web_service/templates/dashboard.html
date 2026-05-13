@@ -105,8 +105,8 @@
                         {{ match.played_at.strftime("%Y-%m-%d") if match.played_at else match.match_id[:8] }}
                     </a>
                 </td>
-                <td>{{ match.opponent or "&mdash;" }}</td>
-                <td>{{ match.format_ or "&mdash;" }}</td>
+                <td>{{ match.opponent or "—" }}</td>
+                <td>{{ match.format_ or "—" }}</td>
                 <td>
                     {% if match.result == "W" %}
                         <span class="result-badge result-win">W</span>

@@ -234,23 +234,26 @@ async def list_agents(
         )
     ).all()
 
-    # Cross-schema read: count parsed matches per user so the admin
-    # agents page can compare local_file_count vs parsed_count.
-    user_ids = list({a.user_id for a, _ in rows})
-    parsed_counts: dict[int, int] = {}
-    if user_ids:
+    # Cross-schema read: count parsed matches *per agent* by joining
+    # through ingest.user_uploads so each row shows only the matches
+    # that were uploaded by that specific agent.
+    agent_ids = [a.id for a, _ in rows]
+    parsed_counts: dict[str, int] = {}
+    if agent_ids:
         pc_rows = (
             await db.execute(
                 text(
-                    "SELECT user_id, COUNT(*) AS cnt"
-                    " FROM parser.matches"
-                    " WHERE user_id = ANY(:uids)"
-                    " GROUP BY user_id"
+                    "SELECT u.agent_registration_id, COUNT(DISTINCT m.id) AS cnt"
+                    " FROM parser.matches m"
+                    " JOIN ingest.user_uploads u"
+                    "   ON u.sha256 = m.sha256 AND u.user_id = m.user_id"
+                    " WHERE u.agent_registration_id = ANY(:aids)"
+                    " GROUP BY u.agent_registration_id"
                 ),
-                {"uids": user_ids},
+                {"aids": [str(a) for a in agent_ids]},
             )
         ).all()
-        parsed_counts = {int(r[0]): int(r[1]) for r in pc_rows}
+        parsed_counts = {str(r[0]): int(r[1]) for r in pc_rows}
 
     agents = [
         AgentView(
@@ -260,7 +263,7 @@ async def list_agents(
             machine_name=a.machine_name,
             client_version=a.client_version,
             local_file_count=a.local_file_count,
-            parsed_count=parsed_counts.get(a.user_id, 0),
+            parsed_count=parsed_counts.get(str(a.id), 0),
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,
