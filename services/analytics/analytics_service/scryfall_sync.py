@@ -175,7 +175,7 @@ async def stream_sync_cards(
 
 
 async def should_sync(session: AsyncSession) -> bool:
-    """True if ``catalog.cards`` is empty or the last sync is stale."""
+    """True if ``catalog.cards`` is empty, stale, or missing legality data."""
     settings = get_settings()
     last = (
         await session.execute(text("SELECT MAX(synced_at) FROM catalog.cards"))
@@ -183,7 +183,14 @@ async def should_sync(session: AsyncSession) -> bool:
     if last is None:
         return True
     cutoff = datetime.now(UTC) - timedelta(days=settings.scryfall_sync_interval_days)
-    return last < cutoff
+    if last < cutoff:
+        return True
+    has_legalities = (
+        await session.execute(
+            text("SELECT EXISTS(SELECT 1 FROM catalog.cards WHERE legalities IS NOT NULL)")
+        )
+    ).scalar_one()
+    return not has_legalities
 
 
 async def run_sync(sessionmaker: async_sessionmaker[AsyncSession]) -> SyncResult:
