@@ -1846,6 +1846,7 @@ async def admin_invites_list(
 async def admin_invites_create(
     request: Request,
     expires_in_hours: Annotated[int, Form(ge=1, le=_INVITE_MAX_EXPIRES_HOURS)],
+    max_uses: Annotated[int | None, Form()] = 1,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
@@ -1858,9 +1859,12 @@ async def admin_invites_create(
     if blocked is not None:
         return blocked
 
+    # Treat 0 or empty as unlimited (NULL).
+    effective_max_uses = max_uses if max_uses and max_uses > 0 else None
+
     try:
         created = await auth_client.admin_create_invite(
-            settings.auth_service_url, user.token, expires_in_hours
+            settings.auth_service_url, user.token, expires_in_hours, effective_max_uses
         )
     except auth_client.AuthForbidden:
         _log.info("admin.invites.create.forbidden", extra={"user_id": user.user_id})

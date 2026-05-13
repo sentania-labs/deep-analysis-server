@@ -379,6 +379,8 @@ def _invite_view(row: InviteToken, creator_email: str | None) -> InviteView:
         created_by_email=creator_email,
         created_at=row.created_at,
         expires_at=row.expires_at,
+        max_uses=row.max_uses,
+        use_count=row.use_count,
     )
 
 
@@ -407,6 +409,7 @@ async def create_invite(
         created_by_user_id=admin.user_id,
         created_at=now,
         expires_at=expires_at,
+        max_uses=body.max_uses,
     )
     db.add(invite)
     await db.commit()
@@ -416,6 +419,7 @@ async def create_invite(
         token=plaintext,
         expires_at=invite.expires_at,
         created_at=invite.created_at,
+        max_uses=invite.max_uses,
     )
 
 
@@ -426,11 +430,18 @@ async def list_invites(
     _admin: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_session),
 ) -> InviteListView:
-    """List pending invites (not used, not expired)."""
+    """List pending invites (not exhausted, not expired)."""
     now = datetime.now(UTC)
+    # An invite is pending when it hasn't expired and still has uses
+    # remaining: either max_uses is NULL (unlimited) or use_count < max_uses.
+    from sqlalchemy import or_
+
     pending = (
-        InviteToken.used_at.is_(None),
         InviteToken.expires_at > now,
+        or_(
+            InviteToken.max_uses.is_(None),
+            InviteToken.use_count < InviteToken.max_uses,
+        ),
     )
 
     total = int(
@@ -472,7 +483,11 @@ async def revoke_invite(
     if invite is None:
         raise _error(status.HTTP_404_NOT_FOUND, "invite_not_found")
     now = datetime.now(UTC)
-    if invite.used_at is None and invite.expires_at > now:
+    # Revoke if not expired and still has remaining uses.
+    still_active = invite.expires_at > now and (
+        invite.max_uses is None or invite.use_count < invite.max_uses
+    )
+    if still_active:
         invite.expires_at = now
         await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

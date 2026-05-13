@@ -77,6 +77,8 @@ def _sample_invite_item() -> Any:
         created_by_email="admin@local",
         created_at=datetime.now(UTC) - timedelta(hours=2),
         expires_at=datetime.now(UTC) + timedelta(hours=166),
+        max_uses=1,
+        use_count=0,
     )
 
 
