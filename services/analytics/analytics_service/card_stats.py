@@ -356,7 +356,9 @@ async def _load_card_appearances_auto(
     the SQL path returns no results but game_states exist (indicating
     string-format battlefield entries)."""
     results = await _load_card_appearances(
-        db, user_id, mtgo_usernames,
+        db,
+        user_id,
+        mtgo_usernames,
         card_name=card_name,
         format_filter=format_filter,
         opponent=opponent,
@@ -392,7 +394,9 @@ async def _load_card_appearances_auto(
 
     if has_data:
         return await _load_card_appearances_fallback(
-            db, user_id, mtgo_usernames,
+            db,
+            user_id,
+            mtgo_usernames,
             card_name=card_name,
             format_filter=format_filter,
             opponent=opponent,
