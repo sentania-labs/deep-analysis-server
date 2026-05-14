@@ -219,8 +219,11 @@ async def test_dashboard_renders_with_stats(
     assert "Modern" in text
     # No error banner
     assert "Stats unavailable" not in text
-    # Match history, opponent stats, and detailed analytics panels moved
-    # to /matches and HTMX partials in v0.9.4 — not in initial dashboard HTML
+    # Stats panels are rendered inline on initial load (v0.9.4 UX rework)
+    assert "Play/Draw Split" in text
+    assert "On Play" in text
+    assert "Card Performance" in text
+    assert "Lightning Bolt" in text
 
 
 @pytest.mark.asyncio

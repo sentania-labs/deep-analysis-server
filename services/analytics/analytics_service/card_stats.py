@@ -14,7 +14,6 @@ result set.
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Annotated, Any
 
@@ -27,6 +26,11 @@ from analytics_service.db import get_session
 from analytics_service.deps import AuthenticatedUser, require_user
 
 router = APIRouter(prefix="/analytics/stats", tags=["card-stats"])
+
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE/ILIKE wildcard characters."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 _DEFAULT_PER_PAGE = 20
@@ -149,8 +153,8 @@ async def _load_card_appearances(
         where += " AND LOWER(m.format) = LOWER(:format)"
         params["format"] = format_filter
     if opponent:
-        where += " AND m.players @> :opp_json::jsonb"
-        params["opp_json"] = json.dumps([opponent])
+        where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
+        params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
@@ -260,8 +264,8 @@ async def _load_card_appearances_fallback(
         where += " AND LOWER(m.format) = LOWER(:format)"
         params["format"] = format_filter
     if opponent:
-        where += " AND m.players @> :opp_json::jsonb"
-        params["opp_json"] = json.dumps([opponent])
+        where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
+        params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
