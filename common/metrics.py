@@ -65,7 +65,7 @@ def instrument_engine(sync_engine: Engine, service_name: str) -> None:
         context: object,
         executemany: bool,
     ) -> None:
-        setattr(conn, "_da_query_start", time.perf_counter())
+        conn._da_query_start = time.perf_counter()  # type: ignore[attr-defined]
 
     @event.listens_for(sync_engine, "after_cursor_execute")
     def _after_cursor_execute(
