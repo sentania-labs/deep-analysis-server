@@ -2047,13 +2047,24 @@ def _render_admin_settings(
     tunables: auth_client.TunablesResult | None = None,
     cards_status: dict[str, Any] | None = None,
     scraper_health: dict[str, Any] | None = None,
+    scraper_healths: list[dict[str, Any]] | None = None,
     error: str | None,
     saved: bool,
     tunables_saved: bool = False,
     tunables_error: str | None = None,
     scrape_mtgo_triggered: bool = False,
+    scrape_mtgtop8_triggered: bool = False,
     status_code: int,
 ) -> Response:
+    # Build per-scraper dicts for template convenience
+    mtgo_health: dict[str, Any] | None = scraper_health  # backward compat
+    mtgtop8_health: dict[str, Any] | None = None
+    if scraper_healths:
+        for sh in scraper_healths:
+            if sh.get("scraper_name") == "mtgo":
+                mtgo_health = sh
+            elif sh.get("scraper_name") == "mtgtop8":
+                mtgtop8_health = sh
     return templates.TemplateResponse(
         request,
         "admin_settings.html",
@@ -2062,7 +2073,8 @@ def _render_admin_settings(
             "mode": mode,
             "tunables": tunables,
             "cards_status": cards_status,
-            "scraper_health": scraper_health,
+            "scraper_health": mtgo_health,
+            "mtgtop8_health": mtgtop8_health,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
@@ -2070,6 +2082,7 @@ def _render_admin_settings(
             "tunables_saved": tunables_saved,
             "tunables_error": tunables_error,
             "scrape_mtgo_triggered": scrape_mtgo_triggered,
+            "scrape_mtgtop8_triggered": scrape_mtgtop8_triggered,
         },
         status_code=status_code,
     )
@@ -2083,6 +2096,7 @@ async def admin_settings(
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
     tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgo_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
+    scrape_mtgtop8_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -2091,7 +2105,7 @@ async def admin_settings(
     mode: auth_client.RegistrationMode | None = None
     tunables: auth_client.TunablesResult | None = None
     cards_status: dict[str, Any] | None = None
-    scraper_health: dict[str, Any] | None = None
+    scraper_healths: list[dict[str, Any]] | None = None
     error: str | None = None
 
     try:
@@ -2120,7 +2134,7 @@ async def admin_settings(
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("admin.settings.cards_status unavailable")
     try:
-        scraper_health = await analytics_client.admin_get_scraper_health(
+        scraper_healths = await analytics_client.admin_get_all_scraper_health(
             settings.analytics_service_url, user.token
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
@@ -2134,11 +2148,12 @@ async def admin_settings(
         mode=mode,
         tunables=tunables,
         cards_status=cards_status,
-        scraper_health=scraper_health,
+        scraper_healths=scraper_healths,
         error=error,
         saved=saved == 1,
         tunables_saved=tunables_saved == 1,
         scrape_mtgo_triggered=scrape_mtgo_triggered == 1,
+        scrape_mtgtop8_triggered=scrape_mtgtop8_triggered == 1,
         status_code=code,
     )
 
@@ -2293,6 +2308,33 @@ async def admin_settings_scrape_mtgo(
         )
     return RedirectResponse(
         url="/admin/settings?scrape_mtgo_triggered=1", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/admin/settings/scrape-mtgtop8")
+async def admin_settings_scrape_mtgtop8(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        await analytics_client.admin_trigger_mtgtop8_scrape(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/scrape-mtgtop8 call failed")
+        return Response(
+            content="Analytics service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return RedirectResponse(
+        url="/admin/settings?scrape_mtgtop8_triggered=1",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

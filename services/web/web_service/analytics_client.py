@@ -406,7 +406,44 @@ async def admin_get_cards_status(base_url: str, token: str) -> dict[str, Any]:
     }
 
 
-async def admin_get_scraper_health(base_url: str, token: str) -> dict[str, Any]:
+async def admin_get_scraper_health(
+    base_url: str, token: str, scraper_name: str = "mtgo"
+) -> dict[str, Any]:
+    """Fetch health for a single scraper by name."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/scraper-health",
+                params={"scraper_name": scraper_name},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scraper-health transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /admin/scraper-health returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scraper-health returned {resp.status_code}: {resp.text}"
+        )
+    return _parse_scraper_health(resp.json())
+
+
+def _parse_scraper_health(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a single scraper-health payload dict."""
+    return {
+        "scraper_name": payload.get("scraper_name"),
+        "last_run_at": _parse_dt(payload.get("last_run_at")),
+        "last_success_at": _parse_dt(payload.get("last_success_at")),
+        "consecutive_failures": int(payload.get("consecutive_failures") or 0),
+        "is_broken": bool(payload.get("is_broken")),
+        "last_error": payload.get("last_error"),
+    }
+
+
+async def admin_get_all_scraper_health(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Fetch health for all registered scrapers (v0.9.4+)."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -424,16 +461,60 @@ async def admin_get_scraper_health(base_url: str, token: str) -> dict[str, Any]:
             f"analytics GET /admin/scraper-health returned {resp.status_code}: {resp.text}"
         )
     payload = resp.json()
-    last_run = _parse_dt(payload.get("last_run_at"))
-    last_success = _parse_dt(payload.get("last_success_at"))
-    return {
-        "scraper_name": payload.get("scraper_name"),
-        "last_run_at": last_run,
-        "last_success_at": last_success,
-        "consecutive_failures": int(payload.get("consecutive_failures") or 0),
-        "is_broken": bool(payload.get("is_broken")),
-        "last_error": payload.get("last_error"),
-    }
+    scrapers = payload.get("scrapers")
+    if isinstance(scrapers, list):
+        return [_parse_scraper_health(s) for s in scrapers]
+    # Backward compat: if the endpoint returns a single scraper dict
+    return [_parse_scraper_health(payload)]
+
+
+async def admin_trigger_mtgtop8_scrape(base_url: str, token: str) -> bool:
+    """Trigger an mtgtop8 results scrape. Returns True on 202."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/admin/scrape-mtgtop8",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/scrape-mtgtop8 transport error: {exc}"
+        ) from exc
+    if resp.status_code == 202:
+        return True
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics POST /admin/scrape-mtgtop8 returned {resp.status_code}"
+        )
+    raise AnalyticsClientError(
+        f"analytics POST /admin/scrape-mtgtop8 returned {resp.status_code}: {resp.text}"
+    )
+
+
+async def admin_reset_scraper_health(
+    base_url: str, token: str, scraper_name: str
+) -> dict[str, Any]:
+    """Reset a scraper's failure counters."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/admin/scraper-health/reset",
+                params={"scraper_name": scraper_name},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/scraper-health/reset transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics POST /admin/scraper-health/reset returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/scraper-health/reset returned {resp.status_code}: {resp.text}"
+        )
+    return _parse_scraper_health(resp.json())
 
 
 async def admin_trigger_sync(base_url: str, token: str) -> bool:
