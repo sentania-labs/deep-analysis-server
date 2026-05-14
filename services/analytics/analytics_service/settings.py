@@ -16,6 +16,9 @@ class AnalyticsSettings(BaseServiceSettings):
 
     scryfall_sync_interval_days: int = 7
     mtgo_scrape_interval_hours: int = 24
+    mtgtop8_scrape_interval_hours: int = 24
+    # TODO: mtgtopdecks.com scraper — site appears JS-rendered, revisit
+    # once we can analyze the server-side structure properly.
 
 
 _settings: AnalyticsSettings | None = None

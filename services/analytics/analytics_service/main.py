@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
@@ -19,8 +19,11 @@ from analytics_service.deps import AuthenticatedUser, require_admin
 from analytics_service.game_stats import router as game_stats_router
 from analytics_service.matches import router as matches_router
 from analytics_service.mtgo_scraper import SCRAPER_NAME as MTGO_SCRAPER_NAME
-from analytics_service.mtgo_scraper import get_health as get_mtgo_health
+from analytics_service.mtgo_scraper import get_health as get_scraper_health_row
+from analytics_service.mtgo_scraper import reset_health as reset_scraper_health_row
 from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
+from analytics_service.mtgtop8_scraper import SCRAPER_NAME as MTGTOP8_SCRAPER_NAME
+from analytics_service.mtgtop8_scraper import run_scrape as run_mtgtop8_scrape
 from analytics_service.scryfall_sync import run_sync, should_sync
 from analytics_service.settings import get_settings
 from analytics_service.stats import router as stats_router
@@ -34,13 +37,15 @@ _log = logging.getLogger("analytics.main")
 
 _scheduler_task: asyncio.Task[None] | None = None
 _mtgo_scheduler_task: asyncio.Task[None] | None = None
+_mtgtop8_scheduler_task: asyncio.Task[None] | None = None
 
 
 def reset_scheduler() -> None:
     """Test hook."""
-    global _scheduler_task, _mtgo_scheduler_task
+    global _scheduler_task, _mtgo_scheduler_task, _mtgtop8_scheduler_task
     _scheduler_task = None
     _mtgo_scheduler_task = None
+    _mtgtop8_scheduler_task = None
 
 
 async def _scheduler_loop() -> None:
@@ -104,7 +109,7 @@ async def _mtgo_scheduler_loop() -> None:
     while True:
         try:
             async with sm() as session:
-                health = await get_mtgo_health(session, MTGO_SCRAPER_NAME)
+                health = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
             if _mtgo_scrape_due(health, settings.mtgo_scrape_interval_hours):
                 await run_mtgo_scrape(sm)
         except asyncio.CancelledError:
@@ -146,6 +151,53 @@ async def _stop_mtgo_scheduler() -> None:
     _mtgo_scheduler_task = None
 
 
+# ---------------------------------------------------------------------------
+# mtgtop8 scheduler
+# ---------------------------------------------------------------------------
+
+
+async def _mtgtop8_scheduler_loop() -> None:
+    """Sleep-and-check loop for the mtgtop8 results scraper."""
+    settings = get_settings()
+    interval_seconds = settings.mtgtop8_scrape_interval_hours * 60 * 60
+    sm = get_sessionmaker()
+    while True:
+        try:
+            async with sm() as session:
+                health = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
+            if _mtgo_scrape_due(health, settings.mtgtop8_scrape_interval_hours):
+                await run_mtgtop8_scrape(sm)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — never let scheduler crash kill the service
+            _log.exception("mtgtop8 scheduler iteration failed")
+        await asyncio.sleep(interval_seconds)
+
+
+async def _start_mtgtop8_scheduler() -> None:
+    global _mtgtop8_scheduler_task
+    if _mtgtop8_scheduler_task is not None:
+        return
+    _mtgtop8_scheduler_task = asyncio.create_task(
+        _mtgtop8_scheduler_loop(), name="mtgtop8-scheduler"
+    )
+    _log.info("mtgtop8 scheduler task started")
+
+
+async def _stop_mtgtop8_scheduler() -> None:
+    global _mtgtop8_scheduler_task
+    if _mtgtop8_scheduler_task is None:
+        return
+    _mtgtop8_scheduler_task.cancel()
+    try:
+        await _mtgtop8_scheduler_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001 — surface but don't crash shutdown
+        _log.exception("mtgtop8 scheduler raised on shutdown")
+    _mtgtop8_scheduler_task = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -157,8 +209,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
         _log.exception("failed to start mtgo scheduler; healthz remains available")
     try:
+        await _start_mtgtop8_scheduler()
+    except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
+        _log.exception("failed to start mtgtop8 scheduler; healthz remains available")
+    try:
         yield
     finally:
+        await _stop_mtgtop8_scheduler()
         await _stop_mtgo_scheduler()
         await _stop_scheduler()
 
@@ -201,14 +258,56 @@ async def scrape_mtgo(
     return {"status": "scrape_started"}
 
 
+@admin_router.post("/scrape-mtgtop8", status_code=202)
+async def scrape_mtgtop8(
+    background_tasks: BackgroundTasks,
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> dict[str, str]:
+    """Trigger an mtgtop8.com results scrape in the background."""
+    background_tasks.add_task(run_mtgtop8_scrape, get_sessionmaker())
+    return {"status": "scrape_started"}
+
+
+@admin_router.post("/scraper-health/reset")
+async def scraper_health_reset(
+    scraper_name: Annotated[str, Query()],
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Reset a scraper's consecutive_failures and is_broken flag.
+
+    Useful after deploying a fix for a BROKEN scraper so it re-enters
+    the normal schedule without waiting for a successful run.
+    """
+    allowed = {MTGO_SCRAPER_NAME, MTGTOP8_SCRAPER_NAME}
+    if scraper_name not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": f"unknown scraper_name; allowed: {sorted(allowed)}"},
+        )
+    sm = get_sessionmaker()
+    async with sm() as session:
+        return await reset_scraper_health_row(session, scraper_name)
+
+
 @admin_router.get("/scraper-health")
 async def scraper_health(
     _admin: AuthenticatedUser = Depends(require_admin),
+    scraper_name: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
-    """Return the MTGO scraper's current health row."""
+    """Return scraper health.
+
+    Without ``scraper_name``: returns ``{"scrapers": [...]}``, one entry
+    per registered scraper. With ``scraper_name``: returns that single
+    scraper's health dict (backward-compatible with the pre-v0.9.4 shape).
+    """
     sm = get_sessionmaker()
+    if scraper_name is not None:
+        async with sm() as session:
+            return await get_scraper_health_row(session, scraper_name)
     async with sm() as session:
-        return await get_mtgo_health(session, MTGO_SCRAPER_NAME)
+        mtgo = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
+        mtgtop8 = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
+    return {"scrapers": [mtgo, mtgtop8]}
 
 
 @admin_router.get("/cards-status")
