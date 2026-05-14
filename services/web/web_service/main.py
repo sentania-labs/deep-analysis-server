@@ -272,10 +272,11 @@ async def dashboard(
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("mulligan stats unavailable")
 
-    # Card stats (unfiltered).
+    # Card stats (unfiltered). Use same page size as the HTMX partial so
+    # pagination stays consistent when the user clicks "Next".
     try:
         card_stats = await analytics_client.get_card_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, per_page=_CARD_PERF_PER_PAGE
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("card stats unavailable")
