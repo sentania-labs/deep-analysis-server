@@ -3,6 +3,11 @@
 Overrides ``get_session`` with a fake session that returns prefab rows,
 and ``require_user`` with a fake user dep. Tests exercise the handler
 aggregation logic without a live Postgres.
+
+v0.9.4: Updated to monkeypatch ``_load_card_appearances_auto`` for the
+card stats endpoints since the SQL-level JSONB extraction is not
+reproducible with the simple fake session.  Turn-data tests still use
+the fake session directly (they don't touch the card appearance loader).
 """
 
 from __future__ import annotations
@@ -116,26 +121,69 @@ def _override_session(session: _FakeSession) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Card appearance test helpers
+# ---------------------------------------------------------------------------
+
+
+def _patch_card_loader(
+    monkeypatch: pytest.MonkeyPatch,
+    appearances: list[dict[str, Any]],
+) -> None:
+    """Monkeypatch _load_card_appearances_auto to return canned data."""
+    from analytics_service import card_stats as _cs
+
+    async def fake_loader(
+        _db: Any,
+        _user_id: int,
+        _mtgo_usernames: Any,
+        card_name: str | None = None,
+        format_filter: str | None = None,
+        opponent: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        result = appearances
+        if card_name:
+            result = [a for a in result if a["card_name"].lower() == card_name.lower()]
+        if format_filter:
+            result = [a for a in result if (a.get("format") or "").lower() == format_filter.lower()]
+        return result
+
+    monkeypatch.setattr(_cs, "_load_card_appearances_auto", fake_loader)
+
+
+def _patch_mtgo_usernames(
+    monkeypatch: pytest.MonkeyPatch,
+    usernames: list[str] | None,
+) -> None:
+    """Monkeypatch _load_mtgo_usernames in card_stats."""
+    from analytics_service import card_stats as _cs
+
+    async def fake_loader(_db: Any, _user_id: int) -> list[str] | None:
+        return usernames
+
+    monkeypatch.setattr(_cs, "_load_mtgo_usernames", fake_loader)
+
+
+# ---------------------------------------------------------------------------
 # GET /analytics/stats/cards
 # ---------------------------------------------------------------------------
 
-# game_states query returns: (game_id, winner, players, format, turn_number, player_states)
-
 
 @pytest.mark.asyncio
-async def test_card_stats_empty(app_client: httpx.AsyncClient) -> None:
+async def test_card_stats_empty(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from analytics_service import db as _db
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    session = _FakeSession(
-        queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game_states query
-            [],
-        ]
-    )
+    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_card_loader(monkeypatch, [])
+
+    # Still need a fake session for the catalog.cards query (won't be called since no agg)
+    session = _FakeSession(queue=[])
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
     _main.app.dependency_overrides[_db.get_session] = _override_session(session)
     try:
@@ -150,7 +198,10 @@ async def test_card_stats_empty(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_card_stats_aggregates(app_client: httpx.AsyncClient) -> None:
+async def test_card_stats_aggregates(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from analytics_service import db as _db
     from analytics_service import deps as _deps
     from analytics_service import main as _main
@@ -158,42 +209,39 @@ async def test_card_stats_aggregates(app_client: httpx.AsyncClient) -> None:
     g1 = uuid.uuid4()
     g2 = uuid.uuid4()
 
+    # Card appearances in the shape returned by the loader
+    appearances = [
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Lightning Bolt",
+            "first_turn": 3,
+        },
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Mountain",
+            "first_turn": 3,
+        },
+        {
+            "game_id": g2,
+            "winner": "bob",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Lightning Bolt",
+            "first_turn": 5,
+        },
+    ]
+    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_card_loader(monkeypatch, appearances)
+
+    # Fake session only needed for the catalog.cards metadata query
     session = _FakeSession(
         queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game_states rows: (game_id, winner, players, format, turn_number, player_states)
-            [
-                (
-                    g1,
-                    "alice",
-                    ["alice", "bob"],
-                    "Modern",
-                    3,
-                    {
-                        "alice": {
-                            "life": 18,
-                            "zones": {"battlefield": ["Lightning Bolt", "Mountain"]},
-                        },
-                        "bob": {"life": 20, "zones": {"battlefield": []}},
-                    },
-                ),
-                (
-                    g2,
-                    "bob",
-                    ["alice", "bob"],
-                    "Modern",
-                    5,
-                    {
-                        "alice": {
-                            "life": 15,
-                            "zones": {"battlefield": ["Lightning Bolt"]},
-                        },
-                        "bob": {"life": 10, "zones": {"battlefield": []}},
-                    },
-                ),
-            ],
-            # catalog.cards metadata query
             [
                 ("Lightning Bolt", "Instant", "{R}"),
                 ("Mountain", "Basic Land — Mountain", None),
@@ -223,37 +271,47 @@ async def test_card_stats_aggregates(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_card_stats_pagination(app_client: httpx.AsyncClient) -> None:
+async def test_card_stats_pagination(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from analytics_service import db as _db
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
     g1 = uuid.uuid4()
 
-    session = _FakeSession(
-        queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game_states: 3 different cards
-            [
-                (
-                    g1,
-                    "alice",
-                    ["alice", "bob"],
-                    "Modern",
-                    2,
-                    {
-                        "alice": {
-                            "life": 20,
-                            "zones": {"battlefield": ["Card A", "Card B", "Card C"]},
-                        },
-                    },
-                ),
-            ],
-            # catalog.cards — none found
-            [],
-        ]
-    )
+    appearances = [
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Card A",
+            "first_turn": 2,
+        },
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Card B",
+            "first_turn": 2,
+        },
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Card C",
+            "first_turn": 2,
+        },
+    ]
+    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_card_loader(monkeypatch, appearances)
+
+    # catalog.cards — none found
+    session = _FakeSession(queue=[[]])
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
     _main.app.dependency_overrides[_db.get_session] = _override_session(session)
     try:
@@ -275,7 +333,10 @@ async def test_card_stats_pagination(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_card_detail(app_client: httpx.AsyncClient) -> None:
+async def test_card_detail(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from analytics_service import db as _db
     from analytics_service import deps as _deps
     from analytics_service import main as _main
@@ -283,41 +344,28 @@ async def test_card_detail(app_client: httpx.AsyncClient) -> None:
     g1 = uuid.uuid4()
     g2 = uuid.uuid4()
 
-    session = _FakeSession(
-        queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game_states
-            [
-                (
-                    g1,
-                    "alice",
-                    ["alice", "bob"],
-                    "Modern",
-                    3,
-                    {
-                        "alice": {
-                            "life": 18,
-                            "zones": {"battlefield": ["Lightning Bolt"]},
-                        },
-                    },
-                ),
-                (
-                    g2,
-                    "bob",
-                    ["alice", "bob"],
-                    "Pioneer",
-                    5,
-                    {
-                        "alice": {
-                            "life": 15,
-                            "zones": {"battlefield": ["Lightning Bolt"]},
-                        },
-                    },
-                ),
-            ],
-        ]
-    )
+    appearances = [
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Lightning Bolt",
+            "first_turn": 3,
+        },
+        {
+            "game_id": g2,
+            "winner": "bob",
+            "players": ["alice", "bob"],
+            "format": "Pioneer",
+            "card_name": "Lightning Bolt",
+            "first_turn": 5,
+        },
+    ]
+    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_card_loader(monkeypatch, appearances)
+
+    session = _FakeSession(queue=[])
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
     _main.app.dependency_overrides[_db.get_session] = _override_session(session)
     try:
@@ -336,19 +384,18 @@ async def test_card_detail(app_client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_card_detail_not_found(app_client: httpx.AsyncClient) -> None:
+async def test_card_detail_not_found(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from analytics_service import db as _db
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    session = _FakeSession(
-        queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game_states — empty
-            [],
-        ]
-    )
+    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_card_loader(monkeypatch, [])
+
+    session = _FakeSession(queue=[])
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
     _main.app.dependency_overrides[_db.get_session] = _override_session(session)
     try:

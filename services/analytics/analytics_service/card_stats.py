@@ -4,6 +4,12 @@ Queries ``parser.game_states.player_states`` JSONB to find cards that
 appeared on the hero's battlefield, then aggregates win rate and cast-turn
 data per card. Joins ``catalog.cards`` for metadata (type line, mana cost,
 colors).
+
+v0.9.4: Rewrote ``_load_card_appearances`` to push JSONB card extraction
+to SQL using ``LATERAL jsonb_each`` / ``jsonb_array_elements``, eliminating
+the Python loop over all game_states rows. At 2400 matches this reduces
+the data transferred from ~216k JSONB rows to a focused per-game-per-card
+result set.
 """
 
 from __future__ import annotations
@@ -100,6 +106,22 @@ def _identify_hero(
     return str(players[0])
 
 
+def _resolve_hero_name(
+    mtgo_usernames: list[str] | None,
+    sample_players: list[Any] | None = None,
+) -> str | None:
+    """Determine the hero name for SQL-level hero filtering.
+
+    Tries the first MTGO username; falls back to players[0] from
+    a sample match if available.
+    """
+    if mtgo_usernames:
+        return mtgo_usernames[0]
+    if sample_players:
+        return str(sample_players[0])
+    return None
+
+
 def _wr(wins: int, total: int) -> float:
     return (wins / total) * 100.0 if total else 0.0
 
@@ -114,11 +136,123 @@ async def _load_card_appearances(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load per-game card appearance data from game_states.
+    """Load per-game card appearance data using SQL-level JSONB extraction.
 
-    For each game, find all cards that appeared on the hero's battlefield
-    in any turn snapshot. Returns a list of dicts with keys: game_id,
-    winner, players, format, card_name, first_turn.
+    v0.9.4: Pushes card extraction into SQL using LATERAL joins to
+    avoid transferring all game_states JSONB to Python. For each game,
+    extracts distinct card names on the hero's battlefield with their
+    earliest turn number.
+    """
+    where = "WHERE m.user_id = :user_id"
+    params: dict[str, Any] = {"user_id": user_id}
+    if format_filter:
+        where += " AND LOWER(m.format) = LOWER(:format)"
+        params["format"] = format_filter
+    if opponent:
+        where += " AND m.players @> :opp_json::jsonb"
+        params["opp_json"] = json.dumps([opponent])
+    if date_from:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date_from
+    if date_to:
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date_to
+
+    # Determine hero names for SQL-level filtering across player_states keys
+    hero_names: list[str] = []
+    if mtgo_usernames:
+        hero_names = list(mtgo_usernames)
+    else:
+        # Grab player[0] from the first match to use as hero fallback
+        sample = (
+            await db.execute(
+                text(
+                    f"""
+                    SELECT m.players FROM parser.matches m
+                    {where}
+                    LIMIT 1
+                    """
+                ),
+                params,
+            )
+        ).scalar_one_or_none()
+        if sample and isinstance(sample, list) and sample:
+            hero_names = [str(sample[0])]
+
+    if not hero_names:
+        return []
+
+    # Build hero name matching for the LATERAL join.
+    # We try exact match on each known hero name against the player_states keys.
+    hero_conditions = []
+    for i, hname in enumerate(hero_names):
+        pkey = f"hero_{i}"
+        hero_conditions.append(f"LOWER(player_entry.player_name) = LOWER(:{pkey})")
+        params[pkey] = hname
+    hero_filter = " OR ".join(hero_conditions)
+
+    # Card name filter
+    card_filter = ""
+    if card_name:
+        card_filter = " AND LOWER(card_elem.value->>'name') = LOWER(:card_name)"
+        params["card_name"] = card_name
+
+    # SQL-level JSONB extraction: for each game, find cards on the hero's
+    # battlefield and their earliest turn of appearance.
+    sql = f"""
+        SELECT g.id AS game_id,
+               g.winner,
+               m.players,
+               m.format,
+               card_elem.value->>'name' AS card_name,
+               MIN(gs.turn_number) AS first_turn
+        FROM parser.game_states gs
+        JOIN parser.games g ON g.id = gs.game_id
+        JOIN parser.matches m ON m.id = g.match_id,
+        LATERAL jsonb_each(gs.player_states) AS player_entry(player_name, player_data),
+        LATERAL jsonb_array_elements(
+            COALESCE(player_entry.player_data->'zones'->'battlefield', '[]'::jsonb)
+        ) AS card_elem
+        {where}
+        AND ({hero_filter})
+        AND card_elem.value->>'name' IS NOT NULL
+        {card_filter}
+        GROUP BY g.id, g.winner, m.players, m.format, card_elem.value->>'name'
+    """
+
+    rows = (await db.execute(text(sql), params)).all()
+
+    results: list[dict[str, Any]] = []
+    for game_id, winner, players, fmt, cname, first_turn in rows:
+        results.append(
+            {
+                "game_id": game_id,
+                "winner": winner,
+                "players": list(players) if players else [],
+                "format": fmt,
+                "card_name": str(cname),
+                "first_turn": int(first_turn),
+            }
+        )
+    return results
+
+
+async def _load_card_appearances_fallback(
+    db: AsyncSession,
+    user_id: int,
+    mtgo_usernames: list[str] | None,
+    card_name: str | None = None,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fallback loader for battlefield entries stored as plain strings.
+
+    When cards on the battlefield are stored as bare strings (not
+    ``{name: ...}`` dicts), the SQL LATERAL approach using
+    ``card_elem.value->>'name'`` won't match. This Python-side fallback
+    handles that case.
     """
     where = "WHERE m.user_id = :user_id"
     params: dict[str, Any] = {"user_id": user_id}
@@ -152,8 +286,6 @@ async def _load_card_appearances(
         )
     ).all()
 
-    # Per-game, per-card: track first appearance turn
-    # game_id -> { card_name -> first_turn }
     game_cards: dict[Any, dict[str, int]] = {}
     game_meta: dict[Any, dict[str, Any]] = {}
 
@@ -165,14 +297,12 @@ async def _load_card_appearances(
                 "format": fmt,
             }
 
-        # Find the hero's battlefield cards in this turn
         player_list = list(players) if players else []
         hero = _identify_hero(player_list, mtgo_usernames)
         if hero is None:
             continue
 
         states = player_states or {}
-        # Try exact match then case-insensitive for the hero key
         hero_state = states.get(hero)
         if hero_state is None:
             for k, v in states.items():
@@ -195,7 +325,6 @@ async def _load_card_appearances(
             if cname not in game_cards[game_id]:
                 game_cards[game_id][cname] = int(turn_number)
 
-    # Flatten into per-game-per-card records
     results: list[dict[str, Any]] = []
     for gid, cards in game_cards.items():
         meta = game_meta[gid]
@@ -211,6 +340,66 @@ async def _load_card_appearances(
                 }
             )
     return results
+
+
+async def _load_card_appearances_auto(
+    db: AsyncSession,
+    user_id: int,
+    mtgo_usernames: list[str] | None,
+    card_name: str | None = None,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict[str, Any]]:
+    """Try the fast SQL path first; fall back to Python extraction if
+    the SQL path returns no results but game_states exist (indicating
+    string-format battlefield entries)."""
+    results = await _load_card_appearances(
+        db, user_id, mtgo_usernames,
+        card_name=card_name,
+        format_filter=format_filter,
+        opponent=opponent,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    if results:
+        return results
+
+    # Check if there are any game_states at all for this user
+    where = "WHERE m.user_id = :user_id"
+    params: dict[str, Any] = {"user_id": user_id}
+    if format_filter:
+        where += " AND LOWER(m.format) = LOWER(:format)"
+        params["format"] = format_filter
+
+    has_data = (
+        await db.execute(
+            text(
+                f"""
+                SELECT EXISTS(
+                    SELECT 1 FROM parser.game_states gs
+                    JOIN parser.games g ON g.id = gs.game_id
+                    JOIN parser.matches m ON m.id = g.match_id
+                    {where}
+                    LIMIT 1
+                )
+                """
+            ),
+            params,
+        )
+    ).scalar_one()
+
+    if has_data:
+        return await _load_card_appearances_fallback(
+            db, user_id, mtgo_usernames,
+            card_name=card_name,
+            format_filter=format_filter,
+            opponent=opponent,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +421,7 @@ async def get_card_stats(
 ) -> CardStatsResponse:
     """Per-card performance across all matches."""
     names = await _load_mtgo_usernames(db, user.user_id)
-    appearances = await _load_card_appearances(
+    appearances = await _load_card_appearances_auto(
         db,
         user.user_id,
         names,
@@ -311,7 +500,7 @@ async def get_card_detail(
 ) -> CardDetailResponse:
     """Single card detail across all matches."""
     names = await _load_mtgo_usernames(db, user.user_id)
-    appearances = await _load_card_appearances(db, user.user_id, names, card_name=card_name)
+    appearances = await _load_card_appearances_auto(db, user.user_id, names, card_name=card_name)
 
     if not appearances:
         raise HTTPException(

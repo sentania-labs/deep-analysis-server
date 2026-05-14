@@ -68,6 +68,12 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
 
     monkeypatch.setattr(_stats, "_load_user_matches", fake_loader)
 
+    # Disable Redis caching in tests so cached values don't leak between tests
+    async def _no_redis() -> None:
+        return None
+
+    monkeypatch.setattr(_stats, "_get_redis_or_none", _no_redis)
+
 
 # ---------------------------------------------------------------------------
 # /summary

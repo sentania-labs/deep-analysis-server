@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
@@ -12,6 +13,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from analytics_service.settings import get_settings
+from common.metrics import instrument_engine
+
+_log = logging.getLogger("analytics.db")
 
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
@@ -33,6 +37,11 @@ def get_engine() -> AsyncEngine:
         url = _async_url(get_settings().database_url)
         _engine = create_async_engine(url, future=True, pool_pre_ping=True)
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+        # Instrument the underlying sync engine for query timing metrics
+        try:
+            instrument_engine(_engine.sync_engine, "analytics")
+        except Exception:  # noqa: BLE001
+            _log.warning("failed to instrument DB engine for metrics", exc_info=True)
     return _engine
 
 
