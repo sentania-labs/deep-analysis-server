@@ -231,7 +231,9 @@ async def dashboard(
     format_stats: list[Any] = []
     stats_error = False
     play_draw_stats: Any = None
-    archetypes: list[Any] = []
+    preboard_postboard_stats: Any = None
+    mulligan_stats: Any = None
+    card_stats: Any = None
     try:
         stats_summary = await analytics_client.get_stats_summary(
             settings.analytics_service_url, user.token
@@ -254,14 +256,29 @@ async def dashboard(
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("play/draw stats unavailable")
 
-    # Fetch archetypes for the drill-down filter bar (best-effort).
+    # Pre-board / post-board stats (unfiltered).
     try:
-        arch_items, _ = await analytics_client.admin_list_archetypes(
+        preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
             settings.analytics_service_url, user.token
         )
-        archetypes = arch_items
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
-        _log.debug("archetypes unavailable for drill-down filter")
+        _log.debug("preboard/postboard stats unavailable")
+
+    # Mulligan stats (unfiltered).
+    try:
+        mulligan_stats = await analytics_client.get_mulligan_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("mulligan stats unavailable")
+
+    # Card stats (unfiltered).
+    try:
+        card_stats = await analytics_client.get_card_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("card stats unavailable")
 
     return templates.TemplateResponse(
         request,
@@ -272,7 +289,9 @@ async def dashboard(
             "format_stats": format_stats,
             "stats_error": stats_error,
             "play_draw_stats": play_draw_stats,
-            "archetypes": archetypes,
+            "preboard_postboard_stats": preboard_postboard_stats,
+            "mulligan_stats": mulligan_stats,
+            "card_stats": card_stats,
         },
     )
 
