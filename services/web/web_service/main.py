@@ -223,6 +223,70 @@ async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+) -> Response:
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    stats_summary: Any = None
+    format_stats: list[Any] = []
+    stats_error = False
+    play_draw_stats: Any = None
+    archetypes: list[Any] = []
+    try:
+        stats_summary = await analytics_client.get_stats_summary(
+            settings.analytics_service_url, user.token
+        )
+        format_stats = await analytics_client.get_stats_by_format(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        # Treat as logged-out: bounce to /login so the user can re-auth.
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics stats call failed; rendering dashboard with error banner")
+        stats_error = True
+
+    # Play/draw stats for the overview stat card (unfiltered).
+    try:
+        play_draw_stats = await analytics_client.get_play_draw_stats(
+            settings.analytics_service_url, user.token
+        )
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("play/draw stats unavailable")
+
+    # Fetch archetypes for the drill-down filter bar (best-effort).
+    try:
+        arch_items, _ = await analytics_client.admin_list_archetypes(
+            settings.analytics_service_url, user.token
+        )
+        archetypes = arch_items
+    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+        _log.debug("archetypes unavailable for drill-down filter")
+
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "user": user,
+            "stats_summary": stats_summary,
+            "format_stats": format_stats,
+            "stats_error": stats_error,
+            "play_draw_stats": play_draw_stats,
+            "archetypes": archetypes,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Match History page
+# ---------------------------------------------------------------------------
+
+
+@app.get("/matches", response_class=HTMLResponse)
+async def match_history_page(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=_DASHBOARD_MAX_PER_PAGE)] = _DASHBOARD_DEFAULT_PER_PAGE,
     opp_page: Annotated[int, Query(ge=1)] = 1,
@@ -235,22 +299,10 @@ async def dashboard(
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
 
-    stats_summary: Any = None
-    format_stats: list[Any] = []
     opponent_stats: list[Any] = []
     match_list: Any = None
     stats_error = False
-    play_draw_stats: Any = None
-    preboard_postboard_stats: Any = None
-    mulligan_stats: Any = None
-    card_stats: Any = None
     try:
-        stats_summary = await analytics_client.get_stats_summary(
-            settings.analytics_service_url, user.token
-        )
-        format_stats = await analytics_client.get_stats_by_format(
-            settings.analytics_service_url, user.token
-        )
         opponent_stats = await analytics_client.get_stats_by_opponent(
             settings.analytics_service_url, user.token
         )
@@ -266,55 +318,11 @@ async def dashboard(
             date_to=date_to or None,
         )
     except analytics_client.AnalyticsForbidden:
-        # Treat as logged-out: bounce to /login so the user can re-auth.
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except analytics_client.AnalyticsClientError:
-        _log.exception("analytics stats call failed; rendering dashboard with error banner")
+        _log.exception("analytics stats call failed on match history page")
         stats_error = True
 
-    # v0.9.0 analytics widgets — each is independent so a failure in
-    # one doesn't block the others or the main dashboard.
-    # Build filter kwargs for analytics widget calls
-    _widget_filters = {
-        "format_filter": format or None,
-        "opponent": opponent or None,
-        "date_from": date_from or None,
-        "date_to": date_to or None,
-    }
-
-    try:
-        play_draw_stats = await analytics_client.get_play_draw_stats(
-            settings.analytics_service_url, user.token, **_widget_filters
-        )
-    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
-        _log.debug("play/draw stats unavailable")
-
-    try:
-        preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
-            settings.analytics_service_url, user.token, **_widget_filters
-        )
-    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
-        _log.debug("preboard/postboard stats unavailable")
-
-    try:
-        mulligan_stats = await analytics_client.get_mulligan_stats(
-            settings.analytics_service_url, user.token, **_widget_filters
-        )
-    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
-        _log.debug("mulligan stats unavailable")
-
-    try:
-        card_stats = await analytics_client.get_card_stats(
-            settings.analytics_service_url,
-            user.token,
-            per_page=20,
-            sort_by="games",
-            **_widget_filters,
-        )
-    except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
-        _log.debug("card stats unavailable")
-
-    # Filters dict to persist across pagination
     filters = {
         "format": format,
         "opponent": opponent,
@@ -322,25 +330,17 @@ async def dashboard(
         "date_from": date_from,
         "date_to": date_to,
     }
-    # Build query string for pagination links (URL-encoded so filter
-    # values containing &, =, +, % don't break the links).
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
-    # Paginate the "By opponent" table client-side.  The analytics
-    # endpoint returns the full list (already sorted by match count
-    # descending) so we slice here rather than adding server-side
-    # limit/offset — the list is typically small (<200 opponents).
     opp_per_page = _OPPONENT_DEFAULT_PER_PAGE
     opp_offset = (opp_page - 1) * opp_per_page
     opponent_page = opponent_stats[opp_offset : opp_offset + opp_per_page]
 
     return templates.TemplateResponse(
         request,
-        "dashboard.html",
+        "match_history.html",
         {
             "user": user,
-            "stats_summary": stats_summary,
-            "format_stats": format_stats,
             "opponent_stats": opponent_stats,
             "opponent_page": opponent_page,
             "opp_page": opp_page,
@@ -351,11 +351,117 @@ async def dashboard(
             "per_page": per_page,
             "filters": filters,
             "filter_qs": filter_qs,
-            "play_draw_stats": play_draw_stats,
-            "preboard_postboard_stats": preboard_postboard_stats,
-            "mulligan_stats": mulligan_stats,
-            "card_stats": card_stats,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard HTMX partials — format drill-down cascade
+# ---------------------------------------------------------------------------
+
+
+@app.get("/dashboard/partials/play-draw", response_class=HTMLResponse)
+async def dashboard_partial_play_draw(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
+) -> Response:
+    """HTMX partial: play/draw stats filtered by format."""
+    play_draw_stats: Any = None
+    try:
+        play_draw_stats = await analytics_client.get_play_draw_stats(
+            settings.analytics_service_url, user.token, format_filter=format or None
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.debug("play/draw stats unavailable for format=%s", format)
+    return templates.TemplateResponse(
+        request,
+        "_partials_play_draw.html",
+        {"play_draw_stats": play_draw_stats},
+    )
+
+
+@app.get("/dashboard/partials/preboard-postboard", response_class=HTMLResponse)
+async def dashboard_partial_preboard_postboard(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
+) -> Response:
+    """HTMX partial: pre-board vs post-board stats filtered by format."""
+    preboard_postboard_stats: Any = None
+    try:
+        preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
+            settings.analytics_service_url, user.token, format_filter=format or None
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.debug("preboard/postboard stats unavailable for format=%s", format)
+    return templates.TemplateResponse(
+        request,
+        "_partials_preboard_postboard.html",
+        {"preboard_postboard_stats": preboard_postboard_stats},
+    )
+
+
+@app.get("/dashboard/partials/mulligans", response_class=HTMLResponse)
+async def dashboard_partial_mulligans(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
+) -> Response:
+    """HTMX partial: mulligan analysis filtered by format."""
+    mulligan_stats: Any = None
+    try:
+        mulligan_stats = await analytics_client.get_mulligan_stats(
+            settings.analytics_service_url, user.token, format_filter=format or None
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.debug("mulligan stats unavailable for format=%s", format)
+    return templates.TemplateResponse(
+        request,
+        "_partials_mulligans.html",
+        {"mulligan_stats": mulligan_stats},
+    )
+
+
+_CARD_PERF_PER_PAGE = 10
+
+
+@app.get("/dashboard/partials/card-performance", response_class=HTMLResponse)
+async def dashboard_partial_card_performance(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> Response:
+    """HTMX partial: card performance filtered by format, paginated."""
+    card_stats: Any = None
+    try:
+        card_stats = await analytics_client.get_card_stats(
+            settings.analytics_service_url,
+            user.token,
+            page=page,
+            per_page=_CARD_PERF_PER_PAGE,
+            sort_by="games",
+            format_filter=format or None,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
+    except analytics_client.AnalyticsClientError:
+        _log.debug("card stats unavailable for format=%s", format)
+    return templates.TemplateResponse(
+        request,
+        "_partials_card_performance.html",
+        {"card_stats": card_stats, "format_filter": format},
     )
 
 
@@ -1941,13 +2047,24 @@ def _render_admin_settings(
     tunables: auth_client.TunablesResult | None = None,
     cards_status: dict[str, Any] | None = None,
     scraper_health: dict[str, Any] | None = None,
+    scraper_healths: list[dict[str, Any]] | None = None,
     error: str | None,
     saved: bool,
     tunables_saved: bool = False,
     tunables_error: str | None = None,
     scrape_mtgo_triggered: bool = False,
+    scrape_mtgtop8_triggered: bool = False,
     status_code: int,
 ) -> Response:
+    # Build per-scraper dicts for template convenience
+    mtgo_health: dict[str, Any] | None = scraper_health  # backward compat
+    mtgtop8_health: dict[str, Any] | None = None
+    if scraper_healths:
+        for sh in scraper_healths:
+            if sh.get("scraper_name") == "mtgo":
+                mtgo_health = sh
+            elif sh.get("scraper_name") == "mtgtop8":
+                mtgtop8_health = sh
     return templates.TemplateResponse(
         request,
         "admin_settings.html",
@@ -1956,7 +2073,8 @@ def _render_admin_settings(
             "mode": mode,
             "tunables": tunables,
             "cards_status": cards_status,
-            "scraper_health": scraper_health,
+            "scraper_health": mtgo_health,
+            "mtgtop8_health": mtgtop8_health,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
@@ -1964,6 +2082,7 @@ def _render_admin_settings(
             "tunables_saved": tunables_saved,
             "tunables_error": tunables_error,
             "scrape_mtgo_triggered": scrape_mtgo_triggered,
+            "scrape_mtgtop8_triggered": scrape_mtgtop8_triggered,
         },
         status_code=status_code,
     )
@@ -1977,6 +2096,7 @@ async def admin_settings(
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
     tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgo_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
+    scrape_mtgtop8_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -1985,7 +2105,7 @@ async def admin_settings(
     mode: auth_client.RegistrationMode | None = None
     tunables: auth_client.TunablesResult | None = None
     cards_status: dict[str, Any] | None = None
-    scraper_health: dict[str, Any] | None = None
+    scraper_healths: list[dict[str, Any]] | None = None
     error: str | None = None
 
     try:
@@ -2014,7 +2134,7 @@ async def admin_settings(
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("admin.settings.cards_status unavailable")
     try:
-        scraper_health = await analytics_client.admin_get_scraper_health(
+        scraper_healths = await analytics_client.admin_get_all_scraper_health(
             settings.analytics_service_url, user.token
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
@@ -2028,11 +2148,12 @@ async def admin_settings(
         mode=mode,
         tunables=tunables,
         cards_status=cards_status,
-        scraper_health=scraper_health,
+        scraper_healths=scraper_healths,
         error=error,
         saved=saved == 1,
         tunables_saved=tunables_saved == 1,
         scrape_mtgo_triggered=scrape_mtgo_triggered == 1,
+        scrape_mtgtop8_triggered=scrape_mtgtop8_triggered == 1,
         status_code=code,
     )
 
@@ -2187,6 +2308,33 @@ async def admin_settings_scrape_mtgo(
         )
     return RedirectResponse(
         url="/admin/settings?scrape_mtgo_triggered=1", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/admin/settings/scrape-mtgtop8")
+async def admin_settings_scrape_mtgtop8(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        await analytics_client.admin_trigger_mtgtop8_scrape(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/scrape-mtgtop8 call failed")
+        return Response(
+            content="Analytics service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return RedirectResponse(
+        url="/admin/settings?scrape_mtgtop8_triggered=1",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

@@ -214,21 +214,13 @@ async def test_dashboard_renders_with_stats(
     assert "Total matches" in text
     assert "Win rate" in text
     assert "66.7%" in text
-    # Match history table should include the sample row
-    assert "bob" in text
-    assert "Modern" in text
-    # Format/opponent breakdowns
+    # Format breakdown table is on the overview
     assert "By format" in text
-    assert "By opponent" in text
+    assert "Modern" in text
     # No error banner
     assert "Stats unavailable" not in text
-    # v0.9.0 analytics widgets
-    assert "Play/Draw Split" in text
-    assert "On Play" in text
-    assert "Pre-board vs Post-board" in text
-    assert "Mulligan Analysis" in text
-    assert "Card Performance" in text
-    assert "Lightning Bolt" in text
+    # Match history, opponent stats, and detailed analytics panels moved
+    # to /matches and HTMX partials in v0.9.4 — not in initial dashboard HTML
 
 
 @pytest.mark.asyncio

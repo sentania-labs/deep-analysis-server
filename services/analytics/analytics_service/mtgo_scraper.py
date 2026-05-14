@@ -791,6 +791,30 @@ async def record_health(
             )
 
 
+_HEALTH_RESET_SQL = text(
+    """
+    UPDATE analytics.scraper_health
+       SET consecutive_failures = 0,
+           is_broken = FALSE,
+           last_error = NULL,
+           last_raw_snippet = NULL
+     WHERE scraper_name = :scraper_name
+    """
+)
+
+
+async def reset_health(session: AsyncSession, scraper_name: str) -> dict[str, Any]:
+    """Reset a scraper's failure counters so it re-enters the normal cycle.
+
+    Useful after deploying a fix for a BROKEN scraper — clears
+    ``consecutive_failures`` and ``is_broken`` without waiting for a
+    successful scrape. Returns the health row after the reset.
+    """
+    await session.execute(_HEALTH_RESET_SQL, {"scraper_name": scraper_name})
+    await session.commit()
+    return await get_health(session, scraper_name)
+
+
 async def get_health(session: AsyncSession, scraper_name: str) -> dict[str, Any]:
     row = (
         (await session.execute(_HEALTH_SELECT_SQL, {"scraper_name": scraper_name}))
@@ -824,7 +848,10 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
 
     try:
         async with httpx.AsyncClient(
-            timeout=REQUEST_TIMEOUT, headers=headers, follow_redirects=True
+            timeout=REQUEST_TIMEOUT,
+            headers=headers,
+            follow_redirects=True,
+            cookies=httpx.Cookies(),
         ) as client:
             status, listing_html = await fetch_event_listing(client)
             last_html_snippet = listing_html[:_SNIPPET_CHARS] if listing_html else None
@@ -832,6 +859,17 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
                 raise RuntimeError(f"mtgo listing returned status {status}")
 
             events = extract_events_from_html(listing_html)
+
+            # Diagnostic: when we get HTML but parse nothing, log the
+            # opening bytes so the next person debugging can see whether
+            # it's a cookie wall, Cloudflare challenge, or restructured
+            # HTML without having to reproduce the environment.
+            if not events and listing_html:
+                _log.warning(
+                    "mtgo listing returned 200 but zero events parsed; "
+                    "first 500 chars of response body for diagnostics",
+                    extra={"html_head": listing_html[:500]},
+                )
             result.events_found = len(events)
 
             async with sm() as session:

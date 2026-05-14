@@ -1,0 +1,65 @@
+{# HTMX partial: Card performance table filtered by format, paginated #}
+{% if card_stats and card_stats.cards %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="px-4 py-3 border-b dark:border-border border-border-light">
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">Card Performance</h2>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Card</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Games</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Win Rate</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Avg Cast Turn</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for card in card_stats.cards %}
+                <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">{{ card.card_name }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ card.games }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ "%.1f"|format(card.win_rate) }}%</td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ "%.1f"|format(card.avg_cast_turn) if card.avg_cast_turn is not none else "—" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {# Pagination #}
+    {% set first_idx = (card_stats.page - 1) * card_stats.per_page + 1 %}
+    {% set last_idx = first_idx + card_stats.cards|length - 1 %}
+    {% set has_prev = card_stats.page > 1 %}
+    {% set has_next = last_idx < card_stats.total %}
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <nav class="flex items-center justify-between" aria-label="Card stats pagination">
+            <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
+                Showing <span class="font-mono">{{ first_idx }}</span>&ndash;<span class="font-mono">{{ last_idx }}</span> of
+                <span class="font-mono">{{ card_stats.total }}</span> card{{ "" if card_stats.total == 1 else "s" }}.
+            </p>
+            {% if has_prev or has_next %}
+            <div class="flex items-center gap-2 text-sm">
+                {% if has_prev %}
+                <button hx-get="/dashboard/partials/card-performance?format={{ format_filter|urlencode }}&page={{ card_stats.page - 1 }}"
+                        hx-target="#card-performance-panel"
+                        hx-swap="innerHTML"
+                        class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors cursor-pointer bg-transparent">&larr; Prev</button>
+                {% endif %}
+                <span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ card_stats.page }}</span>
+                {% if has_next %}
+                <button hx-get="/dashboard/partials/card-performance?format={{ format_filter|urlencode }}&page={{ card_stats.page + 1 }}"
+                        hx-target="#card-performance-panel"
+                        hx-swap="innerHTML"
+                        class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors cursor-pointer bg-transparent">Next &rarr;</button>
+                {% endif %}
+            </div>
+            {% endif %}
+        </nav>
+    </div>
+</div>
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">No card performance data available for this format.</p>
+</div>
+{% endif %}

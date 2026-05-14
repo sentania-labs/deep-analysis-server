@@ -30,3 +30,4 @@ bypass-selection = true
 "agent_auth.py" = "common/agent_auth.py"
 "token_utils.py" = "common/token_utils.py"
 "format_inference.py" = "common/format_inference.py"
+"cache.py" = "common/cache.py"
