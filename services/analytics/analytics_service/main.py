@@ -27,8 +27,10 @@ from analytics_service.mtgtop8_scraper import run_scrape as run_mtgtop8_scrape
 from analytics_service.scryfall_sync import run_sync, should_sync
 from analytics_service.settings import get_settings
 from analytics_service.stats import router as stats_router
+from common.cache import invalidate_user
 from common.logging import configure_logging
 from common.metrics import mount_metrics
+from common.redis_client import get_redis
 
 SERVICE_NAME = "analytics"
 configure_logging(SERVICE_NAME)
@@ -38,14 +40,16 @@ _log = logging.getLogger("analytics.main")
 _scheduler_task: asyncio.Task[None] | None = None
 _mtgo_scheduler_task: asyncio.Task[None] | None = None
 _mtgtop8_scheduler_task: asyncio.Task[None] | None = None
+_cache_invalidator_task: asyncio.Task[None] | None = None
 
 
 def reset_scheduler() -> None:
     """Test hook."""
-    global _scheduler_task, _mtgo_scheduler_task, _mtgtop8_scheduler_task
+    global _scheduler_task, _mtgo_scheduler_task, _mtgtop8_scheduler_task, _cache_invalidator_task
     _scheduler_task = None
     _mtgo_scheduler_task = None
     _mtgtop8_scheduler_task = None
+    _cache_invalidator_task = None
 
 
 async def _scheduler_loop() -> None:
@@ -198,6 +202,64 @@ async def _stop_mtgtop8_scheduler() -> None:
     _mtgtop8_scheduler_task = None
 
 
+# ---------------------------------------------------------------------------
+# Cache invalidation
+# ---------------------------------------------------------------------------
+
+
+async def _cache_invalidation_loop() -> None:
+    """Subscribe to ``match.parsed`` Redis pub/sub and invalidate cached
+    stats for the affected user. Runs for the lifetime of the service."""
+    settings = get_settings()
+    try:
+        redis_client = await get_redis(settings.redis_url)
+        pubsub = redis_client.pubsub()
+        await pubsub.subscribe("match.parsed")
+        _log.info("cache invalidator subscribed to match.parsed")
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+            try:
+                import json as _json
+
+                payload = _json.loads(message["data"])
+                user_id = payload.get("user_id")
+                if user_id is not None:
+                    deleted = await invalidate_user(redis_client, int(user_id))
+                    if deleted:
+                        _log.debug("invalidated %d cache keys for user_id=%s", deleted, user_id)
+            except Exception:  # noqa: BLE001
+                _log.warning("cache invalidation message handling failed", exc_info=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        _log.exception("cache invalidation loop failed")
+
+
+async def _start_cache_invalidator() -> None:
+    global _cache_invalidator_task
+    if _cache_invalidator_task is not None:
+        return
+    _cache_invalidator_task = asyncio.create_task(
+        _cache_invalidation_loop(), name="cache-invalidator"
+    )
+    _log.info("cache invalidator task started")
+
+
+async def _stop_cache_invalidator() -> None:
+    global _cache_invalidator_task
+    if _cache_invalidator_task is None:
+        return
+    _cache_invalidator_task.cancel()
+    try:
+        await _cache_invalidator_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        _log.exception("cache invalidator raised on shutdown")
+    _cache_invalidator_task = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -213,8 +275,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
         _log.exception("failed to start mtgtop8 scheduler; healthz remains available")
     try:
+        await _start_cache_invalidator()
+    except Exception:  # noqa: BLE001 — cache is optional; service works without it
+        _log.exception("failed to start cache invalidator; service continues without caching")
+    try:
         yield
     finally:
+        await _stop_cache_invalidator()
         await _stop_mtgtop8_scheduler()
         await _stop_mtgo_scheduler()
         await _stop_scheduler()

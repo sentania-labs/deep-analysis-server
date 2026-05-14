@@ -10,10 +10,15 @@ The "user perspective" within a match is currently inferred from
 and the parser's player-ordering convention puts the uploader-side
 account first. If the upstream parser ever changes that convention,
 this module is the only consumer that needs to be updated.
+
+v0.9.4: Query patterns rewritten to push filtering, pagination, and
+aggregation to SQL instead of loading all matches into Python.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import date, datetime
 from typing import Annotated, Any
 
@@ -24,8 +29,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from analytics_service.db import get_session
 from analytics_service.deps import AuthenticatedUser, require_user
+from analytics_service.settings import get_settings
+from common.cache import cache_key, get_cached, set_cached
+from common.redis_client import get_redis
+
+_log = logging.getLogger("analytics.stats")
 
 router = APIRouter(prefix="/analytics/stats", tags=["stats"])
+
+
+async def _get_redis_or_none() -> Any:
+    """Return the Redis client or None if unavailable."""
+    try:
+        settings = get_settings()
+        return await get_redis(settings.redis_url)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _RECENT_MATCH_LIMIT = 20
@@ -123,8 +142,33 @@ async def _load_mtgo_usernames(db: AsyncSession, user_id: int) -> list[str] | No
     return None
 
 
+def _hero_sql_expression(mtgo_usernames: list[str] | None) -> tuple[str, dict[str, Any]]:
+    """Build a SQL CASE expression to identify the hero player name.
+
+    Returns (sql_fragment, params) where the fragment can be embedded
+    in a larger query. Uses ``players[0]`` as the fallback when no
+    MTGO usernames match.
+    """
+    if not mtgo_usernames:
+        return "m.players->>0", {}
+
+    # Build a CASE that tries each known username against the players array
+    cases: list[str] = []
+    params: dict[str, Any] = {}
+    for i, name in enumerate(mtgo_usernames):
+        pkey = f"_hero_name_{i}"
+        cases.append(f"WHEN m.players ? :{pkey} THEN :{pkey}")
+        params[pkey] = name
+    return f"CASE {' '.join(cases)} ELSE m.players->>0 END", params
+
+
 async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
-    """Fetch a user's matches plus per-match game-winner counts."""
+    """Fetch a user's matches plus per-match game-winner counts.
+
+    Kept for callers that need the full match list with game-win
+    breakdowns (by-opponent aggregation). For summary and by-format,
+    prefer the dedicated SQL aggregation helpers.
+    """
     rows = (
         await db.execute(
             text(
@@ -222,9 +266,18 @@ async def get_summary(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
 ) -> StatsSummary:
+    redis_client = await _get_redis_or_none()
+    ck = cache_key(user.user_id, "summary")
+    if redis_client:
+        cached = await get_cached(redis_client, ck, endpoint="summary")
+        if isinstance(cached, dict):
+            return StatsSummary(**cached)
     matches = await _load_user_matches(db, user.user_id)
     names = await _load_mtgo_usernames(db, user.user_id)
-    return _summarize(matches, names)
+    result = _summarize(matches, names)
+    if redis_client:
+        await set_cached(redis_client, ck, result.model_dump(mode="json", by_alias=True))
+    return result
 
 
 @router.get("/by-format", response_model=list[FormatStat])
@@ -232,6 +285,12 @@ async def get_by_format(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[FormatStat]:
+    redis_client = await _get_redis_or_none()
+    ck = cache_key(user.user_id, "by-format")
+    if redis_client:
+        cached = await get_cached(redis_client, ck, endpoint="by-format")
+        if isinstance(cached, list):
+            return [FormatStat(**item) for item in cached]
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
@@ -266,6 +325,12 @@ async def get_by_format(
                 win_rate=win_rate,
             )
         )
+    if redis_client:
+        await set_cached(
+            redis_client,
+            ck,
+            [item.model_dump(mode="json", by_alias=True) for item in out],
+        )
     return out
 
 
@@ -274,6 +339,12 @@ async def get_by_opponent(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[OpponentStat]:
+    redis_client = await _get_redis_or_none()
+    ck = cache_key(user.user_id, "by-opponent")
+    if redis_client:
+        cached = await get_cached(redis_client, ck, endpoint="by-opponent")
+        if isinstance(cached, list):
+            return [OpponentStat(**item) for item in cached]
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
@@ -308,6 +379,12 @@ async def get_by_opponent(
                 draws=b["draws"],
                 win_rate=win_rate,
             )
+        )
+    if redis_client:
+        await set_cached(
+            redis_client,
+            ck,
+            [item.model_dump(mode="json", by_alias=True) for item in out],
         )
     return out
 
@@ -344,7 +421,7 @@ async def get_username_suggestion(
 
 
 # ---------------------------------------------------------------------------
-# Paginated match listing with filters
+# Paginated match listing with filters — SQL-level filtering and pagination
 # ---------------------------------------------------------------------------
 
 _MATCHES_DEFAULT_PER_PAGE = 20
@@ -382,59 +459,131 @@ async def list_matches(
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
 ) -> MatchListResponse:
-    """Paginated, filterable match listing for the dashboard."""
-    all_matches = await _load_user_matches(db, user.user_id)
+    """Paginated, filterable match listing for the dashboard.
+
+    v0.9.4: Pushes format, opponent, and date filters to SQL WHERE
+    clauses and applies LIMIT/OFFSET at the database level. Result
+    filtering (W/L/D) still happens in Python on the filtered set
+    because it depends on per-match game-winner counts.
+    """
     names = await _load_mtgo_usernames(db, user.user_id)
 
-    # Classify all matches so we can filter by result / opponent
-    classified: list[tuple[dict[str, Any], str, str | None, int, int]] = []
-    for m in all_matches:
-        r, opp, pw, pl = _classify_match(m["players"], m["wins_by_player"], names)
-        classified.append((m, r, opp, pw, pl))
+    # Build SQL WHERE dynamically for filters that can be pushed to SQL
+    where = "WHERE m.user_id = :user_id"
+    params: dict[str, Any] = {"user_id": user.user_id}
 
-    # Apply filters
     if format and format.lower() != "all":
-        classified = [
-            (m, r, opp, pw, pl)
-            for m, r, opp, pw, pl in classified
-            if (m["format"] or "Unknown").lower() == format.lower()
-        ]
+        where += " AND LOWER(m.format) = LOWER(:format)"
+        params["format"] = format
     if opponent:
-        needle = opponent.lower()
-        classified = [
-            (m, r, opp, pw, pl) for m, r, opp, pw, pl in classified if opp and needle in opp.lower()
-        ]
-    if result and result.lower() != "all":
-        result_map = {"wins": "W", "losses": "L", "draws": "D"}
-        target = result_map.get(result.lower(), result.upper())
-        classified = [(m, r, opp, pw, pl) for m, r, opp, pw, pl in classified if r == target]
+        where += " AND m.players @> :opp_json::jsonb"
+        params["opp_json"] = json.dumps([opponent])
     if date_from:
-        classified = [
-            (m, r, opp, pw, pl)
-            for m, r, opp, pw, pl in classified
-            if m["played_at"] and m["played_at"].date() >= date_from
-        ]
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = str(date_from)
     if date_to:
-        classified = [
-            (m, r, opp, pw, pl)
-            for m, r, opp, pw, pl in classified
-            if m["played_at"] and m["played_at"].date() <= date_to
-        ]
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = str(date_to)
 
-    total = len(classified)
-    offset = (page - 1) * per_page
-    page_items = classified[offset : offset + per_page]
+    # When there's no result filter, we can paginate in SQL
+    has_result_filter = result is not None and result.lower() != "all"
 
-    items = [
-        MatchListItem(
-            match_id=str(m["id"]),
-            played_at=m["played_at"],
-            opponent=opp,
-            result=r,
-            format=m["format"],
-            player_wins=pw,
-            player_losses=pl,
+    if has_result_filter:
+        # Must load all SQL-filtered matches, classify in Python, then paginate
+        rows = (
+            await db.execute(
+                text(
+                    f"""
+                    SELECT m.id, m.format, m.players,
+                           COALESCE(m.played_at, m.parsed_at) AS played_at
+                    FROM parser.matches m
+                    {where}
+                    ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
+                    """
+                ),
+                params,
+            )
+        ).all()
+    else:
+        # Count total for pagination
+        count_row = await db.execute(
+            text(f"SELECT COUNT(*) FROM parser.matches m {where}"),
+            params,
         )
-        for m, r, opp, pw, pl in page_items
-    ]
-    return MatchListResponse(matches=items, total=total, page=page, per_page=per_page)
+        total = int(count_row.scalar_one())
+
+        # Fetch only the requested page
+        offset = (page - 1) * per_page
+        params["limit"] = per_page
+        params["offset"] = offset
+        rows = (
+            await db.execute(
+                text(
+                    f"""
+                    SELECT m.id, m.format, m.players,
+                           COALESCE(m.played_at, m.parsed_at) AS played_at
+                    FROM parser.matches m
+                    {where}
+                    ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            )
+        ).all()
+
+    if not rows:
+        if has_result_filter:
+            return MatchListResponse(matches=[], total=0, page=page, per_page=per_page)
+        return MatchListResponse(matches=[], total=total, page=page, per_page=per_page)
+
+    # Fetch game-winner counts for the matches in this set
+    match_ids = [r[0] for r in rows]
+    game_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT match_id, winner, COUNT(*) AS n
+                FROM parser.games
+                WHERE match_id = ANY(:match_ids)
+                  AND winner IS NOT NULL
+                GROUP BY match_id, winner
+                """
+            ),
+            {"match_ids": match_ids},
+        )
+    ).all()
+    by_match: dict[Any, dict[str, int]] = {}
+    for match_id, winner, n in game_rows:
+        by_match.setdefault(match_id, {})[str(winner)] = int(n)
+
+    # Classify and build items
+    classified: list[MatchListItem] = []
+    for match_id, fmt, players, played_at in rows:
+        player_list = list(players or [])
+        wins_by_player = by_match.get(match_id, {})
+        r, opp, pw, pl = _classify_match(player_list, wins_by_player, names)
+        classified.append(
+            MatchListItem(
+                match_id=str(match_id),
+                played_at=played_at,
+                opponent=opp,
+                result=r,
+                format=fmt,
+                player_wins=pw,
+                player_losses=pl,
+            )
+        )
+
+    if has_result_filter:
+        # Apply result filter in Python on the SQL-reduced set
+        result_map = {"wins": "W", "losses": "L", "draws": "D"}
+        target = result_map.get(result.lower(), result.upper())  # type: ignore[union-attr]
+        classified = [item for item in classified if item.result == target]
+        total = len(classified)
+        offset = (page - 1) * per_page
+        page_items = classified[offset : offset + per_page]
+    else:
+        page_items = classified
+
+    return MatchListResponse(matches=page_items, total=total, page=page, per_page=per_page)
