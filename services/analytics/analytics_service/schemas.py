@@ -171,3 +171,76 @@ class ScraperConfigUpdate(BaseModel):
 
     enabled: bool | None = None
     interval_hours: int | None = Field(default=None, ge=1, le=168)
+
+
+# ---------------------------------------------------------------------------
+# ML Classifier schemas (F9)
+# ---------------------------------------------------------------------------
+
+
+class CanonicalArchetypeRecord(BaseModel):
+    """A single row from ``analytics.canonical_archetypes``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    canonical_name: str
+    format: str
+    variant_tags: list[str] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class CanonicalArchetypeCreate(BaseModel):
+    """Body for creating a canonical archetype."""
+
+    canonical_name: str = Field(..., min_length=1, max_length=200)
+    format: str = Field(..., min_length=1, max_length=64)
+    variant_tags: list[str] | None = None
+
+
+class CanonicalArchetypeListView(BaseModel):
+    archetypes: list[CanonicalArchetypeRecord]
+    total: int
+
+
+class ArchetypeLabelMappingRecord(BaseModel):
+    """A single row from ``analytics.archetype_label_mappings``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    scraped_label: str
+    canonical_id: uuid.UUID
+    canonical_name: str | None = None
+    created_at: datetime | None = None
+
+
+class ArchetypeLabelMappingCreate(BaseModel):
+    """Body for creating a label mapping."""
+
+    scraped_label: str = Field(..., min_length=1, max_length=500)
+    canonical_id: uuid.UUID
+
+
+class ArchetypeLabelMappingListView(BaseModel):
+    mappings: list[ArchetypeLabelMappingRecord]
+    total: int
+
+
+class ClassifierStatus(BaseModel):
+    """Status of the ML classifier model."""
+
+    loaded: bool = False
+    sample_count: int = 0
+    label_count: int = 0
+    last_trained_at: datetime | None = None
+
+
+class TrainResult(BaseModel):
+    """Result of a model training run."""
+
+    sample_count: int = 0
+    label_count: int = 0
+    accuracy: float = 0.0
+    message: str = ""

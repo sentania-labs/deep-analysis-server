@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -9,17 +10,21 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from analytics_service.archetypes import router as archetypes_router
 from analytics_service.card_stats import router as card_stats_router
 from analytics_service.cards import router as cards_router
-from analytics_service.db import get_sessionmaker
+from analytics_service.db import get_session, get_sessionmaker
 from analytics_service.deps import AuthenticatedUser, require_admin
 from analytics_service.game_stats import router as game_stats_router
 from analytics_service.matches import router as matches_router
 from analytics_service.metagame import router as metagame_router
+from analytics_service.ml_classifier import get_status as ml_get_status
+from analytics_service.ml_classifier import load_model as ml_load_model
+from analytics_service.ml_classifier import retrain as ml_retrain
+from analytics_service.models import ArchetypeLabelMapping, CanonicalArchetype
 from analytics_service.mtgo_scraper import SCRAPER_NAME as MTGO_SCRAPER_NAME
 from analytics_service.mtgo_scraper import get_health as get_scraper_health_row
 from analytics_service.mtgo_scraper import reset_health as reset_scraper_health_row
@@ -27,9 +32,17 @@ from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
 from analytics_service.mtgtop8_scraper import SCRAPER_NAME as MTGTOP8_SCRAPER_NAME
 from analytics_service.mtgtop8_scraper import run_scrape as run_mtgtop8_scrape
 from analytics_service.schemas import (
+    ArchetypeLabelMappingCreate,
+    ArchetypeLabelMappingListView,
+    ArchetypeLabelMappingRecord,
+    CanonicalArchetypeCreate,
+    CanonicalArchetypeListView,
+    CanonicalArchetypeRecord,
+    ClassifierStatus,
     ScraperConfigListResponse,
     ScraperConfigResponse,
     ScraperConfigUpdate,
+    TrainResult,
 )
 from analytics_service.scryfall_sync import run_sync, should_sync
 from analytics_service.settings import get_settings
@@ -323,6 +336,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _start_cache_invalidator()
     except Exception:  # noqa: BLE001 — cache is optional; service works without it
         _log.exception("failed to start cache invalidator; service continues without caching")
+    try:
+        ml_load_model()
+    except Exception:  # noqa: BLE001 — ML model is optional
+        _log.info("ML classifier model not loaded at startup (not yet trained or unavailable)")
     try:
         yield
     finally:
@@ -864,6 +881,260 @@ async def scraper_event_detail(
                     for r in result_rows
                 ],
             }
+
+
+# ---------------------------------------------------------------------------
+# ML Classifier admin endpoints (F9)
+# ---------------------------------------------------------------------------
+
+
+@admin_router.post("/classifier/retrain", response_model=TrainResult, status_code=202)
+async def classifier_retrain(
+    background_tasks: BackgroundTasks,
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> TrainResult:
+    """Trigger ML model retraining in the background.
+
+    Returns 202 immediately with a placeholder result; the actual
+    training runs asynchronously. Check ``/classifier/status`` to
+    see when the model has been updated.
+    """
+
+    async def _do_retrain() -> None:
+        sm = get_sessionmaker()
+        async with sm() as session:
+            result = await ml_retrain(session)
+        _log.info("ML retrain completed: %s", result.message)
+
+    background_tasks.add_task(_do_retrain)
+    return TrainResult(message="retraining started")
+
+
+@admin_router.get("/classifier/status", response_model=ClassifierStatus)
+async def classifier_status(
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> ClassifierStatus:
+    """Return the current ML classifier model status."""
+    s = ml_get_status()
+    return ClassifierStatus(
+        loaded=s["loaded"],
+        sample_count=s["sample_count"],
+        label_count=s["label_count"],
+        last_trained_at=s["last_trained_at"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Canonical archetypes CRUD (F9)
+# ---------------------------------------------------------------------------
+
+
+def _canonical_record(row: CanonicalArchetype) -> CanonicalArchetypeRecord:
+    return CanonicalArchetypeRecord(
+        id=row.id,
+        canonical_name=row.canonical_name,
+        format=row.format,
+        variant_tags=row.variant_tags,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@admin_router.get("/canonical-archetypes", response_model=CanonicalArchetypeListView)
+async def list_canonical_archetypes(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> CanonicalArchetypeListView:
+    rows = (
+        (
+            await db.execute(
+                select(CanonicalArchetype).order_by(
+                    CanonicalArchetype.format, CanonicalArchetype.canonical_name
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    total = int(
+        (await db.execute(select(func.count()).select_from(CanonicalArchetype))).scalar_one()
+    )
+    return CanonicalArchetypeListView(
+        archetypes=[_canonical_record(r) for r in rows], total=total
+    )
+
+
+@admin_router.post(
+    "/canonical-archetypes",
+    response_model=CanonicalArchetypeRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_canonical_archetype(
+    body: CanonicalArchetypeCreate,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> CanonicalArchetypeRecord:
+    row = CanonicalArchetype(
+        id=uuid.uuid4(),
+        canonical_name=body.canonical_name,
+        format=body.format,
+        variant_tags=body.variant_tags,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _canonical_record(row)
+
+
+@admin_router.put("/canonical-archetypes/{archetype_id}", response_model=CanonicalArchetypeRecord)
+async def update_canonical_archetype(
+    archetype_id: uuid.UUID,
+    body: CanonicalArchetypeCreate,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> CanonicalArchetypeRecord:
+    row = (
+        await db.execute(
+            select(CanonicalArchetype).where(CanonicalArchetype.id == archetype_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "canonical_archetype_not_found"},
+        )
+    row.canonical_name = body.canonical_name
+    row.format = body.format
+    row.variant_tags = body.variant_tags
+    row.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(row)
+    return _canonical_record(row)
+
+
+@admin_router.delete(
+    "/canonical-archetypes/{archetype_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_canonical_archetype(
+    archetype_id: uuid.UUID,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> None:
+    result = await db.execute(
+        delete(CanonicalArchetype).where(CanonicalArchetype.id == archetype_id)
+    )
+    await db.commit()
+    rowcount: int = result.rowcount  # type: ignore[attr-defined]
+    if rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "canonical_archetype_not_found"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Label mappings CRUD (F9)
+# ---------------------------------------------------------------------------
+
+
+@admin_router.get("/label-mappings", response_model=ArchetypeLabelMappingListView)
+async def list_label_mappings(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+    canonical_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> ArchetypeLabelMappingListView:
+    query = select(ArchetypeLabelMapping)
+    if canonical_id is not None:
+        query = query.where(ArchetypeLabelMapping.canonical_id == canonical_id)
+    query = query.order_by(ArchetypeLabelMapping.scraped_label)
+
+    rows = (await db.execute(query)).scalars().all()
+
+    # Count
+    count_query = select(func.count()).select_from(ArchetypeLabelMapping)
+    if canonical_id is not None:
+        count_query = count_query.where(ArchetypeLabelMapping.canonical_id == canonical_id)
+    total = int((await db.execute(count_query)).scalar_one())
+
+    # Eagerly resolve canonical names for the response.
+    canonical_ids = {r.canonical_id for r in rows}
+    canonical_map: dict[uuid.UUID, str] = {}
+    if canonical_ids:
+        ca_rows = (
+            await db.execute(
+                select(CanonicalArchetype.id, CanonicalArchetype.canonical_name).where(
+                    CanonicalArchetype.id.in_(canonical_ids)
+                )
+            )
+        ).all()
+        canonical_map = {r[0]: r[1] for r in ca_rows}
+
+    mappings = [
+        ArchetypeLabelMappingRecord(
+            id=r.id,
+            scraped_label=r.scraped_label,
+            canonical_id=r.canonical_id,
+            canonical_name=canonical_map.get(r.canonical_id),
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+    return ArchetypeLabelMappingListView(mappings=mappings, total=total)
+
+
+@admin_router.post(
+    "/label-mappings",
+    response_model=ArchetypeLabelMappingRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_label_mapping(
+    body: ArchetypeLabelMappingCreate,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> ArchetypeLabelMappingRecord:
+    # Verify canonical archetype exists.
+    ca = (
+        await db.execute(
+            select(CanonicalArchetype).where(CanonicalArchetype.id == body.canonical_id)
+        )
+    ).scalar_one_or_none()
+    if ca is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "canonical_archetype_not_found"},
+        )
+    row = ArchetypeLabelMapping(
+        scraped_label=body.scraped_label,
+        canonical_id=body.canonical_id,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return ArchetypeLabelMappingRecord(
+        id=row.id,
+        scraped_label=row.scraped_label,
+        canonical_id=row.canonical_id,
+        canonical_name=ca.canonical_name,
+        created_at=row.created_at,
+    )
+
+
+@admin_router.delete("/label-mappings/{mapping_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_label_mapping(
+    mapping_id: int,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> None:
+    result = await db.execute(
+        delete(ArchetypeLabelMapping).where(ArchetypeLabelMapping.id == mapping_id)
+    )
+    await db.commit()
+    rowcount: int = result.rowcount  # type: ignore[attr-defined]
+    if rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "label_mapping_not_found"},
+        )
 
 
 app.include_router(admin_router)
