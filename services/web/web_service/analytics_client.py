@@ -1294,9 +1294,7 @@ async def get_metagame_formats(base_url: str, token: str) -> list[dict[str, Any]
             f"analytics GET /metagame/formats transport error: {exc}"
         ) from exc
     if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /metagame/formats returned {resp.status_code}"
-        )
+        raise AnalyticsForbidden(f"analytics GET /metagame/formats returned {resp.status_code}")
     if resp.status_code >= 400:
         raise AnalyticsClientError(
             f"analytics GET /metagame/formats returned {resp.status_code}: {resp.text}"
@@ -1369,8 +1367,7 @@ async def get_metagame_event_detail(
             )
     except httpx.HTTPError as exc:
         raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/events/{{source}}/{{id}} "
-            f"transport error: {exc}"
+            f"analytics GET /metagame/{{format}}/events/{{source}}/{{id}} transport error: {exc}"
         ) from exc
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(
@@ -1425,13 +1422,9 @@ async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scrapers transport error: {exc}"
-        ) from exc
+        raise AnalyticsClientError(f"analytics GET /admin/scrapers transport error: {exc}") from exc
     if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /admin/scrapers returned {resp.status_code}"
-        )
+        raise AnalyticsForbidden(f"analytics GET /admin/scrapers returned {resp.status_code}")
     if resp.status_code >= 400:
         raise AnalyticsClientError(
             f"analytics GET /admin/scrapers returned {resp.status_code}: {resp.text}"

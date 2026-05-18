@@ -78,14 +78,8 @@ def upgrade() -> None:
     )
 
     # Grant parser service access to the new table.
-    op.execute(
-        "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA parser "
-        "TO deep_analysis_parser;"
-    )
-    op.execute(
-        "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA parser "
-        "TO deep_analysis_parser;"
-    )
+    op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA parser TO deep_analysis_parser;")
+    op.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA parser TO deep_analysis_parser;")
 
 
 def downgrade() -> None:

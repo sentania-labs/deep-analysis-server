@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from parser_service.models import (
     DeckComposition,
     DeckCompositionItem,
+    DeckVersionLink,
     Game,
     GameEventRow,
     GamePlayer,
@@ -278,18 +280,83 @@ async def resolve_mtgo_ids(
         return {}
 
 
+def _compute_deck_identity(parsed: ParsedGrouping) -> str:
+    """Derive a stable identity string for version linking.
+
+    Prefers ``net_deck_id`` (MTGO's own deck ID); falls back to
+    ``"<name>::<format_code>"`` for locally created decks.
+    """
+    if parsed.net_deck_id:
+        return parsed.net_deck_id
+    name_part = parsed.name or "unknown"
+    fmt_part = parsed.format_code or "unknown"
+    return f"{name_part}::{fmt_part}"
+
+
+_CardDict = dict[str, Any]
+
+
+def _compute_card_diff(
+    old_items: list[_CardDict],
+    new_items: list[_CardDict],
+) -> tuple[list[_CardDict], list[_CardDict]]:
+    """Compare two item lists and return (added, removed).
+
+    Each item dict has keys: mtgo_id, card_name, quantity, is_sideboard.
+    A card moving between main/sideboard counts as a remove + add.
+    """
+    _Key = tuple[int, bool]  # (mtgo_id, is_sideboard)
+
+    old_map: dict[_Key, _CardDict] = {}
+    for item in old_items:
+        key: _Key = (int(item["mtgo_id"]), bool(item["is_sideboard"]))
+        old_map[key] = item
+
+    new_map: dict[_Key, _CardDict] = {}
+    for item in new_items:
+        key = (int(item["mtgo_id"]), bool(item["is_sideboard"]))
+        new_map[key] = item
+
+    added: list[_CardDict] = []
+    removed: list[_CardDict] = []
+
+    all_keys = set(old_map.keys()) | set(new_map.keys())
+    for k in sorted(all_keys):
+        old_entry = old_map.get(k)
+        new_entry = new_map.get(k)
+        if old_entry is None and new_entry is not None:
+            added.append(new_entry)
+        elif new_entry is None and old_entry is not None:
+            removed.append(old_entry)
+        elif (
+            old_entry is not None
+            and new_entry is not None
+            and int(old_entry["quantity"]) != int(new_entry["quantity"])
+        ):
+            removed.append(old_entry)
+            added.append(new_entry)
+
+    return added, removed
+
+
 async def persist_deck_composition(
     session: AsyncSession,
     parsed: ParsedGrouping,
     sha256: str,
     user_id: int,
     original_filename: str | None = None,
+    file_mtime: float | None = None,
 ) -> DeckComposition:
     """Insert or update a parsed deck composition with its items.
 
     Idempotent on ``(sha256, user_id)`` — re-uploads overwrite the
     previous row's metadata.  CatId → card_name resolution is done
     here via ``catalog.cards.mtgo_id``.
+
+    When ``file_mtime`` is provided (from the agent's upload), it is
+    stored for version ordering.  After upserting the composition,
+    a ``deck_version_links`` row is created to track the diff from
+    the previous version of the same deck identity.
     """
     now = datetime.now(UTC)
     deck_uuid = extract_deck_uuid(original_filename)
@@ -305,6 +372,7 @@ async def persist_deck_composition(
         grouping_type=parsed.grouping_type,
         format_code=parsed.format_code,
         deck_timestamp=parsed.deck_timestamp,
+        file_mtime=file_mtime,
         parsed_at=now,
     )
     upsert_stmt = insert_stmt.on_conflict_do_update(
@@ -316,6 +384,7 @@ async def persist_deck_composition(
             "grouping_type": insert_stmt.excluded.grouping_type,
             "format_code": insert_stmt.excluded.format_code,
             "deck_timestamp": insert_stmt.excluded.deck_timestamp,
+            "file_mtime": insert_stmt.excluded.file_mtime,
             "parsed_at": insert_stmt.excluded.parsed_at,
         },
     ).returning(DeckComposition.id)
@@ -333,6 +402,7 @@ async def persist_deck_composition(
     mtgo_ids = [item.cat_id for item in parsed.items]
     name_map = await resolve_mtgo_ids(session, mtgo_ids)
 
+    new_item_dicts: list[_CardDict] = []
     if parsed.items:
         item_values = [
             {
@@ -345,6 +415,27 @@ async def persist_deck_composition(
             for item in parsed.items
         ]
         await session.execute(pg_insert(DeckCompositionItem).values(item_values))
+        new_item_dicts = [
+            {
+                "mtgo_id": item.cat_id,
+                "card_name": name_map.get(item.cat_id),
+                "quantity": item.quantity,
+                "is_sideboard": item.is_sideboard,
+            }
+            for item in parsed.items
+        ]
+
+    # --- Deck version linking ---
+    try:
+        await _link_deck_version(
+            session,
+            deck_id=deck_id,
+            user_id=user_id,
+            parsed=parsed,
+            new_item_dicts=new_item_dicts,
+        )
+    except Exception:  # noqa: BLE001 — version linking is best-effort
+        _log.debug("deck version linking failed deck_id=%s", deck_id)
 
     await session.commit()
     deck = (
@@ -353,6 +444,84 @@ async def persist_deck_composition(
         )
     ).scalar_one()
     return deck
+
+
+async def _link_deck_version(
+    session: AsyncSession,
+    deck_id: uuid.UUID,
+    user_id: int,
+    parsed: ParsedGrouping,
+    new_item_dicts: list[_CardDict],
+) -> None:
+    """Create a version link for this deck composition.
+
+    Finds the previous version of the same deck identity, computes
+    the card-level diff, assigns the next version number, and inserts
+    a ``deck_version_links`` row.
+    """
+    deck_identity = _compute_deck_identity(parsed)
+
+    # Find the most recent version link for this identity + user.
+    prev_link_row = (
+        await session.execute(
+            select(DeckVersionLink)
+            .where(
+                DeckVersionLink.user_id == user_id,
+                DeckVersionLink.deck_identity == deck_identity,
+            )
+            .order_by(DeckVersionLink.version_number.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if prev_link_row is not None:
+        next_version = prev_link_row.version_number + 1
+        prev_comp_id = prev_link_row.deck_composition_id
+    else:
+        next_version = 1
+        prev_comp_id = None
+
+    # Update version_number on the composition row.
+    await session.execute(
+        text("UPDATE parser.deck_compositions SET version_number = :ver WHERE id = :did"),
+        {"ver": next_version, "did": deck_id},
+    )
+
+    # Compute diff if there is a previous version.
+    cards_added: list[_CardDict] | None = None
+    cards_removed: list[_CardDict] | None = None
+    if prev_comp_id is not None:
+        prev_items_rows = (
+            await session.execute(
+                select(
+                    DeckCompositionItem.mtgo_id,
+                    DeckCompositionItem.card_name,
+                    DeckCompositionItem.quantity,
+                    DeckCompositionItem.is_sideboard,
+                ).where(DeckCompositionItem.deck_id == prev_comp_id)
+            )
+        ).all()
+        old_item_dicts: list[_CardDict] = [
+            {
+                "mtgo_id": r[0],
+                "card_name": r[1],
+                "quantity": r[2],
+                "is_sideboard": r[3],
+            }
+            for r in prev_items_rows
+        ]
+        cards_added, cards_removed = _compute_card_diff(old_item_dicts, new_item_dicts)
+
+    link = DeckVersionLink(
+        user_id=user_id,
+        deck_identity=deck_identity,
+        deck_composition_id=deck_id,
+        version_number=next_version,
+        previous_composition_id=prev_comp_id,
+        cards_added=cards_added,
+        cards_removed=cards_removed,
+    )
+    session.add(link)
 
 
 async def link_deck_to_match(

@@ -156,7 +156,12 @@ class ParserConsumer:
             return
 
         if content_type == "decklist":
-            await self.handle_decklist_event(sha, int(user_id))
+            file_mtime = payload.get("file_mtime")
+            await self.handle_decklist_event(
+                sha,
+                int(user_id),
+                file_mtime=float(file_mtime) if file_mtime is not None else None,
+            )
         elif content_type == "match-log":
             await self.handle_event(sha, int(user_id))
         else:
@@ -346,7 +351,12 @@ class ParserConsumer:
             _log.debug("failed to look up original_filename sha=%s user_id=%s", sha256, user_id)
             return None
 
-    async def handle_decklist_event(self, sha256: str, user_id: int) -> None:
+    async def handle_decklist_event(
+        self,
+        sha256: str,
+        user_id: int,
+        file_mtime: float | None = None,
+    ) -> None:
         """Handle a decklist (grouping XML) upload — parse and persist."""
         try:
             content = read_raw(
@@ -377,6 +387,7 @@ class ParserConsumer:
                     sha256,
                     user_id,
                     original_filename=original_filename,
+                    file_mtime=file_mtime,
                 )
             except Exception:
                 _log.exception("persist deck composition failed sha=%s user_id=%s", sha256, user_id)
@@ -447,8 +458,19 @@ async def _materialize_card_game_stats(
 
     Uses raw SQL INSERT ... ON CONFLICT for performance and to target the
     ``analytics`` schema (the parser ORM's metadata is bound to ``parser``).
+
+    Skips materialization entirely when hero identity is unknown — without
+    hero attribution, both players' events would collapse onto the same
+    ``(game_id, card_name, is_local=False)`` key, overwriting each other.
     """
     if not parsed.games:
+        return
+
+    if not hero_player_name:
+        _log.warning(
+            "skipping card_game_stats: hero identity unknown match_id=%s",
+            match.id,
+        )
         return
 
     # Pre-fetch oracle_id lookup: card_name → oracle_id

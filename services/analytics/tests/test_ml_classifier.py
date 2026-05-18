@@ -114,9 +114,7 @@ class TestClassifyFallbackChain:
 
         with patch(
             "analytics_service.classifier.classify_ml",
-            return_value=type(
-                "MLResult", (), {"archetype_name": "Tron", "confidence": 0.95}
-            )(),
+            return_value=type("MLResult", (), {"archetype_name": "Tron", "confidence": 0.95})(),
         ):
             out = classify(["Lightning Bolt"], [burn, tron])
         assert out.archetype is tron

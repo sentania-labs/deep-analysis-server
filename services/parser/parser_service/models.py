@@ -253,6 +253,8 @@ class DeckComposition(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    file_mtime: Mapped[float | None] = mapped_column(Float, nullable=True)
+    version_number: Mapped[int | None] = mapped_column(Integer, nullable=True, server_default="1")
     parsed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -290,4 +292,48 @@ class DeckCompositionItem(Base):
     __table_args__ = (
         Index("ix_deck_composition_items_deck_id", "deck_id"),
         Index("ix_deck_composition_items_mtgo_id", "mtgo_id"),
+    )
+
+
+class DeckVersionLink(Base):
+    """Version chain entry linking sequential uploads of the same deck.
+
+    Tracks the diff (cards added/removed) between consecutive versions
+    of a logical deck identity.  ``deck_identity`` is ``net_deck_id``
+    when available, otherwise ``"<name>::<format_code>"``.
+    """
+
+    __tablename__ = "deck_version_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    deck_identity: Mapped[str] = mapped_column(Text, nullable=False)
+    deck_composition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_composition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cards_added: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    cards_removed: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "deck_identity",
+            "version_number",
+            name="uq_deck_version_links_user_identity_version",
+        ),
+        Index("ix_deck_version_links_user_identity", "user_id", "deck_identity"),
+        Index("ix_deck_version_links_composition_id", "deck_composition_id"),
     )

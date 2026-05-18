@@ -1185,7 +1185,9 @@ async def metagame_event_detail(
     except analytics_client.AnalyticsClientError:
         _log.exception(
             "analytics GET /metagame/%s/events/%s/%s failed",
-            format_name, source, event_id,
+            format_name,
+            source,
+            event_id,
         )
         error = "Analytics service unavailable."
 

@@ -232,13 +232,15 @@ class TestGamePlayerFromParsedMatch:
                     if k.lower() == pname.lower():
                         mulligan_count = max(0, 7 - int(v))
                         break
-            values.append({
-                "game_id": game_id,
-                "player_name": pname,
-                "is_local": is_local,
-                "on_play": on_play,
-                "mulligan_count": mulligan_count,
-            })
+            values.append(
+                {
+                    "game_id": game_id,
+                    "player_name": pname,
+                    "is_local": is_local,
+                    "on_play": on_play,
+                    "mulligan_count": mulligan_count,
+                }
+            )
         return values
 
     def test_two_player_game(self) -> None:
@@ -248,7 +250,9 @@ class TestGamePlayerFromParsedMatch:
             opening_hand_sizes={"alice": 7, "bob": 6},
         )
         values = self._build_game_player_values(
-            game, ["alice", "bob"], hero_player_name="alice",
+            game,
+            ["alice", "bob"],
+            hero_player_name="alice",
         )
         assert len(values) == 2
         hero_row = next(v for v in values if v["player_name"] == "alice")
@@ -269,7 +273,9 @@ class TestGamePlayerFromParsedMatch:
             opening_hand_sizes={"alice": 7, "bob": 7},
         )
         values = self._build_game_player_values(
-            game, ["alice", "bob"], hero_player_name=None,
+            game,
+            ["alice", "bob"],
+            hero_player_name=None,
         )
         for v in values:
             assert v["is_local"] is None
@@ -280,7 +286,9 @@ class TestGamePlayerFromParsedMatch:
             opening_hand_sizes={"alice": 7, "bob": 7},
         )
         values = self._build_game_player_values(
-            game, ["alice", "bob"], hero_player_name="alice",
+            game,
+            ["alice", "bob"],
+            hero_player_name="alice",
         )
         for v in values:
             assert v["on_play"] is None
@@ -288,7 +296,9 @@ class TestGamePlayerFromParsedMatch:
     def test_no_hand_sizes_sets_mulligan_none(self) -> None:
         game = ParsedGame(game_number=1)
         values = self._build_game_player_values(
-            game, ["alice", "bob"], hero_player_name="alice",
+            game,
+            ["alice", "bob"],
+            hero_player_name="alice",
         )
         for v in values:
             assert v["mulligan_count"] is None
@@ -299,7 +309,9 @@ class TestGamePlayerFromParsedMatch:
             opening_hand_sizes={"Alice": 7, "Bob": 7},
         )
         values = self._build_game_player_values(
-            game, ["Alice", "Bob"], hero_player_name="alice",
+            game,
+            ["Alice", "Bob"],
+            hero_player_name="alice",
         )
         alice_row = next(v for v in values if v["player_name"] == "Alice")
         assert alice_row["is_local"] is True

@@ -37,9 +37,7 @@ class TestEventEmission:
             parsed = _parse(name)
             for g in parsed.games:
                 if g.turns:
-                    assert g.events, (
-                        f"{name} game {g.game_number}: turns present but events empty"
-                    )
+                    assert g.events, f"{name} game {g.game_number}: turns present but events empty"
 
     def test_text_log_games_have_events(self) -> None:
         parsed = LogParser().parse((FIXTURES / "match_2_0_modern.log").read_bytes())
@@ -243,8 +241,15 @@ class TestEventMetadata:
 
     def test_events_have_valid_verbs(self) -> None:
         valid_verbs = {
-            "cast", "play", "draw", "discard", "exile",
-            "graveyard", "damage", "life_change", "mana_float",
+            "cast",
+            "play",
+            "draw",
+            "discard",
+            "exile",
+            "graveyard",
+            "damage",
+            "life_change",
+            "mana_float",
         }
         for name in (DAT_01EA1246, DAT_2B464924, DAT_40087184, DAT_4873FBEE):
             parsed = _parse(name)

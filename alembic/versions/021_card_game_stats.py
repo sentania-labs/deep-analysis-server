@@ -90,27 +90,17 @@ def upgrade() -> None:
     )
 
     # Grant analytics service access to the new table.
+    op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics TO deep_analysis_analytics;")
     op.execute(
-        "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics "
-        "TO deep_analysis_analytics;"
-    )
-    op.execute(
-        "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics "
-        "TO deep_analysis_analytics;"
+        "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics TO deep_analysis_analytics;"
     )
     # Parser writes to this table too — cross-schema grant.
+    op.execute("GRANT INSERT, UPDATE, DELETE ON analytics.card_game_stats TO deep_analysis_parser;")
     op.execute(
-        "GRANT INSERT, UPDATE, DELETE ON analytics.card_game_stats "
-        "TO deep_analysis_parser;"
-    )
-    op.execute(
-        "GRANT USAGE, SELECT ON SEQUENCE analytics.card_game_stats_id_seq "
-        "TO deep_analysis_parser;"
+        "GRANT USAGE, SELECT ON SEQUENCE analytics.card_game_stats_id_seq TO deep_analysis_parser;"
     )
     # Parser also needs SELECT on catalog.cards for oracle_id lookups.
-    op.execute(
-        "GRANT SELECT ON catalog.cards TO deep_analysis_parser;"
-    )
+    op.execute("GRANT SELECT ON catalog.cards TO deep_analysis_parser;")
 
 
 def downgrade() -> None:

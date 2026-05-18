@@ -534,9 +534,7 @@ class MTGODatStrategy(LogFormatStrategy):
                 if card in snap.zones.battlefield:
                     snap.zones.battlefield.remove(card)
                 events.append(
-                    GameEvent(
-                        turn_number=num, verb="graveyard", card_name=card, player=gm.group(1)
-                    )
+                    GameEvent(turn_number=num, verb="graveyard", card_name=card, player=gm.group(1))
                 )
 
             # Exile moves + "exile" events
@@ -830,9 +828,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             # Map zone destination to event verb
             if zone == "exile":
                 events.append(
-                    GameEvent(
-                        turn_number=turn_number, verb="exile", card_name=card, player=name
-                    )
+                    GameEvent(turn_number=turn_number, verb="exile", card_name=card, player=name)
                 )
             elif zone == "graveyard":
                 events.append(
@@ -847,9 +843,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             snap = carry.setdefault(name, PlayerSnapshot(name=name))
             snap.mana_pool = _parse_mana_string(mana.group("pool"))
             events.append(
-                GameEvent(
-                    turn_number=turn_number, verb="mana_float", card_name=None, player=name
-                )
+                GameEvent(turn_number=turn_number, verb="mana_float", card_name=None, player=name)
             )
 
         # Stack snapshot — at most one summary line per turn window.

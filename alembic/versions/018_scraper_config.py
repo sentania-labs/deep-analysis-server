@@ -53,13 +53,9 @@ def upgrade() -> None:
     )
 
     # Re-issue schema-wide grants for the new table.
+    op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics TO deep_analysis_analytics;")
     op.execute(
-        "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA analytics "
-        "TO deep_analysis_analytics;"
-    )
-    op.execute(
-        "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics "
-        "TO deep_analysis_analytics;"
+        "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA analytics TO deep_analysis_analytics;"
     )
 
 

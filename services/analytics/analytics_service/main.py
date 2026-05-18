@@ -659,7 +659,9 @@ async def update_scraper_config(
         )
     sm = get_sessionmaker()
     async with sm() as session:
-        # Upsert the config row.
+        # Upsert the config row.  On conflict, prefer the provided
+        # value, then the existing DB value, then the default — so a
+        # toggle-only PATCH never clobbers the stored interval.
         sets: list[str] = []
         params: dict[str, Any] = {"name": name}
         if body.enabled is not None:
@@ -668,6 +670,8 @@ async def update_scraper_config(
         if body.interval_hours is not None:
             sets.append("interval_hours = :interval_hours")
             params["interval_hours"] = body.interval_hours
+        else:
+            sets.append("interval_hours = COALESCE(analytics.scraper_config.interval_hours, 24)")
         set_clause = ", ".join(sets)
         await session.execute(
             text(
@@ -725,9 +729,7 @@ async def scraper_events(
     sm = get_sessionmaker()
     table = "analytics.mtgtop8_events" if name == "mtgtop8" else "analytics.mtgo_events"
     async with sm() as session:
-        total = int(
-            (await session.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
-        )
+        total = int((await session.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one())
         if name == "mtgtop8":
             rows = (
                 await session.execute(
@@ -959,9 +961,7 @@ async def list_canonical_archetypes(
     total = int(
         (await db.execute(select(func.count()).select_from(CanonicalArchetype))).scalar_one()
     )
-    return CanonicalArchetypeListView(
-        archetypes=[_canonical_record(r) for r in rows], total=total
-    )
+    return CanonicalArchetypeListView(archetypes=[_canonical_record(r) for r in rows], total=total)
 
 
 @admin_router.post(
@@ -994,9 +994,7 @@ async def update_canonical_archetype(
     db: AsyncSession = Depends(get_session),
 ) -> CanonicalArchetypeRecord:
     row = (
-        await db.execute(
-            select(CanonicalArchetype).where(CanonicalArchetype.id == archetype_id)
-        )
+        await db.execute(select(CanonicalArchetype).where(CanonicalArchetype.id == archetype_id))
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(
@@ -1012,9 +1010,7 @@ async def update_canonical_archetype(
     return _canonical_record(row)
 
 
-@admin_router.delete(
-    "/canonical-archetypes/{archetype_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@admin_router.delete("/canonical-archetypes/{archetype_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_canonical_archetype(
     archetype_id: uuid.UUID,
     _admin: AuthenticatedUser = Depends(require_admin),

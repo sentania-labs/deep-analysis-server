@@ -20,6 +20,7 @@ def _import_helpers():
         _collect_cards_by_side,
         _get_opponent_name,
     )
+
     return _collect_cards_by_side, _get_opponent_name
 
 
@@ -40,20 +41,28 @@ class TestCollectCardsBySide:
                     game_number=1,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Lightning Bolt", player="alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Lightning Bolt",
+                            player="alice",
                         ),
                         GameEvent(
-                            turn_number=1, verb="play",
-                            card_name="Mountain", player="alice",
+                            turn_number=1,
+                            verb="play",
+                            card_name="Mountain",
+                            player="alice",
                         ),
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Counterspell", player="bob",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Counterspell",
+                            player="bob",
                         ),
                         GameEvent(
-                            turn_number=1, verb="play",
-                            card_name="Island", player="bob",
+                            turn_number=1,
+                            verb="play",
+                            card_name="Island",
+                            player="bob",
                         ),
                     ],
                 ),
@@ -76,12 +85,16 @@ class TestCollectCardsBySide:
                     game_number=1,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Bolt", player="Alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Bolt",
+                            player="Alice",
                         ),
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Counter", player="Bob",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Counter",
+                            player="Bob",
                         ),
                     ],
                 ),
@@ -100,8 +113,10 @@ class TestCollectCardsBySide:
                     game_number=1,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Bolt", player="alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Bolt",
+                            player="alice",
                         ),
                     ],
                 ),
@@ -120,12 +135,16 @@ class TestCollectCardsBySide:
                     game_number=1,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="draw",
-                            card_name=None, player="alice",
+                            turn_number=1,
+                            verb="draw",
+                            card_name=None,
+                            player="alice",
                         ),
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Bolt", player="alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Bolt",
+                            player="alice",
                         ),
                     ],
                 ),
@@ -143,8 +162,10 @@ class TestCollectCardsBySide:
                     game_number=1,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Bolt", player="alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Bolt",
+                            player="alice",
                         ),
                     ],
                 ),
@@ -152,8 +173,10 @@ class TestCollectCardsBySide:
                     game_number=2,
                     events=[
                         GameEvent(
-                            turn_number=1, verb="cast",
-                            card_name="Bolt", player="alice",
+                            turn_number=1,
+                            verb="cast",
+                            card_name="Bolt",
+                            player="alice",
                         ),
                     ],
                 ),
@@ -210,20 +233,28 @@ class TestCardGameStatsAggregation:
         """Counts of seen/cast/played are correct from events."""
         events = [
             GameEvent(
-                turn_number=1, verb="cast",
-                card_name="Bolt", player="alice",
+                turn_number=1,
+                verb="cast",
+                card_name="Bolt",
+                player="alice",
             ),
             GameEvent(
-                turn_number=2, verb="cast",
-                card_name="Bolt", player="alice",
+                turn_number=2,
+                verb="cast",
+                card_name="Bolt",
+                player="alice",
             ),
             GameEvent(
-                turn_number=1, verb="play",
-                card_name="Mountain", player="alice",
+                turn_number=1,
+                verb="play",
+                card_name="Mountain",
+                player="alice",
             ),
             GameEvent(
-                turn_number=1, verb="draw",
-                card_name="Bolt", player="alice",
+                turn_number=1,
+                verb="draw",
+                card_name="Bolt",
+                player="alice",
             ),
         ]
         agg: dict[tuple[str, str], dict[str, int]] = {}

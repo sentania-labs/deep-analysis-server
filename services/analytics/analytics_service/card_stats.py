@@ -240,7 +240,12 @@ async def _card_stats_from_materialized(
     """Aggregate card stats from the materialized card_game_stats table."""
     params: dict[str, Any] = {"user_id": user_id}
     match_where = _build_match_where(
-        params, format_filter, opponent, date_from, date_to, opponent_archetype_id,
+        params,
+        format_filter,
+        opponent,
+        date_from,
+        date_to,
+        opponent_archetype_id,
     )
     game_where = _build_game_where(params, on_play, is_postboard)
 
@@ -291,7 +296,9 @@ async def _card_detail_by_game_number(
     """G1/G2/G3 breakdown from card_game_stats."""
     params: dict[str, Any] = {"user_id": user_id, "card_name": card_name}
     match_where = _build_match_where(
-        params, format_filter, opponent_archetype_id=opponent_archetype_id,
+        params,
+        format_filter,
+        opponent_archetype_id=opponent_archetype_id,
     )
     game_where = _build_game_where(params, on_play)
 
@@ -518,9 +525,14 @@ async def _load_card_appearances_auto(
 ) -> list[dict[str, Any]]:
     """Try the fast SQL path first; fall back to Python extraction."""
     results = await _load_card_appearances(
-        db, user_id, hero_name, card_name=card_name,
-        format_filter=format_filter, opponent=opponent,
-        date_from=date_from, date_to=date_to,
+        db,
+        user_id,
+        hero_name,
+        card_name=card_name,
+        format_filter=format_filter,
+        opponent=opponent,
+        date_from=date_from,
+        date_to=date_to,
     )
     if results:
         return results
@@ -550,9 +562,14 @@ async def _load_card_appearances_auto(
 
     if has_data:
         return await _load_card_appearances_fallback(
-            db, user_id, hero_name, card_name=card_name,
-            format_filter=format_filter, opponent=opponent,
-            date_from=date_from, date_to=date_to,
+            db,
+            user_id,
+            hero_name,
+            card_name=card_name,
+            format_filter=format_filter,
+            opponent=opponent,
+            date_from=date_from,
+            date_to=date_to,
         )
     return []
 
@@ -587,11 +604,15 @@ async def get_card_stats(
 
     if use_materialized:
         agg_rows = await _card_stats_from_materialized(
-            db, user.user_id,
-            format_filter=format, opponent=opponent,
-            date_from=date_from, date_to=date_to,
+            db,
+            user.user_id,
+            format_filter=format,
+            opponent=opponent,
+            date_from=date_from,
+            date_to=date_to,
             opponent_archetype_id=str(opponent_archetype_id) if opponent_archetype_id else None,
-            on_play=on_play, is_postboard=is_postboard,
+            on_play=on_play,
+            is_postboard=is_postboard,
         )
         # Fetch card metadata
         card_meta: dict[str, dict[str, str | None]] = {}
@@ -626,9 +647,13 @@ async def get_card_stats(
         # Legacy path
         hero_name = await _resolve_hero_name(db, user.user_id)
         appearances = await _load_card_appearances_auto(
-            db, user.user_id, hero_name,
-            format_filter=format, opponent=opponent,
-            date_from=date_from, date_to=date_to,
+            db,
+            user.user_id,
+            hero_name,
+            format_filter=format,
+            opponent=opponent,
+            date_from=date_from,
+            date_to=date_to,
         )
 
         agg: dict[str, dict[str, Any]] = {}
@@ -636,9 +661,7 @@ async def get_card_stats(
             cname = a["card_name"]
             hero = a.get("hero") or hero_name
             won = (
-                a["winner"] is not None
-                and hero is not None
-                and a["winner"].lower() == hero.lower()
+                a["winner"] is not None and hero is not None and a["winner"].lower() == hero.lower()
             )
             if cname not in agg:
                 agg[cname] = {"count": 0, "wins": 0, "turn_sum": 0}
@@ -703,7 +726,9 @@ async def get_card_detail(
 
     if use_materialized:
         agg_rows = await _card_stats_from_materialized(
-            db, user.user_id, card_name=card_name,
+            db,
+            user.user_id,
+            card_name=card_name,
             opponent_archetype_id=str(opponent_archetype_id) if opponent_archetype_id else None,
             on_play=on_play,
         )
@@ -754,7 +779,9 @@ async def get_card_detail(
 
         # G1/G2/G3 breakdown
         by_game_number = await _card_detail_by_game_number(
-            db, user.user_id, card_name,
+            db,
+            user.user_id,
+            card_name,
             opponent_archetype_id=str(opponent_archetype_id) if opponent_archetype_id else None,
             on_play=on_play,
         )
@@ -772,7 +799,10 @@ async def get_card_detail(
     # Legacy fallback
     hero_name = await _resolve_hero_name(db, user.user_id)
     appearances = await _load_card_appearances_auto(
-        db, user.user_id, hero_name, card_name=card_name,
+        db,
+        user.user_id,
+        hero_name,
+        card_name=card_name,
     )
 
     if not appearances:
@@ -847,7 +877,8 @@ async def get_standout_cards(
 
     params: dict[str, Any] = {"user_id": user.user_id}
     match_where = _build_match_where(
-        params, format,
+        params,
+        format,
         opponent_archetype_id=str(opponent_archetype_id) if opponent_archetype_id else None,
     )
     game_where = _build_game_where(params, on_play, is_postboard)

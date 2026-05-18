@@ -233,12 +233,15 @@ async def retrain(session: AsyncSession) -> TrainResult:
             )
         _log.info(
             "saved ML model to %s (%d samples, %d labels)",
-            MODEL_PATH, len(docs), len(unique_labels),
+            MODEL_PATH,
+            len(docs),
+            len(unique_labels),
         )
     except Exception:  # noqa: BLE001
         _log.warning(
             "could not persist model to %s; model is in-memory only",
-            MODEL_PATH, exc_info=True,
+            MODEL_PATH,
+            exc_info=True,
         )
 
     # 5. Update in-memory state.
