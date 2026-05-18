@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}{{ event.event_name|default("Event") }} &middot; Metagame &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <div class="flex items-center gap-2 mb-2">
+        <a href="/metagame/{{ format|urlencode }}" class="dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light text-sm no-underline">&larr; Back to {{ format }}</a>
+    </div>
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">{{ event.event_name }}</h1>
+</div>
+
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-6" role="alert">{{ error }}</div>
+{% endif %}
+
+{% if event %}
+{# Event metadata #}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Date</div>
+        <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">{{ event.event_date or "--" }}</div>
+    </div>
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Format</div>
+        <div class="text-sm dark:text-txt-primary text-txt-primary-light">{{ format }}</div>
+    </div>
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Source</div>
+        <div class="text-sm">
+            <span class="text-xs font-medium uppercase tracking-wider px-2 py-0.5 rounded
+                         {% if event.source == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
+                {{ event.source }}
+            </span>
+        </div>
+    </div>
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Players</div>
+        <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">{{ event.player_count or "--" }}</div>
+    </div>
+</div>
+
+{# Results table #}
+{% if event.results %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="p-4 border-b dark:border-border border-border-light">
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">Results ({{ event.results|length }} entries)</h2>
+    </div>
+    <div class="divide-y dark:divide-border-subtle divide-border-light">
+        {% for r in event.results %}
+        <div x-data="{ expanded: false }">
+            <div @click="expanded = !expanded"
+                 class="flex items-center gap-4 px-4 py-3 cursor-pointer hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                <div class="w-10 text-sm font-mono text-right dark:text-txt-secondary text-txt-secondary-light">
+                    {% if r.placement is not none %}#{{ r.placement }}{% else %}--{% endif %}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <span class="text-sm font-medium dark:text-txt-primary text-txt-primary-light">{{ r.player_name }}</span>
+                    {% if r.deck_name %}
+                    <span class="text-xs dark:text-txt-secondary text-txt-secondary-light ml-2">&mdash; {{ r.deck_name }}</span>
+                    {% endif %}
+                </div>
+                <svg class="w-4 h-4 dark:text-txt-tertiary text-txt-secondary-light transition-transform" :class="{ 'rotate-180': expanded }" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div x-show="expanded" x-transition.opacity.duration.150ms
+                 class="px-4 pb-4 pt-0">
+                {% if r.decklist_main or r.decklist_sideboard %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {# Main deck #}
+                    <div>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light mb-2">Main Deck</h3>
+                        {% if r.decklist_main %}
+                        <div class="dark:bg-surface-2 bg-surface-light-2 rounded-md p-3">
+                            {% if r.decklist_main is mapping %}
+                                {% for card, qty in r.decklist_main.items() %}
+                                <div class="flex justify-between text-xs py-0.5">
+                                    <span class="dark:text-txt-primary text-txt-primary-light">{{ card }}</span>
+                                    <span class="font-mono dark:text-txt-secondary text-txt-secondary-light">{{ qty }}</span>
+                                </div>
+                                {% endfor %}
+                            {% elif r.decklist_main is iterable and r.decklist_main is not string %}
+                                {% for entry in r.decklist_main %}
+                                <div class="text-xs py-0.5 dark:text-txt-primary text-txt-primary-light">{{ entry }}</div>
+                                {% endfor %}
+                            {% else %}
+                                <pre class="text-xs dark:text-txt-primary text-txt-primary-light whitespace-pre-wrap">{{ r.decklist_main }}</pre>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">No decklist available.</p>
+                        {% endif %}
+                    </div>
+                    {# Sideboard #}
+                    <div>
+                        <h3 class="text-xs font-semibold uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light mb-2">Sideboard</h3>
+                        {% if r.decklist_sideboard %}
+                        <div class="dark:bg-surface-2 bg-surface-light-2 rounded-md p-3">
+                            {% if r.decklist_sideboard is mapping %}
+                                {% for card, qty in r.decklist_sideboard.items() %}
+                                <div class="flex justify-between text-xs py-0.5">
+                                    <span class="dark:text-txt-primary text-txt-primary-light">{{ card }}</span>
+                                    <span class="font-mono dark:text-txt-secondary text-txt-secondary-light">{{ qty }}</span>
+                                </div>
+                                {% endfor %}
+                            {% elif r.decklist_sideboard is iterable and r.decklist_sideboard is not string %}
+                                {% for entry in r.decklist_sideboard %}
+                                <div class="text-xs py-0.5 dark:text-txt-primary text-txt-primary-light">{{ entry }}</div>
+                                {% endfor %}
+                            {% else %}
+                                <pre class="text-xs dark:text-txt-primary text-txt-primary-light whitespace-pre-wrap">{{ r.decklist_sideboard }}</pre>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">No sideboard listed.</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">No decklist available for this entry.</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
+    <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">No results available for this event.</p>
+</div>
+{% endif %}
+
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
+    <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">Event not found.</p>
+</div>
+{% endif %}
+{% endblock %}

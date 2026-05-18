@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Metagame{% if selected_format %} &middot; {{ selected_format }}{% endif %} &middot; Deep Analysis{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Metagame</h1>
+    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mt-1">Archetype tiers and tournament results from scraped data sources.</p>
+</div>
+
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-6" role="alert">{{ error }}</div>
+{% endif %}
+
+{# Format selector #}
+{% if formats %}
+<div class="flex flex-wrap gap-2 mb-6">
+    {% for f in formats %}
+    <a href="/metagame/{{ f.format|urlencode }}"
+       class="px-4 py-2 rounded-md text-sm font-medium no-underline transition-colors
+              {% if selected_format and selected_format == f.format %}
+              bg-accent text-white
+              {% else %}
+              dark:bg-surface-2 bg-surface-light-3 dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-3 hover:bg-surface-light-2 border dark:border-border border-border-light
+              {% endif %}">
+        {{ f.format }}
+        <span class="text-xs {% if selected_format and selected_format == f.format %}text-white/70{% else %}dark:text-txt-tertiary text-txt-secondary-light{% endif %} ml-1">({{ f.event_count }})</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
+    <p class="dark:text-txt-secondary text-txt-secondary-light">No metagame data available yet. Run the scrapers to populate event data.</p>
+</div>
+{% endif %}
+
+{% if selected_format and tiers is defined %}
+<div x-data="metagameData()" x-init="init()">
+
+{# Time-window selector #}
+<div class="flex gap-2 mb-6">
+    <template x-for="w in windows" :key="w">
+        <button @click="switchWindow(w)"
+                :class="currentWindow === w
+                    ? 'bg-accent text-white'
+                    : 'dark:bg-surface-2 bg-surface-light-3 dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-3 hover:bg-surface-light-2 border dark:border-border border-border-light'"
+                class="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
+                x-text="w">
+        </button>
+    </template>
+</div>
+
+{# Tier list table #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden mb-6">
+    <div class="p-4 border-b dark:border-border border-border-light flex items-center justify-between">
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">Archetype Tiers &mdash; {{ selected_format }}</h2>
+        <span class="text-xs dark:text-txt-tertiary text-txt-secondary-light font-mono" x-text="totalResults + ' results'"></span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Archetype</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Popularity</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Avg Place</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-if="tiersLoading">
+                    <tr><td colspan="4" class="px-4 py-6 text-center dark:text-txt-secondary text-txt-secondary-light text-sm">Loading...</td></tr>
+                </template>
+                <template x-if="!tiersLoading && tierRows.length === 0">
+                    <tr><td colspan="4" class="px-4 py-6 text-center dark:text-txt-secondary text-txt-secondary-light text-sm">No tier data for this window.</td></tr>
+                </template>
+                <template x-for="(tier, idx) in tierRows" :key="tier.deck_name">
+                    <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                        <td class="px-4 py-2.5 text-sm font-medium dark:text-txt-primary text-txt-primary-light" x-text="tier.deck_name"></td>
+                        <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">
+                            <div class="flex items-center justify-end gap-2">
+                                <div class="w-16 h-1.5 rounded-full dark:bg-surface-3 bg-surface-light-3 overflow-hidden">
+                                    <div class="h-full bg-accent rounded-full" :style="'width:' + Math.min(tier.popularity_pct, 100) + '%'"></div>
+                                </div>
+                                <span x-text="tier.popularity_pct.toFixed(1) + '%'"></span>
+                            </div>
+                        </td>
+                        <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-secondary text-txt-secondary-light" x-text="tier.avg_placement !== null ? tier.avg_placement.toFixed(1) : '--'"></td>
+                        <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-secondary text-txt-secondary-light" x-text="tier.sample_count"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# Trends chart #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden mb-6">
+    <div class="p-4 border-b dark:border-border border-border-light">
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">Archetype Trends</h2>
+    </div>
+    <div class="p-4">
+        <template x-if="trendsLoading">
+            <p class="text-sm dark:text-txt-secondary text-txt-secondary-light text-center py-8">Loading trends...</p>
+        </template>
+        <template x-if="!trendsLoading && trendLabels.length === 0">
+            <p class="text-sm dark:text-txt-secondary text-txt-secondary-light text-center py-8">No trend data for this window.</p>
+        </template>
+        <div x-show="!trendsLoading && trendLabels.length > 0" style="position:relative; height:300px;">
+            <canvas id="trendsChart"></canvas>
+        </div>
+    </div>
+</div>
+
+{# Recent events #}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="p-4 border-b dark:border-border border-border-light">
+        <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">Recent Events</h2>
+    </div>
+    {% if events and events|length > 0 %}
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Event</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Date</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Source</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Players</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for ev in events %}
+                <tr class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-sm">
+                        <a href="/metagame/{{ selected_format|urlencode }}/events/{{ ev.source }}/{{ ev.event_id }}"
+                           class="dark:text-accent text-accent hover:underline no-underline">{{ ev.event_name }}</a>
+                    </td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ ev.event_date or "--" }}</td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-secondary text-txt-secondary-light">
+                        <span class="text-xs font-medium uppercase tracking-wider px-2 py-0.5 rounded
+                                     {% if ev.source == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
+                            {{ ev.source }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-secondary text-txt-secondary-light">{{ ev.player_count or "--" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if events_total > events|length %}
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
+            Showing {{ events|length }} of {{ events_total }} events.
+        </p>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="p-6">
+        <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">No events for this format yet.</p>
+    </div>
+    {% endif %}
+</div>
+
+</div>{# /x-data #}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+var _chartColors = [
+    '#4e7cff', '#22c55e', '#ef4444', '#eab308', '#a855f7',
+    '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#64748b'
+];
+
+function metagameData() {
+    return {
+        currentWindow: '{{ window|default("30d") }}',
+        windows: ['14d', '30d', '90d', 'all'],
+        format: '{{ selected_format }}',
+        tierRows: {{ tiers.tiers|tojson if tiers else '[]' }},
+        totalResults: {{ tiers.total_results|default(0) if tiers else 0 }},
+        tiersLoading: false,
+        trendLabels: {{ trends.labels|tojson if trends else '[]' }},
+        trendDatasets: {{ trends.datasets|tojson if trends else '[]' }},
+        trendsLoading: false,
+        chart: null,
+
+        init() {
+            this.$nextTick(() => { this.renderChart(); });
+        },
+
+        async switchWindow(w) {
+            if (w === this.currentWindow) return;
+            this.currentWindow = w;
+            this.tiersLoading = true;
+            this.trendsLoading = true;
+            try {
+                var tiersResp = await fetch('/metagame/api/tiers/' + encodeURIComponent(this.format) + '?window=' + w);
+                if (tiersResp.ok) {
+                    var tiersData = await tiersResp.json();
+                    this.tierRows = tiersData.tiers || [];
+                    this.totalResults = tiersData.total_results || 0;
+                }
+            } catch(e) { console.error('Failed to fetch tiers', e); }
+            this.tiersLoading = false;
+
+            try {
+                var trendsResp = await fetch('/metagame/api/trends/' + encodeURIComponent(this.format) + '?window=' + w);
+                if (trendsResp.ok) {
+                    var trendsData = await trendsResp.json();
+                    this.trendLabels = trendsData.labels || [];
+                    this.trendDatasets = trendsData.datasets || [];
+                }
+            } catch(e) { console.error('Failed to fetch trends', e); }
+            this.trendsLoading = false;
+            this.$nextTick(() => { this.renderChart(); });
+        },
+
+        renderChart() {
+            var canvas = document.getElementById('trendsChart');
+            if (!canvas) return;
+            if (this.chart) { this.chart.destroy(); }
+            if (!this.trendLabels.length) return;
+            var isDark = document.documentElement.classList.contains('dark');
+            var gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+            var textColor = isDark ? '#8b8b9e' : '#6b6b7e';
+            this.chart = new Chart(canvas, {
+                type: 'line',
+                data: {
+                    labels: this.trendLabels,
+                    datasets: this.trendDatasets.map(function(ds, i) {
+                        return {
+                            label: ds.label,
+                            data: ds.data,
+                            borderColor: _chartColors[i % _chartColors.length],
+                            backgroundColor: _chartColors[i % _chartColors.length] + '20',
+                            borderWidth: 2,
+                            tension: 0.3,
+                            pointRadius: 2,
+                            fill: false,
+                        };
+                    })
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: textColor, boxWidth: 12, padding: 16, font: { size: 11 } }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } }, beginAtZero: true }
+                    }
+                }
+            });
+        }
+    };
+}
+</script>
+{% endif %}
+{% endblock %}

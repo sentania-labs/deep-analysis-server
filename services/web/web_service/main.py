@@ -1069,6 +1069,208 @@ async def match_set_format(
     )
 
 
+# ---------------------------------------------------------------------------
+# Metagame browser (F11)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/metagame", response_class=HTMLResponse)
+async def metagame_index(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Metagame landing — show format list, default to the most popular."""
+    formats: list[dict[str, Any]] = []
+    error: str | None = None
+    try:
+        formats = await analytics_client.get_metagame_formats(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /metagame/formats failed")
+        error = "Analytics service unavailable."
+
+    if formats and not error:
+        # Redirect to the format with the most events
+        top_format = formats[0].get("format", "")
+        if top_format:
+            return RedirectResponse(
+                url=f"/metagame/{top_format}", status_code=status.HTTP_302_FOUND
+            )
+
+    return templates.TemplateResponse(
+        request,
+        "metagame.html",
+        {
+            "user": user,
+            "formats": formats,
+            "selected_format": None,
+            "tiers": None,
+            "events": [],
+            "events_total": 0,
+            "trends": None,
+            "window": "30d",
+            "error": error,
+        },
+    )
+
+
+@app.get("/metagame/api/tiers/{format_name}", response_class=JSONResponse)
+async def metagame_api_tiers(
+    format_name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    window: Annotated[str, Query()] = "30d",
+) -> Response:
+    """JSON endpoint for Alpine.js dynamic tier fetching."""
+    try:
+        tiers = await analytics_client.get_metagame_tiers(
+            settings.analytics_service_url, user.token, format_name, window
+        )
+    except analytics_client.AnalyticsForbidden:
+        return JSONResponse({"error": "unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /metagame/%s/tiers failed", format_name)
+        return JSONResponse(
+            {"error": "service_unavailable"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    return JSONResponse(tiers)
+
+
+@app.get("/metagame/api/trends/{format_name}", response_class=JSONResponse)
+async def metagame_api_trends(
+    format_name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    window: Annotated[str, Query()] = "30d",
+) -> Response:
+    """JSON endpoint for Chart.js trend data."""
+    try:
+        trends = await analytics_client.get_metagame_trends(
+            settings.analytics_service_url, user.token, format_name, window
+        )
+    except analytics_client.AnalyticsForbidden:
+        return JSONResponse({"error": "unauthorized"}, status_code=status.HTTP_401_UNAUTHORIZED)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /metagame/%s/trends failed", format_name)
+        return JSONResponse(
+            {"error": "service_unavailable"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    return JSONResponse(trends)
+
+
+@app.get("/metagame/{format_name}/events/{source}/{event_id}", response_class=HTMLResponse)
+async def metagame_event_detail(
+    format_name: str,
+    source: str,
+    event_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Single event detail page with decklists."""
+    event: dict[str, Any] = {}
+    error: str | None = None
+    try:
+        event = await analytics_client.get_metagame_event_detail(
+            settings.analytics_service_url, user.token, format_name, source, event_id
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception(
+            "analytics GET /metagame/%s/events/%s/%s failed",
+            format_name, source, event_id,
+        )
+        error = "Analytics service unavailable."
+
+    if not event and not error:
+        return Response(content="Event not found.", status_code=status.HTTP_404_NOT_FOUND)
+
+    return templates.TemplateResponse(
+        request,
+        "metagame_event.html",
+        {
+            "user": user,
+            "format": format_name,
+            "event": event,
+            "error": error,
+        },
+    )
+
+
+@app.get("/metagame/{format_name}", response_class=HTMLResponse)
+async def metagame_format(
+    format_name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    window: Annotated[str, Query()] = "30d",
+) -> Response:
+    """Format detail — tiers + events + trends."""
+    formats: list[dict[str, Any]] = []
+    tiers: dict[str, Any] | None = None
+    events_data: dict[str, Any] = {}
+    trends: dict[str, Any] | None = None
+    error: str | None = None
+
+    try:
+        formats = await analytics_client.get_metagame_formats(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /metagame/formats failed")
+        error = "Analytics service unavailable."
+
+    if not error:
+        try:
+            tiers = await analytics_client.get_metagame_tiers(
+                settings.analytics_service_url, user.token, format_name, window
+            )
+        except analytics_client.AnalyticsClientError:
+            _log.exception("analytics GET /metagame/%s/tiers failed", format_name)
+
+        try:
+            events_data = await analytics_client.get_metagame_events(
+                settings.analytics_service_url, user.token, format_name
+            )
+        except analytics_client.AnalyticsClientError:
+            _log.exception("analytics GET /metagame/%s/events failed", format_name)
+
+        try:
+            trends = await analytics_client.get_metagame_trends(
+                settings.analytics_service_url, user.token, format_name, window
+            )
+        except analytics_client.AnalyticsClientError:
+            _log.exception("analytics GET /metagame/%s/trends failed", format_name)
+
+    events_list = events_data.get("events", [])
+    events_total = int(events_data.get("total", 0))
+
+    return templates.TemplateResponse(
+        request,
+        "metagame.html",
+        {
+            "user": user,
+            "formats": formats,
+            "selected_format": format_name,
+            "tiers": tiers,
+            "events": events_list,
+            "events_total": events_total,
+            "trends": trends,
+            "window": window,
+            "error": error,
+        },
+    )
+
+
 def _service_unavailable(
     request: Request,
     user: BrowserUser,
@@ -2355,6 +2557,275 @@ async def admin_settings_scrape_mtgtop8(
     return RedirectResponse(
         url="/admin/settings?scrape_mtgtop8_triggered=1",
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin scrapers dashboard (F13)
+# ---------------------------------------------------------------------------
+
+_VALID_SCRAPER_NAMES = {"mtgo", "mtgtop8"}
+
+
+@app.get("/admin/scrapers", response_class=HTMLResponse)
+async def admin_scrapers_dashboard(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    scrapers: list[dict[str, Any]] = []
+    error: str | None = None
+    success_msg: str | None = request.query_params.get("success")
+    try:
+        scrapers = await analytics_client.admin_get_scrapers(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/scrapers failed")
+        error = "Analytics service unavailable."
+    return templates.TemplateResponse(
+        request,
+        "admin_scrapers.html",
+        {
+            "user": user,
+            "scrapers": scrapers,
+            "error": error,
+            "success": success_msg,
+        },
+    )
+
+
+@app.post("/admin/scrapers/{name}/toggle")
+async def admin_scraper_toggle(
+    name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        # Fetch current state then toggle
+        scrapers = await analytics_client.admin_get_scrapers(
+            settings.analytics_service_url, user.token
+        )
+        current_enabled = True
+        for s in scrapers:
+            if s.get("scraper_name") == name:
+                current_enabled = s.get("enabled", True)
+                break
+        await analytics_client.admin_update_scraper(
+            settings.analytics_service_url,
+            user.token,
+            name,
+            enabled=not current_enabled,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics PATCH /admin/scrapers/%s toggle failed", name)
+        return RedirectResponse(
+            url="/admin/scrapers?error=Toggle+failed",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    action = "disabled" if current_enabled else "enabled"
+    return RedirectResponse(
+        url=f"/admin/scrapers?success={name}+{action}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.post("/admin/scrapers/{name}/interval")
+async def admin_scraper_interval(
+    name: str,
+    request: Request,
+    interval_hours: Annotated[int, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    clamped = max(1, min(168, interval_hours))
+    try:
+        await analytics_client.admin_update_scraper(
+            settings.analytics_service_url,
+            user.token,
+            name,
+            interval_hours=clamped,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics PATCH /admin/scrapers/%s interval failed", name)
+        return RedirectResponse(
+            url="/admin/scrapers?error=Interval+update+failed",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    return RedirectResponse(
+        url=f"/admin/scrapers?success={name}+interval+set+to+{clamped}h",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.post("/admin/scrapers/{name}/trigger")
+async def admin_scraper_trigger(
+    name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        if name == "mtgo":
+            await analytics_client.admin_trigger_mtgo_scrape(
+                settings.analytics_service_url, user.token
+            )
+        elif name == "mtgtop8":
+            await analytics_client.admin_trigger_mtgtop8_scrape(
+                settings.analytics_service_url, user.token
+            )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/scrape-%s trigger failed", name)
+        return RedirectResponse(
+            url="/admin/scrapers?error=Trigger+failed",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    return RedirectResponse(
+        url=f"/admin/scrapers?success={name}+scrape+triggered",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.post("/admin/scrapers/{name}/reset")
+async def admin_scraper_reset(
+    name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        await analytics_client.admin_reset_scraper_health(
+            settings.analytics_service_url, user.token, name
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/scraper-health/reset failed for %s", name)
+        return RedirectResponse(
+            url="/admin/scrapers?error=Reset+failed",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    return RedirectResponse(
+        url=f"/admin/scrapers?success={name}+health+reset",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/admin/scrapers/{name}/events", response_class=HTMLResponse)
+async def admin_scraper_events_page(
+    name: str,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    events: list[dict[str, Any]] = []
+    total = 0
+    error: str | None = None
+    try:
+        data = await analytics_client.admin_get_scraper_events(
+            settings.analytics_service_url, user.token, name, page, per_page
+        )
+        events = data.get("events", [])
+        total = int(data.get("total", 0))
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/scrapers/%s/events failed", name)
+        error = "Analytics service unavailable."
+    return templates.TemplateResponse(
+        request,
+        "admin_scraper_events.html",
+        {
+            "user": user,
+            "scraper_name": name,
+            "events": events,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "event_detail": None,
+            "error": error,
+        },
+    )
+
+
+@app.get("/admin/scrapers/{name}/events/{event_id}", response_class=HTMLResponse)
+async def admin_scraper_event_detail_page(
+    name: str,
+    event_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if name not in _VALID_SCRAPER_NAMES:
+        return Response(content="Unknown scraper.", status_code=status.HTTP_404_NOT_FOUND)
+    detail: dict[str, Any] = {}
+    error: str | None = None
+    try:
+        detail = await analytics_client.admin_get_scraper_event_detail(
+            settings.analytics_service_url, user.token, name, event_id
+        )
+    except analytics_client.AnalyticsForbidden:
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /admin/scrapers/%s/events/%s failed", name, event_id)
+        error = "Analytics service unavailable."
+    if not detail and not error:
+        return Response(content="Event not found.", status_code=status.HTTP_404_NOT_FOUND)
+    return templates.TemplateResponse(
+        request,
+        "admin_scraper_events.html",
+        {
+            "user": user,
+            "scraper_name": name,
+            "events": [],
+            "total": 0,
+            "page": 1,
+            "per_page": 20,
+            "event_detail": detail,
+            "error": error,
+        },
     )
 
 
