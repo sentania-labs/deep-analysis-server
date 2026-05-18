@@ -128,3 +128,33 @@ class GameState(Base):
         ),
         Index("ix_game_states_game_id", "game_id"),
     )
+
+
+class GameEventRow(Base):
+    """Discrete game action — the event-stream complement to zone snapshots.
+
+    Each row captures a single verb (cast, play, draw, discard, etc.)
+    preserving information that is lost when actions are folded into
+    accumulated zone lists.  ``seq`` orders events within a game.
+    """
+
+    __tablename__ = "game_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    verb: Mapped[str] = mapped_column(Text, nullable=False)
+    card_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    player: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_card: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "seq", name="uq_game_events_game_seq"),
+        Index("ix_game_events_game_id", "game_id"),
+        Index("ix_game_events_game_id_turn", "game_id", "turn_number"),
+    )
