@@ -9,7 +9,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from parser_service.models import Game, GameState, Match
+from parser_service.models import Game, GameEventRow, GameState, Match
 from parser_service.parsing.models import ParsedMatch
 from parser_service.settings import PARSER_VERSION
 
@@ -117,6 +117,33 @@ async def persist_match(
                 },
             )
             await session.execute(gs_stmt)
+
+        # Persist event stream (additive alongside snapshots).
+        if parsed_game.events:
+            event_values = [
+                {
+                    "game_id": game.id,
+                    "seq": seq,
+                    "verb": evt.verb,
+                    "card_name": evt.card_name,
+                    "player": evt.player,
+                    "turn_number": evt.turn_number,
+                    "source_card": evt.source_card,
+                }
+                for seq, evt in enumerate(parsed_game.events)
+            ]
+            ev_stmt = pg_insert(GameEventRow).values(event_values)
+            ev_stmt = ev_stmt.on_conflict_do_update(
+                constraint="uq_game_events_game_seq",
+                set_={
+                    "verb": ev_stmt.excluded.verb,
+                    "card_name": ev_stmt.excluded.card_name,
+                    "player": ev_stmt.excluded.player,
+                    "turn_number": ev_stmt.excluded.turn_number,
+                    "source_card": ev_stmt.excluded.source_card,
+                },
+            )
+            await session.execute(ev_stmt)
 
     await session.commit()
     match = (await session.execute(select(Match).where(Match.id == match_id))).scalar_one()

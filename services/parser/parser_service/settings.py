@@ -10,12 +10,13 @@ from common.settings import BaseServiceSettings
 
 # Stamped on every match row at parse time so we can detect matches
 # parsed by an older version and queue them for reparse.
-PARSER_VERSION = "0.9.0"
+PARSER_VERSION = "0.9.6"
 
 # Backfill scanner picks up matches where ``parsed_with_version`` is
 # NULL or less than this threshold, ensuring they get re-parsed with
-# the current parser logic.
-REPARSE_MIN_VERSION = "0.9.0"
+# the current parser logic.  Bumped to 0.9.6 so all pre-event-stream
+# matches are reprocessed and get their game_events rows populated.
+REPARSE_MIN_VERSION = "0.9.6"
 
 
 class ParserSettings(BaseServiceSettings):

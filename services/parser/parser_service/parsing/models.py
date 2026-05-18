@@ -64,6 +64,24 @@ class TurnSnapshot(BaseModel):
     stack: list[StackEntry] = Field(default_factory=list)
 
 
+class GameEvent(BaseModel):
+    """A single discrete game action extracted from the log.
+
+    Events are the fine-grained record of what happened — casts vs.
+    plays, individual draws, zone moves, damage, life changes, etc.
+    Unlike snapshots (which accumulate state), events capture the verb
+    and are never lost during zone-list merges.
+    """
+
+    turn_number: int
+    # "cast", "play", "draw", "discard", "exile", "graveyard",
+    # "damage", "life_change", "mana_float"
+    verb: str
+    card_name: str | None = None  # None for anonymous draws
+    player: str
+    source_card: str | None = None  # e.g., source of triggered draw
+
+
 class ParsedGame(BaseModel):
     game_number: int
     winner: str | None = None
@@ -72,6 +90,7 @@ class ParsedGame(BaseModel):
     play_first: str | None = None  # player name who chose to play first
     opening_hand_sizes: dict[str, int] = Field(default_factory=dict)
     turns: list[TurnSnapshot] = Field(default_factory=list)
+    events: list[GameEvent] = Field(default_factory=list)
 
 
 class ParsedMatch(BaseModel):

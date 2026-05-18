@@ -24,6 +24,7 @@ from collections import Counter
 from datetime import UTC, datetime
 
 from parser_service.parsing.models import (
+    GameEvent,
     ManaPool,
     ParsedGame,
     ParsedMatch,
@@ -425,15 +426,17 @@ class MTGODatStrategy(LogFormatStrategy):
         if game.play_first is not None and players:
             game.on_play = game.play_first == players[0]
 
-        game.turns = self._parse_turns(block, players)
+        game.turns, game.events = self._parse_turns(block, players)
         return game
 
-    def _parse_turns(self, block: str, players: list[str]) -> list[TurnSnapshot]:
+    def _parse_turns(
+        self, block: str, players: list[str]
+    ) -> tuple[list[TurnSnapshot], list[GameEvent]]:
         alt = self._player_alt(players)
         turn_re = re.compile(rf"@PTurn (\d+): ({alt})")
         marks = [(m.start(), int(m.group(1)), m.group(2)) for m in turn_re.finditer(block)]
         if not marks:
-            return []
+            return [], []
 
         carry: dict[str, PlayerSnapshot] = {p: PlayerSnapshot(name=p) for p in players}
         card_pat = self._CARD_RE.pattern
@@ -463,32 +466,66 @@ class MTGODatStrategy(LogFormatStrategy):
         life_pay_re = re.compile(rf"@P({alt}) casts {card_pat} by paying (\d+) life")
 
         turns: list[TurnSnapshot] = []
+        events: list[GameEvent] = []
         for idx, (start, num, active) in enumerate(marks):
             end = marks[idx + 1][0] if idx + 1 < len(marks) else len(block)
             window = block[start:end]
 
-            # Lands / spells → battlefield
+            # Lands → battlefield + "play" event
             for pm in play_re.finditer(window):
                 snap = carry.setdefault(pm.group(1), PlayerSnapshot(name=pm.group(1)))
-                snap.zones.battlefield.append(pm.group(2).strip())
+                card = pm.group(2).strip()
+                snap.zones.battlefield.append(card)
+                events.append(
+                    GameEvent(turn_number=num, verb="play", card_name=card, player=pm.group(1))
+                )
+
+            # Spells → battlefield + "cast" event
             for cm in cast_re.finditer(window):
                 snap = carry.setdefault(cm.group(1), PlayerSnapshot(name=cm.group(1)))
-                snap.zones.battlefield.append(cm.group(2).strip())
+                card = cm.group(2).strip()
+                snap.zones.battlefield.append(card)
+                events.append(
+                    GameEvent(turn_number=num, verb="cast", card_name=card, player=cm.group(1))
+                )
 
-            # Draws → hand zone (card name "unknown" for anonymous draws)
+            # Draws → hand zone + "draw" events
             for dm in draw_anon_re.finditer(window):
                 snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
                 snap.zones.hand.append("unknown")
+                events.append(
+                    GameEvent(turn_number=num, verb="draw", card_name=None, player=dm.group(1))
+                )
             for dm in draw_with_re.finditer(window):
                 snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
                 snap.zones.hand.append("unknown")
+                source = dm.group(2).strip()
+                events.append(
+                    GameEvent(
+                        turn_number=num,
+                        verb="draw",
+                        card_name=None,
+                        player=dm.group(1),
+                        source_card=source,
+                    )
+                )
             for dm in draw_multi_re.finditer(window):
                 snap = carry.setdefault(dm.group(1), PlayerSnapshot(name=dm.group(1)))
                 count = self._WORD_TO_INT.get(dm.group(2).lower(), 1)
+                source = dm.group(3).strip()
                 for _ in range(count):
                     snap.zones.hand.append("unknown")
+                    events.append(
+                        GameEvent(
+                            turn_number=num,
+                            verb="draw",
+                            card_name=None,
+                            player=dm.group(1),
+                            source_card=source,
+                        )
+                    )
 
-            # Graveyard moves
+            # Graveyard moves + "graveyard" events
             for gm in graveyard_re.finditer(window):
                 snap = carry.setdefault(gm.group(1), PlayerSnapshot(name=gm.group(1)))
                 card = gm.group(2).strip()
@@ -496,8 +533,13 @@ class MTGODatStrategy(LogFormatStrategy):
                 # Remove from battlefield if present (best-effort)
                 if card in snap.zones.battlefield:
                     snap.zones.battlefield.remove(card)
+                events.append(
+                    GameEvent(
+                        turn_number=num, verb="graveyard", card_name=card, player=gm.group(1)
+                    )
+                )
 
-            # Exile moves
+            # Exile moves + "exile" events
             for em in exile_re.finditer(window):
                 snap = carry.setdefault(em.group(1), PlayerSnapshot(name=em.group(1)))
                 card = em.group(2).strip()
@@ -507,12 +549,24 @@ class MTGODatStrategy(LogFormatStrategy):
                     snap.zones.battlefield.remove(card)
                 elif card in snap.zones.graveyard:
                     snap.zones.graveyard.remove(card)
+                events.append(
+                    GameEvent(turn_number=num, verb="exile", card_name=card, player=em.group(1))
+                )
 
-            # Life payments (best-effort — only explicit "paying N life",
-            # NOT combat damage which isn't logged in .dat format)
+            # Life payments + "life_change" events
             for lm in life_pay_re.finditer(window):
                 snap = carry.setdefault(lm.group(1), PlayerSnapshot(name=lm.group(1)))
-                snap.life -= int(lm.group(3))
+                amt = int(lm.group(3))
+                snap.life -= amt
+                card = lm.group(2).strip()
+                events.append(
+                    GameEvent(
+                        turn_number=num,
+                        verb="life_change",
+                        card_name=card,
+                        player=lm.group(1),
+                    )
+                )
 
             snapshot_players = {
                 name: PlayerSnapshot(
@@ -530,7 +584,7 @@ class MTGODatStrategy(LogFormatStrategy):
                     players=snapshot_players,
                 )
             )
-        return turns
+        return turns, events
 
 
 class MTGOTextLogStrategy(LogFormatStrategy):
@@ -642,27 +696,31 @@ class MTGOTextLogStrategy(LogFormatStrategy):
         if not game.result and (m := _GAME_RESULT_RE.search(block)) is not None:
             game.result = m.group("result").lower().rstrip("d")  # "conceded" -> "concede"
 
-        game.turns = list(self._parse_turns(block, players))
+        game.turns, game.events = self._parse_turns(block, players)
         return game
 
-    def _parse_turns(self, block: str, players: list[str]) -> list[TurnSnapshot]:
+    def _parse_turns(
+        self, block: str, players: list[str]
+    ) -> tuple[list[TurnSnapshot], list[GameEvent]]:
         turn_marks = [
             (m.start(), int(m.group("num")), m.group("player")) for m in _TURN_RE.finditer(block)
         ]
         if not turn_marks:
-            return []
+            return [], []
 
         # Carry forward state between turns: zones and life persist
         # turn-over-turn unless the log explicitly resets them.
         carry: dict[str, PlayerSnapshot] = {p: PlayerSnapshot(name=p) for p in players}
 
         turns: list[TurnSnapshot] = []
+        all_events: list[GameEvent] = []
         for idx, (start, num, active) in enumerate(turn_marks):
             end = turn_marks[idx + 1][0] if idx + 1 < len(turn_marks) else len(block)
             window = block[start:end]
-            snapshot = self._snapshot_for_window(num, active, window, carry)
+            snapshot, turn_events = self._snapshot_for_window(num, active, window, carry)
             turns.append(snapshot)
-        return turns
+            all_events.extend(turn_events)
+        return turns, all_events
 
     def _snapshot_for_window(
         self,
@@ -670,8 +728,9 @@ class MTGOTextLogStrategy(LogFormatStrategy):
         active_raw: str | None,
         window: str,
         carry: dict[str, PlayerSnapshot],
-    ) -> TurnSnapshot:
+    ) -> tuple[TurnSnapshot, list[GameEvent]]:
         active = _normalize_player(active_raw) if active_raw else None
+        events: list[GameEvent] = []
 
         # Life events have to be applied in document order so an explicit
         # "X's life: N" snapshot supersedes preceding deltas/damage rather
@@ -697,8 +756,24 @@ class MTGOTextLogStrategy(LogFormatStrategy):
                 snap.life = int(value)
             elif kind == "delta":
                 snap.life += int(value)
+                events.append(
+                    GameEvent(
+                        turn_number=turn_number,
+                        verb="life_change",
+                        card_name=None,
+                        player=name,
+                    )
+                )
             elif kind == "dmg" and name in carry:
                 carry[name].life -= int(value)
+                events.append(
+                    GameEvent(
+                        turn_number=turn_number,
+                        verb="damage",
+                        card_name=None,
+                        player=name,
+                    )
+                )
 
         # Zone movements.
         for play in _PLAY_RE.finditer(window):
@@ -706,6 +781,19 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             card = play.group("card").strip()
             snap = carry.setdefault(name, PlayerSnapshot(name=name))
             snap.zones.battlefield.append(card)
+            # _PLAY_RE matches "plays", "casts", and "activates". Distinguish
+            # the verb to emit the correct event type.
+            verb_match = re.search(r"\b(plays|casts|activates)\b", play.group(0), re.IGNORECASE)
+            verb_word = verb_match.group(1).lower() if verb_match else "play"
+            if verb_word == "casts":
+                event_verb = "cast"
+            elif verb_word == "activates":
+                event_verb = "cast"  # treat activations like casts for stats
+            else:
+                event_verb = "play"
+            events.append(
+                GameEvent(turn_number=turn_number, verb=event_verb, card_name=card, player=name)
+            )
 
         for draw in _DRAW_RE.finditer(window):
             name = _normalize_player(draw.group("player"))
@@ -713,6 +801,14 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             if card:
                 snap = carry.setdefault(name, PlayerSnapshot(name=name))
                 snap.zones.hand.append(card.strip())
+            events.append(
+                GameEvent(
+                    turn_number=turn_number,
+                    verb="draw",
+                    card_name=card.strip() if card else None,
+                    player=name,
+                )
+            )
 
         for disc in _DISCARD_RE.finditer(window):
             name = _normalize_player(disc.group("player"))
@@ -721,6 +817,9 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             if card in snap.zones.hand:
                 snap.zones.hand.remove(card)
             snap.zones.graveyard.append(card)
+            events.append(
+                GameEvent(turn_number=turn_number, verb="discard", card_name=card, player=name)
+            )
 
         for move in _ZONE_MOVE_RE.finditer(window):
             name = _normalize_player(move.group("player"))
@@ -728,12 +827,30 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             card = move.group("card").strip()
             snap = carry.setdefault(name, PlayerSnapshot(name=name))
             getattr(snap.zones, zone).append(card)
+            # Map zone destination to event verb
+            if zone == "exile":
+                events.append(
+                    GameEvent(
+                        turn_number=turn_number, verb="exile", card_name=card, player=name
+                    )
+                )
+            elif zone == "graveyard":
+                events.append(
+                    GameEvent(
+                        turn_number=turn_number, verb="graveyard", card_name=card, player=name
+                    )
+                )
 
         # Mana pool.
         for mana in _MANA_FLOAT_RE.finditer(window):
             name = _normalize_player(mana.group("player"))
             snap = carry.setdefault(name, PlayerSnapshot(name=name))
             snap.mana_pool = _parse_mana_string(mana.group("pool"))
+            events.append(
+                GameEvent(
+                    turn_number=turn_number, verb="mana_float", card_name=None, player=name
+                )
+            )
 
         # Stack snapshot — at most one summary line per turn window.
         stack: list[StackEntry] = []
@@ -759,7 +876,7 @@ class MTGOTextLogStrategy(LogFormatStrategy):
             active_player=active,
             players=snapshot_players,
             stack=stack,
-        )
+        ), events
 
 
 class LogParser:
