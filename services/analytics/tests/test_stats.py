@@ -75,6 +75,25 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
     monkeypatch.setattr(_stats, "_get_redis_or_none", _no_redis)
 
 
+def _match_dict(
+    match_id: uuid.UUID,
+    fmt: str,
+    players: list[str],
+    played_at: datetime,
+    wins_by_player: dict[str, int],
+    hero_player_name: str | None = None,
+) -> dict[str, Any]:
+    """Build a match dict in the shape returned by _load_user_matches."""
+    return {
+        "id": match_id,
+        "format": fmt,
+        "players": players,
+        "played_at": played_at,
+        "wins_by_player": wins_by_player,
+        "hero_player_name": hero_player_name or (players[0] if players else None),
+    }
+
+
 # ---------------------------------------------------------------------------
 # /summary
 # ---------------------------------------------------------------------------
@@ -117,27 +136,23 @@ async def test_summary_counts_wins_losses_draws(
     m2 = uuid.uuid4()
     m3 = uuid.uuid4()
     matches = [
-        {  # win 2-1
-            "id": m1,
-            "format": "Modern",
-            "players": ["alice", "bob"],
-            "played_at": datetime(2026, 5, 9, 10, 0, tzinfo=UTC),
-            "wins_by_player": {"alice": 2, "bob": 1},
-        },
-        {  # loss 0-2
-            "id": m2,
-            "format": "Modern",
-            "players": ["alice", "carol"],
-            "played_at": datetime(2026, 5, 8, 10, 0, tzinfo=UTC),
-            "wins_by_player": {"carol": 2},
-        },
-        {  # draw 1-1
-            "id": m3,
-            "format": "Pioneer",
-            "players": ["alice", "dan"],
-            "played_at": datetime(2026, 5, 7, 10, 0, tzinfo=UTC),
-            "wins_by_player": {"alice": 1, "dan": 1},
-        },
+        _match_dict(
+            m1,
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 9, 10, 0, tzinfo=UTC),
+            {"alice": 2, "bob": 1},
+        ),
+        _match_dict(
+            m2, "Modern", ["alice", "carol"], datetime(2026, 5, 8, 10, 0, tzinfo=UTC), {"carol": 2}
+        ),
+        _match_dict(
+            m3,
+            "Pioneer",
+            ["alice", "dan"],
+            datetime(2026, 5, 7, 10, 0, tzinfo=UTC),
+            {"alice": 1, "dan": 1},
+        ),
     ]
     _patch_loader(monkeypatch, matches)
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -203,27 +218,23 @@ async def test_by_format_buckets_by_format(
     from analytics_service import main as _main
 
     matches = [
-        {
-            "id": uuid.uuid4(),
-            "format": "Modern",
-            "players": ["alice", "bob"],
-            "played_at": datetime(2026, 5, 9, tzinfo=UTC),
-            "wins_by_player": {"alice": 2, "bob": 0},
-        },
-        {
-            "id": uuid.uuid4(),
-            "format": "Modern",
-            "players": ["alice", "bob"],
-            "played_at": datetime(2026, 5, 8, tzinfo=UTC),
-            "wins_by_player": {"bob": 2},
-        },
-        {
-            "id": uuid.uuid4(),
-            "format": "Pioneer",
-            "players": ["alice", "carol"],
-            "played_at": datetime(2026, 5, 7, tzinfo=UTC),
-            "wins_by_player": {"alice": 2, "carol": 1},
-        },
+        _match_dict(
+            uuid.uuid4(),
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 9, tzinfo=UTC),
+            {"alice": 2, "bob": 0},
+        ),
+        _match_dict(
+            uuid.uuid4(), "Modern", ["alice", "bob"], datetime(2026, 5, 8, tzinfo=UTC), {"bob": 2}
+        ),
+        _match_dict(
+            uuid.uuid4(),
+            "Pioneer",
+            ["alice", "carol"],
+            datetime(2026, 5, 7, tzinfo=UTC),
+            {"alice": 2, "carol": 1},
+        ),
     ]
     _patch_loader(monkeypatch, matches)
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -278,27 +289,27 @@ async def test_by_opponent_buckets_by_opponent(
     from analytics_service import main as _main
 
     matches = [
-        {
-            "id": uuid.uuid4(),
-            "format": "Modern",
-            "players": ["alice", "bob"],
-            "played_at": datetime(2026, 5, 9, tzinfo=UTC),
-            "wins_by_player": {"alice": 2, "bob": 0},
-        },
-        {
-            "id": uuid.uuid4(),
-            "format": "Modern",
-            "players": ["alice", "bob"],
-            "played_at": datetime(2026, 5, 8, tzinfo=UTC),
-            "wins_by_player": {"bob": 2, "alice": 1},
-        },
-        {
-            "id": uuid.uuid4(),
-            "format": "Pioneer",
-            "players": ["alice", "carol"],
-            "played_at": datetime(2026, 5, 7, tzinfo=UTC),
-            "wins_by_player": {"alice": 2},
-        },
+        _match_dict(
+            uuid.uuid4(),
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 9, tzinfo=UTC),
+            {"alice": 2, "bob": 0},
+        ),
+        _match_dict(
+            uuid.uuid4(),
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 8, tzinfo=UTC),
+            {"bob": 2, "alice": 1},
+        ),
+        _match_dict(
+            uuid.uuid4(),
+            "Pioneer",
+            ["alice", "carol"],
+            datetime(2026, 5, 7, tzinfo=UTC),
+            {"alice": 2},
+        ),
     ]
     _patch_loader(monkeypatch, matches)
     _main.app.dependency_overrides[_deps.require_user] = _override_user()

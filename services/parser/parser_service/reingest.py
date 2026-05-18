@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from parser_service.db import get_session
 from parser_service.deps import AuthenticatedUser, require_admin, require_user
-from parser_service.models import Game, GameState, Match
+from parser_service.models import Game, GamePlayer, GameState, Match
 
 _log = logging.getLogger("parser.reingest")
 
@@ -180,6 +180,7 @@ async def _delete_matches_for_user(
 
     if game_ids:
         await db.execute(delete(GameState).where(GameState.game_id.in_(game_ids)))
+        await db.execute(delete(GamePlayer).where(GamePlayer.game_id.in_(game_ids)))
     await db.execute(delete(Game).where(Game.match_id.in_(match_ids)))
     await db.execute(delete(Match).where(Match.id.in_(match_ids)))
     await db.commit()
@@ -220,6 +221,7 @@ async def _delete_all_matches(
 
     if game_ids:
         await db.execute(delete(GameState).where(GameState.game_id.in_(game_ids)))
+        await db.execute(delete(GamePlayer).where(GamePlayer.game_id.in_(game_ids)))
     await db.execute(delete(Game).where(Game.match_id.in_(match_ids)))
     await db.execute(delete(Match).where(Match.id.in_(match_ids)))
     await db.commit()

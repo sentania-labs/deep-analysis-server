@@ -66,14 +66,18 @@ class SyncResult:
 _UPSERT_SQL = text(
     """
     INSERT INTO catalog.cards (
-        scryfall_id, name, oracle_text, type_line, mana_cost,
-        colors, set_code, image_uri, art_crop_uri, legalities, synced_at
+        scryfall_id, oracle_id, mtgo_id, name, oracle_text, type_line,
+        mana_cost, colors, set_code, image_uri, art_crop_uri,
+        legalities, synced_at
     ) VALUES (
-        :scryfall_id, :name, :oracle_text, :type_line, :mana_cost,
+        :scryfall_id, CAST(:oracle_id AS uuid), :mtgo_id, :name,
+        :oracle_text, :type_line, :mana_cost,
         CAST(:colors AS jsonb), :set_code, :image_uri, :art_crop_uri,
         CAST(:legalities AS jsonb), :synced_at
     )
     ON CONFLICT (scryfall_id) DO UPDATE SET
+        oracle_id = EXCLUDED.oracle_id,
+        mtgo_id = EXCLUDED.mtgo_id,
         name = EXCLUDED.name,
         oracle_text = EXCLUDED.oracle_text,
         type_line = EXCLUDED.type_line,
@@ -102,6 +106,8 @@ def _card_row(card: dict[str, Any], synced_at: datetime) -> dict[str, Any]:
     legalities = card.get("legalities")
     return {
         "scryfall_id": card["id"],
+        "oracle_id": card.get("oracle_id"),
+        "mtgo_id": card.get("mtgo_id"),
         "name": card["name"],
         "oracle_text": card.get("oracle_text"),
         "type_line": card.get("type_line"),

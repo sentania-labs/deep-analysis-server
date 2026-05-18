@@ -3,15 +3,13 @@
 One worker per process. On each event:
 
 1. Read the raw bytes from the shared archive at the published sha.
-2. Parse with :class:`LogParser`.
-3. Persist into ``parser.matches`` / ``parser.games`` /
-   ``parser.game_states`` (idempotent on ``(sha256, user_id)``).
-4. Publish ``match.parsed`` so downstream subscribers (analytics,
-   AI add-on) can react.
-
-Persistence and publish failures are logged and do not kill the
-worker — pub/sub delivery is best-effort, and the goal is to keep
-draining events. Hard programmer errors still propagate.
+2. Route by ``content_type``:
+   - ``match-log``: parse with :class:`LogParser`, persist match data,
+     publish ``match.parsed``.
+   - ``decklist``: parse grouping XML, persist deck composition.
+3. Persistence and publish failures are logged and do not kill the
+   worker — pub/sub delivery is best-effort, and the goal is to keep
+   draining events. Hard programmer errors still propagate.
 """
 
 from __future__ import annotations
@@ -25,14 +23,18 @@ from pathlib import Path
 from typing import Any
 
 import redis.asyncio as redis
+from sqlalchemy import text as sa_text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
 from common.format_inference import collect_card_names, infer_format_for_match
 from common.redis_client import EventPublisher
 from parser_service import analytics_client
+from parser_service.models import MatchArchetype
 from parser_service.parsing import LogParser, ParsedMatch
-from parser_service.persistence import persist_match
+from parser_service.parsing.grouping_parser import parse_grouping_xml
+from parser_service.persistence import link_deck_to_match, persist_deck_composition, persist_match
 from parser_service.settings import get_settings as get_parser_settings
 from parser_service.storage import RawFileNotFoundError, RawFileTooLargeError, read_raw
 
@@ -75,6 +77,46 @@ class ParserConsumer:
             await pubsub.unsubscribe(FILE_INGESTED)
             await pubsub.aclose()
 
+    async def _resolve_hero(
+        self,
+        user_id: int,
+        players: list[str],
+    ) -> str | None:
+        """Look up the uploader's MTGO usernames and match against
+        the parsed player list to identify the hero.
+
+        Returns the matching player name from the parsed list, or
+        ``None`` if no match is found (falls back to ``players[0]``
+        in that case).
+        """
+        if not players:
+            return None
+        try:
+            async with self._sessionmaker() as session:
+                row = (
+                    await session.execute(
+                        sa_text("SELECT mtgo_usernames FROM auth.users WHERE id = :uid"),
+                        {"uid": user_id},
+                    )
+                ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001
+            _log.debug("failed to load mtgo_usernames for user_id=%s", user_id)
+            return str(players[0]) if players else None
+
+        mtgo_usernames: list[str] | None = None
+        if row and isinstance(row, list):
+            mtgo_usernames = row
+
+        if mtgo_usernames:
+            names_lower = {n.lower() for n in mtgo_usernames}
+            for p in players:
+                if str(p).lower() in names_lower:
+                    return str(p)
+
+        # Fallback: first player in the list (parser convention puts
+        # the uploader-side account first).
+        return str(players[0])
+
     async def _iter_messages(self, pubsub: Any) -> AsyncIterator[dict[str, Any]]:
         while not self._stop_event.is_set():
             try:
@@ -112,11 +154,18 @@ class ParserConsumer:
         if not sha or user_id is None:
             _log.warning("ignoring event missing sha256/user_id: %r", payload)
             return
-        if content_type != "match-log":
-            _log.debug("skipping non-match-log event sha=%s ct=%s", sha, content_type)
-            return
 
-        await self.handle_event(sha, int(user_id))
+        if content_type == "decklist":
+            file_mtime = payload.get("file_mtime")
+            await self.handle_decklist_event(
+                sha,
+                int(user_id),
+                file_mtime=float(file_mtime) if file_mtime is not None else None,
+            )
+        elif content_type == "match-log":
+            await self.handle_event(sha, int(user_id))
+        else:
+            _log.debug("skipping unknown content_type sha=%s ct=%s", sha, content_type)
 
     async def handle_event(self, sha256: str, user_id: int) -> ParsedMatch | None:
         """Test-friendly entry point — reads, parses, persists, publishes."""
@@ -139,9 +188,18 @@ class ParserConsumer:
             _log.warning("parsed log is empty sha=%s user_id=%s", sha256, user_id)
             return parsed
 
+        # Resolve the hero player name from auth.users.mtgo_usernames.
+        hero_player_name = await self._resolve_hero(user_id, parsed.players)
+
         async with self._sessionmaker() as session:
             try:
-                match = await persist_match(session, parsed, sha256, user_id)
+                match = await persist_match(
+                    session,
+                    parsed,
+                    sha256,
+                    user_id,
+                    hero_player_name=hero_player_name,
+                )
             except Exception:
                 _log.exception("persist failed sha=%s user_id=%s", sha256, user_id)
                 await session.rollback()
@@ -164,20 +222,91 @@ class ParserConsumer:
                     _log.debug("format inference failed sha=%s", sha256)
 
             # Archetype classification — best-effort, never fails the parse.
+            # Classify BOTH sides (hero + opponent) and write MatchArchetype rows.
             try:
-                if not card_names:
-                    card_names = collect_card_names(parsed)
-                if card_names:
-                    settings = get_parser_settings()
-                    archetype_id = await analytics_client.classify(
-                        settings.analytics_service_url,
-                        card_names,
+                settings = get_parser_settings()
+                if settings.analytics_service_url:
+                    hero_cards, opponent_cards = _collect_cards_by_side(
+                        parsed,
+                        hero_player_name,
                     )
-                    if archetype_id and match.archetype_id != archetype_id:
-                        match.archetype_id = archetype_id
-                        await session.commit()
+                    if not hero_cards:
+                        # Fallback: use the old battlefield-scan method
+                        hero_cards = card_names or collect_card_names(parsed)
+
+                    # Classify hero side
+                    hero_result = (
+                        await analytics_client.classify_with_confidence(
+                            settings.analytics_service_url,
+                            hero_cards,
+                        )
+                        if hero_cards
+                        else None
+                    )
+
+                    # Classify opponent side
+                    opp_result = (
+                        await analytics_client.classify_with_confidence(
+                            settings.analytics_service_url,
+                            opponent_cards,
+                        )
+                        if opponent_cards
+                        else None
+                    )
+
+                    # Write MatchArchetype rows
+                    ma_values: list[dict[str, Any]] = []
+                    if hero_player_name and hero_result:
+                        ma_values.append(
+                            {
+                                "match_id": match.id,
+                                "player_name": hero_player_name,
+                                "archetype_id": hero_result.archetype_id,
+                                "confidence": hero_result.confidence,
+                            }
+                        )
+                    # Find opponent name
+                    opponent_name = _get_opponent_name(parsed.players, hero_player_name)
+                    if opponent_name and opp_result:
+                        ma_values.append(
+                            {
+                                "match_id": match.id,
+                                "player_name": opponent_name,
+                                "archetype_id": opp_result.archetype_id,
+                                "confidence": opp_result.confidence,
+                            }
+                        )
+                    if ma_values:
+                        ma_stmt = pg_insert(MatchArchetype).values(ma_values)
+                        ma_stmt = ma_stmt.on_conflict_do_update(
+                            constraint="uq_match_archetypes_match_player",
+                            set_={
+                                "archetype_id": ma_stmt.excluded.archetype_id,
+                                "confidence": ma_stmt.excluded.confidence,
+                            },
+                        )
+                        await session.execute(ma_stmt)
+
+                    # Backward compat: keep match.archetype_id = hero-side result
+                    if hero_result and match.archetype_id != hero_result.archetype_id:
+                        match.archetype_id = hero_result.archetype_id
+                    await session.commit()
             except Exception:  # noqa: BLE001
                 _log.debug("archetype classification failed sha=%s", sha256)
+
+            # Card game stats materialization — best-effort.
+            try:
+                await _materialize_card_game_stats(session, match, parsed, hero_player_name)
+                await session.commit()
+            except Exception:  # noqa: BLE001
+                _log.debug("card_game_stats materialization failed sha=%s", sha256)
+                await session.rollback()
+
+            # Deck-to-match linking — best-effort.
+            try:
+                await link_deck_to_match(session, match.id, user_id, match.format)
+            except Exception:  # noqa: BLE001
+                _log.debug("deck-to-match link failed sha=%s", sha256)
 
         out: MatchParsedPayload = {
             "match_id": str(match.id),
@@ -198,3 +327,288 @@ class ParserConsumer:
             parsed.game_count,
         )
         return parsed
+
+    async def _lookup_original_filename(
+        self,
+        sha256: str,
+        user_id: int,
+    ) -> str | None:
+        """Look up the original filename from ingest.user_uploads."""
+        try:
+            async with self._sessionmaker() as session:
+                row = (
+                    await session.execute(
+                        sa_text(
+                            "SELECT original_filename FROM ingest.user_uploads "
+                            "WHERE sha256 = :sha AND user_id = :uid "
+                            "ORDER BY uploaded_at DESC LIMIT 1"
+                        ),
+                        {"sha": sha256, "uid": user_id},
+                    )
+                ).scalar_one_or_none()
+                return str(row) if row else None
+        except Exception:  # noqa: BLE001
+            _log.debug("failed to look up original_filename sha=%s user_id=%s", sha256, user_id)
+            return None
+
+    async def handle_decklist_event(
+        self,
+        sha256: str,
+        user_id: int,
+        file_mtime: float | None = None,
+    ) -> None:
+        """Handle a decklist (grouping XML) upload — parse and persist."""
+        try:
+            content = read_raw(
+                sha256, self._raw_root, hint_ext=".xml", max_bytes=self._max_log_bytes
+            )
+        except RawFileNotFoundError:
+            _log.warning("raw grouping file missing for sha=%s; skipping", sha256)
+            return
+        except RawFileTooLargeError:
+            _log.warning("raw grouping file exceeds size ceiling sha=%s; skipping", sha256)
+            return
+        except OSError:
+            _log.exception("failed to read raw grouping file sha=%s", sha256)
+            return
+
+        parsed = parse_grouping_xml(content)
+        if parsed is None:
+            _log.warning("grouping XML unparseable sha=%s user_id=%s", sha256, user_id)
+            return
+
+        original_filename = await self._lookup_original_filename(sha256, user_id)
+
+        async with self._sessionmaker() as session:
+            try:
+                await persist_deck_composition(
+                    session,
+                    parsed,
+                    sha256,
+                    user_id,
+                    original_filename=original_filename,
+                    file_mtime=file_mtime,
+                )
+            except Exception:
+                _log.exception("persist deck composition failed sha=%s user_id=%s", sha256, user_id)
+                await session.rollback()
+                return
+
+        _log.info(
+            "deck composition parsed sha=%s user_id=%s type=%s name=%s items=%d",
+            sha256,
+            user_id,
+            parsed.grouping_type,
+            parsed.name,
+            len(parsed.items),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — card collection per side, card_game_stats materialization
+# ---------------------------------------------------------------------------
+
+
+def _collect_cards_by_side(
+    parsed: ParsedMatch,
+    hero_player_name: str | None,
+) -> tuple[list[str], list[str]]:
+    """Collect unique card names for hero and opponent from game events.
+
+    Returns (hero_cards, opponent_cards) as sorted lists.
+    """
+    hero_cards: set[str] = set()
+    opp_cards: set[str] = set()
+    for game in parsed.games:
+        for evt in game.events:
+            if evt.card_name is None:
+                continue
+            if hero_player_name and evt.player.lower() == hero_player_name.lower():
+                hero_cards.add(evt.card_name)
+            else:
+                opp_cards.add(evt.card_name)
+    return sorted(hero_cards), sorted(opp_cards)
+
+
+def _get_opponent_name(
+    players: list[str],
+    hero_player_name: str | None,
+) -> str | None:
+    """Return the opponent's name from the player list."""
+    if not hero_player_name or not players:
+        return None
+    hero_lower = hero_player_name.lower()
+    for p in players:
+        if p.lower() != hero_lower:
+            return p
+    return None
+
+
+async def _materialize_card_game_stats(
+    session: Any,
+    match: Any,
+    parsed: ParsedMatch,
+    hero_player_name: str | None,
+) -> None:
+    """Write card_game_stats rows from game events.
+
+    One row per (game_id, card_name, is_local). Aggregates seen/cast/played
+    counts from game_events, resolves oracle_id from catalog.cards, and
+    records win/loss from the game winner and game_players.
+
+    Uses raw SQL INSERT ... ON CONFLICT for performance and to target the
+    ``analytics`` schema (the parser ORM's metadata is bound to ``parser``).
+
+    Skips materialization entirely when hero identity is unknown — without
+    hero attribution, both players' events would collapse onto the same
+    ``(game_id, card_name, is_local=False)`` key, overwriting each other.
+    """
+    if not parsed.games:
+        return
+
+    if not hero_player_name:
+        _log.warning(
+            "skipping card_game_stats: hero identity unknown match_id=%s",
+            match.id,
+        )
+        return
+
+    # Pre-fetch oracle_id lookup: card_name → oracle_id
+    all_card_names: set[str] = set()
+    for game in parsed.games:
+        for evt in game.events:
+            if evt.card_name:
+                all_card_names.add(evt.card_name)
+    if not all_card_names:
+        return
+
+    oracle_map: dict[str, str | None] = {}
+    try:
+        rows = (
+            await session.execute(
+                sa_text("SELECT name, oracle_id FROM catalog.cards WHERE name = ANY(:names)"),
+                {"names": sorted(all_card_names)},
+            )
+        ).all()
+        for name, oid in rows:
+            oracle_map[str(name)] = str(oid) if oid else None
+    except Exception:  # noqa: BLE001
+        _log.debug("oracle_id lookup failed; proceeding without oracle_ids")
+
+    # Build per-game game_id mapping from persistence. We need the actual
+    # game UUIDs from the DB. Query them by match_id + game_number.
+    game_id_rows = (
+        await session.execute(
+            sa_text("SELECT game_number, id FROM parser.games WHERE match_id = :mid"),
+            {"mid": match.id},
+        )
+    ).all()
+    game_id_map: dict[int, str] = {int(r[0]): str(r[1]) for r in game_id_rows}
+
+    # Build game_players is_local map: game_id → {player_name_lower: is_local}
+    gp_rows = (
+        await session.execute(
+            sa_text(
+                "SELECT gp.game_id, gp.player_name, gp.is_local "
+                "FROM parser.game_players gp "
+                "JOIN parser.games g ON g.id = gp.game_id "
+                "WHERE g.match_id = :mid"
+            ),
+            {"mid": match.id},
+        )
+    ).all()
+    is_local_map: dict[str, dict[str, bool | None]] = {}
+    for gid, pname, is_local in gp_rows:
+        gid_str = str(gid)
+        if gid_str not in is_local_map:
+            is_local_map[gid_str] = {}
+        is_local_map[gid_str][str(pname).lower()] = is_local
+
+    # Delete existing card_game_stats for this match (reparse support).
+    await session.execute(
+        sa_text("DELETE FROM analytics.card_game_stats WHERE match_id = :mid"),
+        {"mid": match.id},
+    )
+
+    insert_values: list[dict[str, Any]] = []
+
+    for parsed_game in parsed.games:
+        game_id = game_id_map.get(parsed_game.game_number)
+        if not game_id:
+            continue
+
+        # Aggregate events by (card_name, player)
+        card_player_agg: dict[tuple[str, str], dict[str, int]] = {}
+        for evt in parsed_game.events:
+            if evt.card_name is None:
+                continue
+            key = (evt.card_name, evt.player)
+            agg = card_player_agg.setdefault(key, {"seen": 0, "cast": 0, "played": 0})
+            agg["seen"] += 1
+            if evt.verb == "cast":
+                agg["cast"] += 1
+            elif evt.verb == "play":
+                agg["played"] += 1
+
+        is_postboard = parsed_game.game_number > 1
+        game_winner = parsed_game.winner
+
+        # Get the is_local map for this game
+        gp_local = is_local_map.get(game_id, {})
+
+        for (card_name, player), counts in card_player_agg.items():
+            # Determine is_local from game_players
+            is_local_val = gp_local.get(player.lower())
+            if is_local_val is None:
+                # Fallback: compare to hero_player_name
+                if hero_player_name:
+                    is_local_val = player.lower() == hero_player_name.lower()
+                else:
+                    is_local_val = False  # default to opponent if unknown
+
+            # Determine won
+            won: bool | None = None
+            if game_winner:
+                player_won = game_winner.lower() == player.lower()
+                won = player_won if is_local_val else not player_won
+                # won is from the local (hero) perspective:
+                # if is_local and player won → won=True
+                # if not is_local and player won → won=False (hero lost)
+                won = player_won == is_local_val if is_local_val is not None else None
+
+            oracle_id = oracle_map.get(card_name)
+
+            insert_values.append(
+                {
+                    "match_id": str(match.id),
+                    "game_id": game_id,
+                    "oracle_id": oracle_id,
+                    "card_name": card_name,
+                    "is_local": is_local_val,
+                    "seen": counts["seen"],
+                    "cast": counts["cast"],
+                    "played": counts["played"],
+                    "is_postboard": is_postboard,
+                    "won": won,
+                    "quantity": counts["seen"],
+                    "game_number": parsed_game.game_number,
+                }
+            )
+
+    if insert_values:
+        # Batch insert using raw SQL for cross-schema write.
+        for row in insert_values:
+            await session.execute(
+                sa_text(
+                    "INSERT INTO analytics.card_game_stats "
+                    "(match_id, game_id, oracle_id, card_name, is_local, "
+                    " seen, cast, played, is_postboard, won, quantity, game_number) "
+                    "VALUES (:match_id, :game_id, :oracle_id::uuid, :card_name, :is_local, "
+                    " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number) "
+                    "ON CONFLICT (game_id, card_name, is_local) DO UPDATE SET "
+                    " seen = EXCLUDED.seen, cast = EXCLUDED.cast, played = EXCLUDED.played, "
+                    " won = EXCLUDED.won, quantity = EXCLUDED.quantity, "
+                    " oracle_id = EXCLUDED.oracle_id"
+                ),
+                row,
+            )

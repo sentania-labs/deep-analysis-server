@@ -2,9 +2,12 @@
 
 Provides play/draw win-rate splits, pre-board vs post-board performance,
 mulligan frequency by opening hand size, and game-length distribution.
-All endpoints filter by ``user_id`` from the verified JWT and identify
-the "hero" player via ``auth.users.mtgo_usernames``, falling back to
-``players[0]`` when no MTGO username matches.
+All endpoints filter by ``user_id`` from the verified JWT.
+
+v0.9.6: Hero identification is now resolved at parse time and stored
+in ``parser.game_players.is_local``. The triplicated
+``_identify_hero`` / ``_load_mtgo_usernames`` helpers have been
+replaced with a JOIN to ``parser.game_players``.
 """
 
 from __future__ import annotations
@@ -67,37 +70,6 @@ class GameLengthBucket(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def _load_mtgo_usernames(db: AsyncSession, user_id: int) -> list[str] | None:
-    """Load MTGO usernames for the given user from auth schema."""
-    try:
-        row = (
-            await db.execute(
-                text("SELECT mtgo_usernames FROM auth.users WHERE id = :uid"),
-                {"uid": user_id},
-            )
-        ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001
-        return None
-    if row and isinstance(row, list):
-        return row
-    return None
-
-
-def _identify_hero(
-    players: list[Any] | None,
-    mtgo_usernames: list[str] | None,
-) -> str | None:
-    """Return the hero player name from the player list."""
-    if not players:
-        return None
-    if mtgo_usernames:
-        names_lower = {n.lower() for n in mtgo_usernames}
-        for p in players:
-            if str(p).lower() in names_lower:
-                return str(p)
-    return str(players[0])
-
-
 def _is_hero_winner(winner: str | None, hero: str | None) -> bool | None:
     """Return True if hero won, False if hero lost, None if indeterminate."""
     if winner is None or hero is None:
@@ -124,8 +96,13 @@ async def _load_games_with_context(
 ) -> list[dict[str, Any]]:
     """Load all games with match context for a user.
 
+    v0.9.6: JOINs ``parser.game_players`` to get the hero player name
+    directly, eliminating the need for ``_identify_hero`` at query time.
+    Falls back to ``m.hero_player_name`` / ``m.players->>0`` for games
+    without ``game_players`` rows (pre-backfill data).
+
     Returns a list of dicts with keys: game_number, winner, on_play,
-    play_first, opening_hand_sizes, players, format.
+    play_first, opening_hand_sizes, players, format, hero.
     """
     where = "WHERE m.user_id = :user_id"
     params: dict[str, Any] = {"user_id": user_id}
@@ -147,9 +124,16 @@ async def _load_games_with_context(
             text(
                 f"""
                 SELECT g.game_number, g.winner, g.on_play, g.play_first,
-                       g.opening_hand_sizes, m.players, m.format, g.id
+                       g.opening_hand_sizes, m.players, m.format, g.id,
+                       COALESCE(
+                           gp.player_name,
+                           m.hero_player_name,
+                           m.players->>0
+                       ) AS hero
                 FROM parser.games g
                 JOIN parser.matches m ON m.id = g.match_id
+                LEFT JOIN parser.game_players gp
+                    ON gp.game_id = g.id AND gp.is_local = true
                 {where}
                 ORDER BY m.parsed_at DESC, g.game_number
                 """
@@ -167,6 +151,7 @@ async def _load_games_with_context(
             "players": list(r[5]) if r[5] else [],
             "format": r[6],
             "game_id": r[7],
+            "hero": r[8],
         }
         for r in rows
     ]
@@ -190,7 +175,6 @@ async def get_play_draw(
     games = await _load_games_with_context(
         db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
     )
-    names = await _load_mtgo_usernames(db, user.user_id)
 
     play_wins = play_total = 0
     draw_wins = draw_total = 0
@@ -198,7 +182,7 @@ async def get_play_draw(
     for g in games:
         if g["on_play"] is None:
             continue
-        hero = _identify_hero(g["players"], names)
+        hero = g.get("hero")
         won = _is_hero_winner(g["winner"], hero)
         if won is None:
             continue
@@ -234,13 +218,12 @@ async def get_preboard_postboard(
     games = await _load_games_with_context(
         db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
     )
-    names = await _load_mtgo_usernames(db, user.user_id)
 
     pre_wins = pre_total = 0
     post_wins = post_total = 0
 
     for g in games:
-        hero = _identify_hero(g["players"], names)
+        hero = g.get("hero")
         won = _is_hero_winner(g["winner"], hero)
         if won is None:
             continue
@@ -274,12 +257,11 @@ async def get_mulligans(
     games = await _load_games_with_context(
         db, user.user_id, format, opponent=opponent, date_from=date_from, date_to=date_to
     )
-    names = await _load_mtgo_usernames(db, user.user_id)
 
     buckets: dict[int, dict[str, int]] = {}
 
     for g in games:
-        hero = _identify_hero(g["players"], names)
+        hero = g.get("hero")
         if hero is None:
             continue
         hand_sizes = g.get("opening_hand_sizes") or {}
@@ -324,9 +306,11 @@ async def get_game_length(
     date_from: Annotated[str | None, Query()] = None,
     date_to: Annotated[str | None, Query()] = None,
 ) -> list[GameLengthBucket]:
-    """Turns distribution bucketed into ranges."""
-    names = await _load_mtgo_usernames(db, user.user_id)
+    """Turns distribution bucketed into ranges.
 
+    v0.9.6: JOINs ``parser.game_players`` for hero resolution
+    instead of querying ``auth.users`` separately.
+    """
     where = "WHERE m.user_id = :user_id"
     params: dict[str, Any] = {"user_id": user.user_id}
     if format:
@@ -347,12 +331,20 @@ async def get_game_length(
             text(
                 f"""
                 SELECT g.id, g.winner, m.players,
-                       MAX(gs.turn_number) AS max_turn
+                       MAX(gs.turn_number) AS max_turn,
+                       COALESCE(
+                           gp.player_name,
+                           m.hero_player_name,
+                           m.players->>0
+                       ) AS hero
                 FROM parser.games g
                 JOIN parser.matches m ON m.id = g.match_id
                 LEFT JOIN parser.game_states gs ON gs.game_id = g.id
+                LEFT JOIN parser.game_players gp
+                    ON gp.game_id = g.id AND gp.is_local = true
                 {where}
-                GROUP BY g.id, g.winner, m.players
+                GROUP BY g.id, g.winner, m.players, gp.player_name,
+                         m.hero_player_name
                 HAVING MAX(gs.turn_number) IS NOT NULL
                 """
             ),
@@ -371,9 +363,8 @@ async def get_game_length(
         label: {"total": 0, "wins": 0, "losses": 0} for label, _, _ in _BUCKETS
     }
 
-    for _game_id, winner, players, max_turn in rows:
+    for _game_id, winner, _players, max_turn, hero in rows:
         turn = int(max_turn)
-        hero = _identify_hero(list(players) if players else [], names)
         won = _is_hero_winner(winner, hero)
         for label, lo, hi in _BUCKETS:
             if lo <= turn <= hi:

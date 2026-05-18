@@ -1276,4 +1276,261 @@ async def get_game_turns(
     )
 
 
-# PERSISTENCE_TEST_42
+# ---------------------------------------------------------------------------
+# Metagame browser (F11)
+# ---------------------------------------------------------------------------
+
+
+async def get_metagame_formats(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Fetch available metagame formats."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/metagame/formats",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/formats transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /metagame/formats returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/formats returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return list(data.get("formats", []))
+
+
+async def get_metagame_tiers(
+    base_url: str, token: str, format_: str, window: str = "30d"
+) -> dict[str, Any]:
+    """Fetch archetype tier list for a format."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/metagame/{format_}/tiers",
+                params={"window": window},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/tiers transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /metagame/{{format}}/tiers returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/tiers returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def get_metagame_events(
+    base_url: str, token: str, format_: str, page: int = 1, per_page: int = 20
+) -> dict[str, Any]:
+    """Fetch paginated events for a format."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/metagame/{format_}/events",
+                params={"page": page, "per_page": per_page},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/events transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /metagame/{{format}}/events returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/events returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def get_metagame_event_detail(
+    base_url: str, token: str, format_: str, source: str, event_id: int
+) -> dict[str, Any]:
+    """Fetch a single event with results and decklists."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/metagame/{format_}/events/{source}/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/events/{{source}}/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /metagame/event detail returned {resp.status_code}"
+        )
+    if resp.status_code == 404:
+        return {}
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/event detail returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def get_metagame_trends(
+    base_url: str, token: str, format_: str, window: str = "30d"
+) -> dict[str, Any]:
+    """Fetch trend data for charting archetype popularity over time."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/metagame/{format_}/trends",
+                params={"window": window},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/trends transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /metagame/{{format}}/trends returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /metagame/{{format}}/trends returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+# ---------------------------------------------------------------------------
+# Scraper admin dashboard (F13)
+# ---------------------------------------------------------------------------
+
+
+async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Fetch all scrapers with config + health."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/scrapers",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /admin/scrapers transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /admin/scrapers returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scrapers returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    scrapers = data.get("scrapers", [])
+    # Normalize datetime strings
+    for s in scrapers:
+        s["last_run_at"] = _parse_dt(s.get("last_run_at"))
+        s["last_success_at"] = _parse_dt(s.get("last_success_at"))
+    return list(scrapers)
+
+
+async def admin_update_scraper(
+    base_url: str,
+    token: str,
+    name: str,
+    *,
+    enabled: bool | None = None,
+    interval_hours: int | None = None,
+) -> dict[str, Any]:
+    """Update a scraper's enabled/interval config."""
+    body: dict[str, Any] = {}
+    if enabled is not None:
+        body["enabled"] = enabled
+    if interval_hours is not None:
+        body["interval_hours"] = interval_hours
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.patch(
+                f"{base_url}/analytics/admin/scrapers/{name}",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics PATCH /admin/scrapers/{{name}} transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics PATCH /admin/scrapers/{{name}} returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics PATCH /admin/scrapers/{{name}} returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def admin_get_scraper_events(
+    base_url: str,
+    token: str,
+    name: str,
+    page: int = 1,
+    per_page: int = 20,
+) -> dict[str, Any]:
+    """Fetch paginated events for a specific scraper."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/scrapers/{name}/events",
+                params={"page": page, "per_page": per_page},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scrapers/{{name}}/events transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /admin/scrapers/{{name}}/events returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scrapers/{{name}}/events "
+            f"returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def admin_get_scraper_event_detail(
+    base_url: str,
+    token: str,
+    name: str,
+    event_id: int,
+) -> dict[str, Any]:
+    """Fetch a single event with results for a scraper."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/admin/scrapers/{name}/events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scrapers/{{name}}/events/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics GET /admin/scrapers/{{name}}/events/{{id}} returned {resp.status_code}"
+        )
+    if resp.status_code == 404:
+        return {}
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /admin/scrapers/{{name}}/events/{{id}} returned {resp.status_code}: "
+            f"{resp.text}"
+        )
+    return dict(resp.json())

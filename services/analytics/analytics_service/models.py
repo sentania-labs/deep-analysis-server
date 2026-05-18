@@ -1,10 +1,10 @@
 """SQLAlchemy models for the analytics service.
 
 The archetype catalog (``analytics.archetypes``) is the only table the
-analytics service owns. Everything else analytics queries lives in
-other schemas (``parser.matches``, ``parser.games``, ``parser.game_states``,
-``ingest.user_uploads``, ``auth.users``); analytics holds no models for
-those, only ad-hoc SELECTs.
+analytics service owns outside the ML classifier taxonomy. Everything
+else analytics queries lives in other schemas (``parser.matches``,
+``parser.games``, ``parser.game_states``, ``ingest.user_uploads``,
+``auth.users``); analytics holds no models for those, only ad-hoc SELECTs.
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, MetaData, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, MetaData, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 metadata = MetaData(schema="analytics")
 
@@ -41,4 +41,55 @@ class Archetype(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CanonicalArchetype(Base):
+    __tablename__ = "canonical_archetypes"
+    __table_args__ = (
+        UniqueConstraint("canonical_name", "format", name="canonical_archetypes_name_format_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
+    format: Mapped[str] = mapped_column(Text, nullable=False)
+    variant_tags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    label_mappings: Mapped[list[ArchetypeLabelMapping]] = relationship(
+        back_populates="canonical_archetype",
+        cascade="all, delete-orphan",
+    )
+
+
+class ArchetypeLabelMapping(Base):
+    __tablename__ = "archetype_label_mappings"
+    __table_args__ = (
+        UniqueConstraint(
+            "scraped_label", "canonical_id", name="archetype_label_mappings_label_canonical_key"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    scraped_label: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    canonical_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("analytics.canonical_archetypes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    canonical_archetype: Mapped[CanonicalArchetype] = relationship(
+        back_populates="label_mappings",
     )

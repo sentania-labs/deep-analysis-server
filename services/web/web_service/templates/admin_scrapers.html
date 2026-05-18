@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Admin &middot; Scrapers &middot; Deep Analysis{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Scrapers</h1>
+</div>
+
+{# Admin tabs #}
+<nav class="flex gap-1 border-b dark:border-border border-border-light mb-6 overflow-x-auto">
+    <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
+    <a href="/admin/agents" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Agents</a>
+    <a href="/admin/matches" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Matches</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/cards" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Cards</a>
+    <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
+    <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
+    <a href="/admin/scrapers" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Scrapers</a>
+</nav>
+
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
+{% endif %}
+
+{% if success %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">{{ success }}</div>
+{% endif %}
+
+{% if not scrapers %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
+    <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">No scrapers configured or analytics service unavailable.</p>
+</div>
+{% else %}
+<div class="grid gap-4 md:grid-cols-2">
+    {% for s in scrapers %}
+    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+        <div class="p-4 border-b dark:border-border border-border-light flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                {# Health dot #}
+                {% if s.is_broken %}
+                <span class="w-2.5 h-2.5 rounded-full bg-danger" title="Broken"></span>
+                {% elif s.consecutive_failures|default(0) > 0 %}
+                <span class="w-2.5 h-2.5 rounded-full bg-warning" title="Failing"></span>
+                {% else %}
+                <span class="w-2.5 h-2.5 rounded-full bg-success" title="Healthy"></span>
+                {% endif %}
+                <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">{{ s.scraper_name }}</h2>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if s.enabled %}
+                <span class="bg-success-muted text-success text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Enabled</span>
+                {% else %}
+                <span class="bg-danger-muted text-danger text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="p-4 space-y-3">
+            {# Status details #}
+            <div class="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                    <span class="dark:text-txt-tertiary text-txt-secondary-light">Last run</span>
+                    <div class="font-mono dark:text-txt-secondary text-txt-secondary-light mt-0.5">
+                        {% if s.last_run_at %}{{ s.last_run_at.strftime("%Y-%m-%d %H:%M") }}{% else %}never{% endif %}
+                    </div>
+                </div>
+                <div>
+                    <span class="dark:text-txt-tertiary text-txt-secondary-light">Last success</span>
+                    <div class="font-mono dark:text-txt-secondary text-txt-secondary-light mt-0.5">
+                        {% if s.last_success_at %}{{ s.last_success_at.strftime("%Y-%m-%d %H:%M") }}{% else %}never{% endif %}
+                    </div>
+                </div>
+                <div>
+                    <span class="dark:text-txt-tertiary text-txt-secondary-light">Failures</span>
+                    <div class="font-mono mt-0.5 {% if s.consecutive_failures|default(0) > 0 %}text-danger{% else %}dark:text-txt-secondary text-txt-secondary-light{% endif %}">
+                        {{ s.consecutive_failures|default(0) }}
+                    </div>
+                </div>
+                <div>
+                    <span class="dark:text-txt-tertiary text-txt-secondary-light">Interval</span>
+                    <div class="font-mono dark:text-txt-secondary text-txt-secondary-light mt-0.5">{{ s.interval_hours|default(24) }}h</div>
+                </div>
+            </div>
+
+            {% if s.last_error %}
+            <div class="text-xs">
+                <span class="dark:text-txt-tertiary text-txt-secondary-light">Last error:</span>
+                <span class="text-danger ml-1">{{ s.last_error|truncate(120) }}</span>
+            </div>
+            {% endif %}
+
+            {# Actions #}
+            <div class="flex flex-wrap gap-2 pt-2 border-t dark:border-border border-border-light">
+                {# Toggle enabled #}
+                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/toggle" class="inline">
+                    <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">
+                        {% if s.enabled %}Disable{% else %}Enable{% endif %}
+                    </button>
+                </form>
+
+                {# Run now #}
+                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/trigger" class="inline"
+                      onsubmit="return confirm('Trigger {{ s.scraper_name }} scrape now?');">
+                    <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
+                        Run Now
+                    </button>
+                </form>
+
+                {# Reset health — only when broken #}
+                {% if s.is_broken %}
+                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/reset" class="inline"
+                      onsubmit="return confirm('Reset health counters for {{ s.scraper_name }}?');">
+                    <button type="submit" class="bg-warning text-white hover:bg-yellow-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
+                        Reset Health
+                    </button>
+                </form>
+                {% endif %}
+
+                {# Browse events #}
+                <a href="/admin/scrapers/{{ s.scraper_name }}/events"
+                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs no-underline transition-colors">
+                    Browse Events &rarr;
+                </a>
+            </div>
+
+            {# Interval update form #}
+            <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/interval" class="flex items-end gap-2 pt-2 border-t dark:border-border border-border-light">
+                <label class="flex flex-col gap-1">
+                    <span class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Interval (hours)</span>
+                    <input type="number" name="interval_hours" value="{{ s.interval_hours|default(24) }}" min="1" max="168" required
+                           class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-2 py-1 text-xs dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none w-20">
+                </label>
+                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1 text-xs transition-colors">Update</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

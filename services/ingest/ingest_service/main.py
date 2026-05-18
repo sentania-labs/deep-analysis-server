@@ -83,6 +83,7 @@ async def upload(
     file: UploadFile = File(...),
     original_filename: str | None = Form(default=None),
     content_type: ContentType = Form(default=ContentType.MATCH_LOG),
+    file_mtime: float | None = Form(default=None),
     agent: AuthenticatedAgent = Depends(get_current_agent),
     db: AsyncSession = Depends(get_session),
 ) -> UploadResponse:
@@ -169,6 +170,8 @@ async def upload(
             "uploaded_at": now.isoformat(),
             "content_type": content_type.value,
         }
+        if file_mtime is not None:
+            payload["file_mtime"] = file_mtime
         try:
             publisher = await _get_publisher()
             await publisher.publish(FILE_INGESTED, dict(payload))

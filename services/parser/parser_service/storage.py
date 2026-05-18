@@ -13,7 +13,7 @@ from pathlib import Path
 # Match-log uploads land as ``.dat`` per ingest's content-type → ext map,
 # even when the actual payload is a plaintext MTGO log. We try the
 # recorded path first, then fall back to common alternatives.
-_FALLBACK_EXTS = (".dat", ".log", ".txt", ".bin")
+_FALLBACK_EXTS = (".dat", ".log", ".txt", ".xml", ".bin")
 
 
 class RawFileNotFoundError(FileNotFoundError):

@@ -1,6 +1,6 @@
 """SQLAlchemy models for the parser service.
 
-Three tables in the ``parser`` schema:
+Tables in the ``parser`` schema:
 
 - ``matches`` — one row per parsed match. Carries match metadata
   (format, event, players, result) plus attribution to the source
@@ -9,6 +9,8 @@ Three tables in the ``parser`` schema:
 - ``game_states`` — one row per turn snapshot per game. JSONB columns
   hold the per-player zone contents, life totals, mana pool, and the
   stack at the start of that turn.
+- ``deck_compositions`` — one row per parsed MTGO grouping XML file.
+- ``deck_composition_items`` — individual card entries within a deck.
 
 Cross-schema columns (``sha256``, ``user_id``) are stored as plain
 columns rather than foreign keys: parser is built from the root
@@ -28,6 +30,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -70,6 +73,12 @@ class Match(Base):
     played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    hero_player_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deck_composition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
@@ -127,4 +136,204 @@ class GameState(Base):
             "game_id", "turn_number", "active_player", name="uq_game_states_game_turn"
         ),
         Index("ix_game_states_game_id", "game_id"),
+    )
+
+
+class GameEventRow(Base):
+    """Discrete game action — the event-stream complement to zone snapshots.
+
+    Each row captures a single verb (cast, play, draw, discard, etc.)
+    preserving information that is lost when actions are folded into
+    accumulated zone lists.  ``seq`` orders events within a game.
+    """
+
+    __tablename__ = "game_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    verb: Mapped[str] = mapped_column(Text, nullable=False)
+    card_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    player: Mapped[str] = mapped_column(Text, nullable=False)
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_card: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "seq", name="uq_game_events_game_seq"),
+        Index("ix_game_events_game_id", "game_id"),
+        Index("ix_game_events_game_id_turn", "game_id", "turn_number"),
+    )
+
+
+class GamePlayer(Base):
+    """Per-game player row with hero/opponent identification.
+
+    Denormalises the hero resolution that was previously done at query
+    time.  ``is_local`` is ``True`` for the hero (uploader), ``False``
+    for the opponent, or ``None`` when identification failed.
+    ``on_play`` indicates whether *this* player chose to play first.
+    ``mulligan_count`` is ``7 - opening_hand_size`` (0 for a full hand).
+    """
+
+    __tablename__ = "game_players"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    player_name: Mapped[str] = mapped_column(Text, nullable=False)
+    is_local: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    on_play: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    mulligan_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "player_name", name="uq_game_players_game_player"),
+        Index("ix_game_players_game_id", "game_id"),
+    )
+
+
+class MatchArchetype(Base):
+    """Per-player archetype classification for a match.
+
+    Captures both hero and opponent archetype assignments with
+    confidence scores.  The hero-side archetype is also written to
+    ``matches.archetype_id`` for backward compatibility.
+    """
+
+    __tablename__ = "match_archetypes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    match_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.matches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    player_name: Mapped[str] = mapped_column(Text, nullable=False)
+    archetype_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "player_name", name="uq_match_archetypes_match_player"),
+        Index("ix_match_archetypes_match_id", "match_id"),
+        Index("ix_match_archetypes_archetype_id", "archetype_id"),
+    )
+
+
+class DeckComposition(Base):
+    """Parsed MTGO grouping XML file — one row per deck/wishlist/binder.
+
+    Content-addressed via ``sha256`` (references ``ingest.game_log_files``).
+    Only ``grouping_type='Deck'`` rows are linked to matches.
+    """
+
+    __tablename__ = "deck_compositions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    deck_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    net_deck_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grouping_type: Mapped[str] = mapped_column(Text, nullable=False)
+    format_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deck_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    file_mtime: Mapped[float | None] = mapped_column(Float, nullable=True)
+    version_number: Mapped[int | None] = mapped_column(Integer, nullable=True, server_default="1")
+    parsed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sha256", "user_id", name="uq_deck_compositions_sha256_user"),
+        Index("ix_deck_compositions_user_id", "user_id"),
+        Index("ix_deck_compositions_format_code", "format_code"),
+    )
+
+
+class DeckCompositionItem(Base):
+    """Individual card entry within a deck composition.
+
+    ``mtgo_id`` is the MTGO CatId.  ``card_name`` is resolved from
+    ``catalog.cards`` at parse time and may be ``None`` if the CatId
+    is not in the catalog.
+    """
+
+    __tablename__ = "deck_composition_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    deck_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    mtgo_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_sideboard: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    card_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_deck_composition_items_deck_id", "deck_id"),
+        Index("ix_deck_composition_items_mtgo_id", "mtgo_id"),
+    )
+
+
+class DeckVersionLink(Base):
+    """Version chain entry linking sequential uploads of the same deck.
+
+    Tracks the diff (cards added/removed) between consecutive versions
+    of a logical deck identity.  ``deck_identity`` is ``net_deck_id``
+    when available, otherwise ``"<name>::<format_code>"``.
+    """
+
+    __tablename__ = "deck_version_links"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    deck_identity: Mapped[str] = mapped_column(Text, nullable=False)
+    deck_composition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_composition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cards_added: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    cards_removed: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "deck_identity",
+            "version_number",
+            name="uq_deck_version_links_user_identity_version",
+        ),
+        Index("ix_deck_version_links_user_identity", "user_id", "deck_identity"),
+        Index("ix_deck_version_links_composition_id", "deck_composition_id"),
     )

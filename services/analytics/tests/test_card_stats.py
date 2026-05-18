@@ -99,6 +99,11 @@ class _FakeResult:
             return None
         return self._rows[0][0] if isinstance(self._rows[0], tuple) else self._rows[0]
 
+    def scalar_one(self) -> Any:
+        if not self._rows:
+            raise ValueError("No rows")
+        return self._rows[0][0] if isinstance(self._rows[0], tuple) else self._rows[0]
+
 
 class _FakeSession:
     """Returns canned row sets in queue order."""
@@ -135,7 +140,7 @@ def _patch_card_loader(
     async def fake_loader(
         _db: Any,
         _user_id: int,
-        _mtgo_usernames: Any,
+        _hero_name: str | None,
         card_name: str | None = None,
         format_filter: str | None = None,
         opponent: str | None = None,
@@ -152,17 +157,30 @@ def _patch_card_loader(
     monkeypatch.setattr(_cs, "_load_card_appearances_auto", fake_loader)
 
 
-def _patch_mtgo_usernames(
+def _patch_hero_name(
     monkeypatch: pytest.MonkeyPatch,
-    usernames: list[str] | None,
+    hero_name: str | None,
 ) -> None:
-    """Monkeypatch _load_mtgo_usernames in card_stats."""
+    """Monkeypatch _resolve_hero_name in card_stats."""
     from analytics_service import card_stats as _cs
 
-    async def fake_loader(_db: Any, _user_id: int) -> list[str] | None:
-        return usernames
+    async def fake_resolver(_db: Any, _user_id: int) -> str | None:
+        return hero_name
 
-    monkeypatch.setattr(_cs, "_load_mtgo_usernames", fake_loader)
+    monkeypatch.setattr(_cs, "_resolve_hero_name", fake_resolver)
+
+
+def _patch_has_card_game_stats(
+    monkeypatch: pytest.MonkeyPatch,
+    value: bool = False,
+) -> None:
+    """Monkeypatch _has_card_game_stats to return a fixed value."""
+    from analytics_service import card_stats as _cs
+
+    async def fake_check(_db: Any, _user_id: int) -> bool:
+        return value
+
+    monkeypatch.setattr(_cs, "_has_card_game_stats", fake_check)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +197,8 @@ async def test_card_stats_empty(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, [])
 
     # Still need a fake session for the catalog.cards query (won't be called since no agg)
@@ -206,6 +225,8 @@ async def test_card_stats_aggregates(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
+    _patch_has_card_game_stats(monkeypatch, False)
+
     g1 = uuid.uuid4()
     g2 = uuid.uuid4()
 
@@ -218,6 +239,7 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -226,6 +248,7 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Mountain",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g2,
@@ -234,9 +257,10 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 5,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     # Fake session only needed for the catalog.cards metadata query
@@ -279,6 +303,8 @@ async def test_card_stats_pagination(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
+    _patch_has_card_game_stats(monkeypatch, False)
+
     g1 = uuid.uuid4()
 
     appearances = [
@@ -289,6 +315,7 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card A",
             "first_turn": 2,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -297,6 +324,7 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card B",
             "first_turn": 2,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -305,9 +333,10 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card C",
             "first_turn": 2,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     # catalog.cards — none found
@@ -341,6 +370,8 @@ async def test_card_detail(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
+    _patch_has_card_game_stats(monkeypatch, False)
+
     g1 = uuid.uuid4()
     g2 = uuid.uuid4()
 
@@ -352,6 +383,7 @@ async def test_card_detail(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g2,
@@ -360,9 +392,10 @@ async def test_card_detail(
             "format": "Pioneer",
             "card_name": "Lightning Bolt",
             "first_turn": 5,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     session = _FakeSession(queue=[])
@@ -381,6 +414,8 @@ async def test_card_detail(
     assert body["win_rate"] == 50.0
     assert body["avg_cast_turn"] == 4.0
     assert len(body["by_format"]) == 2
+    # Legacy path returns empty by_game_number
+    assert body["by_game_number"] == []
 
 
 @pytest.mark.asyncio
@@ -392,7 +427,8 @@ async def test_card_detail_not_found(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, [])
 
     session = _FakeSession(queue=[])
@@ -526,3 +562,137 @@ async def test_card_stats_unauth_returns_401(app_client: httpx.AsyncClient) -> N
 async def test_game_turns_unauth_returns_401(app_client: httpx.AsyncClient) -> None:
     r = await app_client.get(f"/analytics/stats/matches/{uuid.uuid4()}/games/1/turns")
     assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Standout cards endpoint tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_standout_cards_no_materialized_data(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Returns empty standouts when no card_game_stats exist."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, False)
+
+    session = _FakeSession(queue=[])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/standout-cards")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["top_performer"] is None
+    assert body["most_cast"] is None
+    assert body["most_seen"] is None
+
+
+@pytest.mark.asyncio
+async def test_standout_cards_response_shape(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When materialized data exists, the standout response has the right shape."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, True)
+
+    # The endpoint issues three SQL queries (top_performer, most_cast, most_seen).
+    # Each returns one row.
+    session = _FakeSession(
+        queue=[
+            # top performer: (card_name, total_games, wins)
+            [("Lightning Bolt", 25, 18)],
+            # most cast: (card_name, total_cast, total_games)
+            [("Brainstorm", 150, 80)],
+            # most seen: (card_name, total_seen, total_games)
+            [("Force of Will", 200, 95)],
+        ]
+    )
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/standout-cards")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["top_performer"]["name"] == "Lightning Bolt"
+    assert body["top_performer"]["total_games"] == 25
+    assert body["most_cast"]["name"] == "Brainstorm"
+    assert body["most_cast"]["value"] == 150.0
+    assert body["most_seen"]["name"] == "Force of Will"
+    assert body["most_seen"]["value"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_standout_cards_unauth_returns_401(app_client: httpx.AsyncClient) -> None:
+    r = await app_client.get("/analytics/stats/standout-cards")
+    assert r.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# G1/G2/G3 split logic in card detail
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_card_detail_by_game_number(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Card detail response includes by_game_number breakdown with
+    materialized data."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, True)
+
+    # Queries issued by get_card_detail with materialized path:
+    # 1. _card_stats_from_materialized → aggregated card stats
+    # 2. format breakdown
+    # 3. game number breakdown
+    session = _FakeSession(
+        queue=[
+            # _card_stats_from_materialized:
+            # (card_name, total_games, wins, total_cast, total_seen, total_played)
+            [("Lightning Bolt", 30, 18, 45, 60, 0)],
+            # format breakdown: (format, total, wins)
+            [("Modern", 25, 15), ("Legacy", 5, 3)],
+            # game number breakdown: (game_number, total_games, wins, total_cast)
+            [(1, 15, 9, 22), (2, 10, 6, 15), (3, 5, 3, 8)],
+        ]
+    )
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/cards/Lightning Bolt")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Lightning Bolt"
+    assert body["total_games"] == 30
+    assert body["wins"] == 18
+    assert body["win_rate"] == 60.0
+    assert len(body["by_format"]) == 2
+    assert body["by_format"][0]["format"] == "Modern"
+    assert len(body["by_game_number"]) == 3
+    assert body["by_game_number"][0]["game_number"] == 1
+    assert body["by_game_number"][0]["total_games"] == 15
+    assert body["by_game_number"][0]["win_rate"] == 60.0
+    assert body["by_game_number"][2]["game_number"] == 3

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 class ContentType(StrEnum):
     MATCH_LOG = "match-log"
     DECKLIST = "decklist"
+    REFERENCE_DATA = "reference-data"
     UNKNOWN = "unknown"
 
 

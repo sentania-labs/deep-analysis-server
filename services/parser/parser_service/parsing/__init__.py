@@ -8,6 +8,7 @@ log formats are supported via :class:`MTGODatStrategy` and
 """
 
 from parser_service.parsing.models import (
+    GameEvent,
     ManaPool,
     ParsedGame,
     ParsedMatch,
@@ -24,6 +25,7 @@ from parser_service.parsing.parser import (
 )
 
 __all__ = [
+    "GameEvent",
     "LogFormatStrategy",
     "LogParser",
     "MTGODatStrategy",
