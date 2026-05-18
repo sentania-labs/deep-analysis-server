@@ -115,7 +115,17 @@ def upgrade() -> None:
     # (May already be granted by 021; idempotent.)
     op.execute("GRANT SELECT ON catalog.cards TO deep_analysis_parser;")
     # Parser needs SELECT on ingest.user_uploads to look up original_filename.
-    op.execute("GRANT SELECT ON ingest.user_uploads TO deep_analysis_parser;")
+    # The table is created by the ingest service's own alembic chain, which
+    # runs after the root chain in CI.  Use IF EXISTS so this is a no-op when
+    # the table hasn't been created yet; compose-smoke (and production) will
+    # re-apply via the ingest-migrate container's grants.
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'ingest' AND table_name = 'user_uploads') THEN "
+        "EXECUTE 'GRANT SELECT ON ingest.user_uploads TO deep_analysis_parser'; "
+        "END IF; END $$;"
+    )
 
 
 def downgrade() -> None:
