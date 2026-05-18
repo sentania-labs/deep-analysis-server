@@ -5,14 +5,12 @@ holds no parser tables — see CLAUDE.md design decision #2). All endpoints
 filter by ``user_id`` from the verified JWT and return empty data
 gracefully when the user has no matches yet.
 
-The "user perspective" within a match is currently inferred from
-``match.players[0]`` — MTGO logs are uploaded by one of the two players
-and the parser's player-ordering convention puts the uploader-side
-account first. If the upstream parser ever changes that convention,
-this module is the only consumer that needs to be updated.
-
 v0.9.4: Query patterns rewritten to push filtering, pagination, and
 aggregation to SQL instead of loading all matches into Python.
+
+v0.9.6: Hero identification moved to parse time. ``_classify_match``
+now uses ``hero_player_name`` from the match row instead of
+re-resolving via ``auth.users.mtgo_usernames`` at query time.
 """
 
 from __future__ import annotations
@@ -98,23 +96,17 @@ class OpponentStat(BaseModel):
 def _classify_match(
     players: list[Any] | None,
     game_wins_by_player: dict[str, int],
-    mtgo_usernames: list[str] | None = None,
+    hero_player_name: str | None = None,
 ) -> tuple[str, str | None, int, int]:
     """Return (result, opponent, player_wins, player_losses).
 
-    If ``mtgo_usernames`` is provided, the user is identified by
-    matching against the player list. Falls back to ``players[0]``
-    when no username matches.
+    ``hero_player_name`` is the pre-resolved hero from
+    ``parser.matches.hero_player_name`` (set at parse time).
+    Falls back to ``players[0]`` when not available.
     """
     if not players:
         return "", None, 0, 0
-    user: str | None = None
-    if mtgo_usernames:
-        names_lower = {n.lower() for n in mtgo_usernames}
-        for p in players:
-            if str(p).lower() in names_lower:
-                user = str(p)
-                break
+    user = hero_player_name
     if user is None:
         user = str(players[0])
     opponent = next((str(p) for p in players if str(p) != user), None)
@@ -131,54 +123,23 @@ def _classify_match(
     return "D", opponent, user_wins, opp_wins
 
 
-async def _load_mtgo_usernames(db: AsyncSession, user_id: int) -> list[str] | None:
-    try:
-        row = (
-            await db.execute(
-                text("SELECT mtgo_usernames FROM auth.users WHERE id = :uid"),
-                {"uid": user_id},
-            )
-        ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001
-        return None
-    if row and isinstance(row, list):
-        return row
-    return None
-
-
-def _hero_sql_expression(mtgo_usernames: list[str] | None) -> tuple[str, dict[str, Any]]:
-    """Build a SQL CASE expression to identify the hero player name.
-
-    Returns (sql_fragment, params) where the fragment can be embedded
-    in a larger query. Uses ``players[0]`` as the fallback when no
-    MTGO usernames match.
-    """
-    if not mtgo_usernames:
-        return "m.players->>0", {}
-
-    # Build a CASE that tries each known username against the players array
-    cases: list[str] = []
-    params: dict[str, Any] = {}
-    for i, name in enumerate(mtgo_usernames):
-        pkey = f"_hero_name_{i}"
-        cases.append(f"WHEN m.players ? :{pkey} THEN :{pkey}")
-        params[pkey] = name
-    return f"CASE {' '.join(cases)} ELSE m.players->>0 END", params
-
-
 async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
     """Fetch a user's matches plus per-match game-winner counts.
 
     Kept for callers that need the full match list with game-win
     breakdowns (by-opponent aggregation). For summary and by-format,
     prefer the dedicated SQL aggregation helpers.
+
+    v0.9.6: Now also returns ``hero_player_name`` from the match row,
+    eliminating the need for a separate ``auth.users`` lookup.
     """
     rows = (
         await db.execute(
             text(
                 """
                 SELECT id, format, players,
-                       COALESCE(played_at, parsed_at) AS played_at
+                       COALESCE(played_at, parsed_at) AS played_at,
+                       hero_player_name
                 FROM parser.matches
                 WHERE user_id = :user_id
                 ORDER BY COALESCE(played_at, parsed_at) DESC
@@ -208,7 +169,7 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
     for match_id, winner, n in game_rows:
         by_match.setdefault(match_id, {})[str(winner)] = int(n)
     out: list[dict[str, Any]] = []
-    for match_id, fmt, players, played_at in rows:
+    for match_id, fmt, players, played_at, hero_player_name in rows:
         out.append(
             {
                 "id": match_id,
@@ -216,6 +177,7 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
                 "players": list(players or []),
                 "played_at": played_at,
                 "wins_by_player": by_match.get(match_id, {}),
+                "hero_player_name": hero_player_name,
             }
         )
     return out
@@ -223,7 +185,6 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
 
 def _summarize(
     matches: list[dict[str, Any]],
-    mtgo_usernames: list[str] | None = None,
 ) -> StatsSummary:
     if not matches:
         return StatsSummary()
@@ -233,7 +194,7 @@ def _summarize(
         result, opponent, pw, pl = _classify_match(
             m["players"],
             m["wins_by_player"],
-            mtgo_usernames,
+            m.get("hero_player_name"),
         )
         if result == "W":
             wins += 1
@@ -277,8 +238,7 @@ async def get_summary(
         if isinstance(cached, dict):
             return StatsSummary(**cached)
     matches = await _load_user_matches(db, user.user_id)
-    names = await _load_mtgo_usernames(db, user.user_id)
-    result = _summarize(matches, names)
+    result = _summarize(matches)
     if redis_client:
         await set_cached(redis_client, ck, result.model_dump(mode="json", by_alias=True))
     return result
@@ -298,7 +258,6 @@ async def get_by_format(
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
-    names = await _load_mtgo_usernames(db, user.user_id)
     buckets: dict[str, dict[str, int]] = {}
     for m in matches:
         fmt = m["format"] or "Unknown"
@@ -307,7 +266,7 @@ async def get_by_format(
         result, _opp, _pw, _pl = _classify_match(
             m["players"],
             m["wins_by_player"],
-            names,
+            m.get("hero_player_name"),
         )
         if result == "W":
             bucket["wins"] += 1
@@ -352,13 +311,12 @@ async def get_by_opponent(
     matches = await _load_user_matches(db, user.user_id)
     if not matches:
         return []
-    names = await _load_mtgo_usernames(db, user.user_id)
     buckets: dict[str, dict[str, int]] = {}
     for m in matches:
         result, opponent, _pw, _pl = _classify_match(
             m["players"],
             m["wins_by_player"],
-            names,
+            m.get("hero_player_name"),
         )
         if not opponent:
             continue
@@ -469,9 +427,10 @@ async def list_matches(
     clauses and applies LIMIT/OFFSET at the database level. Result
     filtering (W/L/D) still happens in Python on the filtered set
     because it depends on per-match game-winner counts.
-    """
-    names = await _load_mtgo_usernames(db, user.user_id)
 
+    v0.9.6: Uses ``hero_player_name`` from the match row instead of
+    a separate ``auth.users`` lookup.
+    """
     # Build SQL WHERE dynamically for filters that can be pushed to SQL
     where = "WHERE m.user_id = :user_id"
     params: dict[str, Any] = {"user_id": user.user_id}
@@ -499,7 +458,8 @@ async def list_matches(
                 text(
                     f"""
                     SELECT m.id, m.format, m.players,
-                           COALESCE(m.played_at, m.parsed_at) AS played_at
+                           COALESCE(m.played_at, m.parsed_at) AS played_at,
+                           m.hero_player_name
                     FROM parser.matches m
                     {where}
                     ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
@@ -525,7 +485,8 @@ async def list_matches(
                 text(
                     f"""
                     SELECT m.id, m.format, m.players,
-                           COALESCE(m.played_at, m.parsed_at) AS played_at
+                           COALESCE(m.played_at, m.parsed_at) AS played_at,
+                           m.hero_player_name
                     FROM parser.matches m
                     {where}
                     ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
@@ -563,10 +524,10 @@ async def list_matches(
 
     # Classify and build items
     classified: list[MatchListItem] = []
-    for match_id, fmt, players, played_at in rows:
+    for match_id, fmt, players, played_at, hero_name in rows:
         player_list = list(players or [])
         wins_by_player = by_match.get(match_id, {})
-        r, opp, pw, pl = _classify_match(player_list, wins_by_player, names)
+        r, opp, pw, pl = _classify_match(player_list, wins_by_player, hero_name)
         classified.append(
             MatchListItem(
                 match_id=str(match_id),

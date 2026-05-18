@@ -9,9 +9,34 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from parser_service.models import Game, GameEventRow, GameState, Match
-from parser_service.parsing.models import ParsedMatch
+from parser_service.models import Game, GameEventRow, GamePlayer, GameState, Match
+from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.settings import PARSER_VERSION
+
+
+def _extract_player_names(
+    parsed_game: ParsedGame,
+    match_players: list[str],
+) -> list[str]:
+    """Determine the player names for a game.
+
+    Prefers the match-level player list (canonical names); falls back
+    to names extracted from the game's turns or opening hand sizes.
+    """
+    if match_players:
+        return list(match_players)
+    # Try opening hand sizes (dict keys are player names)
+    if parsed_game.opening_hand_sizes:
+        return list(parsed_game.opening_hand_sizes.keys())
+    # Try turns — collect unique active_player / snapshot keys
+    names: list[str] = []
+    seen: set[str] = set()
+    for turn in parsed_game.turns:
+        for pname in turn.players:
+            if pname not in seen:
+                names.append(pname)
+                seen.add(pname)
+    return names
 
 
 async def persist_match(
@@ -19,6 +44,7 @@ async def persist_match(
     parsed: ParsedMatch,
     sha256: str,
     user_id: int,
+    hero_player_name: str | None = None,
 ) -> Match:
     """Insert or update a parsed match (plus games and per-turn states).
 
@@ -27,6 +53,10 @@ async def persist_match(
     re-parses (e.g. from the backfill scanner after a parser upgrade)
     overwrite the previous row's metadata and stamp the current
     ``parsed_with_version``.
+
+    ``hero_player_name`` is the resolved MTGO username of the uploader,
+    determined by cross-referencing ``auth.users.mtgo_usernames`` with
+    the parsed player list.
     """
     now = datetime.now(UTC)
     new_id = uuid.uuid4()
@@ -43,6 +73,7 @@ async def persist_match(
         parsed_at=now,
         played_at=parsed.played_at,
         parsed_with_version=PARSER_VERSION,
+        hero_player_name=hero_player_name,
     )
     # Preserve manual format overrides during reparse: if an admin has
     # set format_source='manual', the UPSERT must keep the existing
@@ -67,6 +98,7 @@ async def persist_match(
             "parsed_at": insert_stmt.excluded.parsed_at,
             "played_at": insert_stmt.excluded.played_at,
             "parsed_with_version": insert_stmt.excluded.parsed_with_version,
+            "hero_player_name": insert_stmt.excluded.hero_player_name,
         },
     ).returning(Match.id)
 
@@ -144,6 +176,47 @@ async def persist_match(
                 },
             )
             await session.execute(ev_stmt)
+
+        # Persist game_players rows — one per player per game.
+        player_names = _extract_player_names(parsed_game, parsed.players)
+        if player_names:
+            gp_values = []
+            for pname in player_names:
+                is_local: bool | None = None
+                if hero_player_name:
+                    is_local = pname.lower() == hero_player_name.lower()
+                on_play_flag: bool | None = None
+                if parsed_game.play_first:
+                    on_play_flag = pname.lower() == parsed_game.play_first.lower()
+                mulligan_count: int | None = None
+                hand_sizes = parsed_game.opening_hand_sizes or {}
+                # Try exact match, then case-insensitive
+                if pname in hand_sizes:
+                    mulligan_count = max(0, 7 - int(hand_sizes[pname]))
+                else:
+                    for k, v in hand_sizes.items():
+                        if k.lower() == pname.lower():
+                            mulligan_count = max(0, 7 - int(v))
+                            break
+                gp_values.append(
+                    {
+                        "game_id": game.id,
+                        "player_name": pname,
+                        "is_local": is_local,
+                        "on_play": on_play_flag,
+                        "mulligan_count": mulligan_count,
+                    }
+                )
+            gp_stmt = pg_insert(GamePlayer).values(gp_values)
+            gp_stmt = gp_stmt.on_conflict_do_update(
+                constraint="uq_game_players_game_player",
+                set_={
+                    "is_local": gp_stmt.excluded.is_local,
+                    "on_play": gp_stmt.excluded.on_play,
+                    "mulligan_count": gp_stmt.excluded.mulligan_count,
+                },
+            )
+            await session.execute(gp_stmt)
 
     await session.commit()
     match = (await session.execute(select(Match).where(Match.id == match_id))).scalar_one()

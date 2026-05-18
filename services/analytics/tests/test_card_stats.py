@@ -135,7 +135,7 @@ def _patch_card_loader(
     async def fake_loader(
         _db: Any,
         _user_id: int,
-        _mtgo_usernames: Any,
+        _hero_name: str | None,
         card_name: str | None = None,
         format_filter: str | None = None,
         opponent: str | None = None,
@@ -152,17 +152,17 @@ def _patch_card_loader(
     monkeypatch.setattr(_cs, "_load_card_appearances_auto", fake_loader)
 
 
-def _patch_mtgo_usernames(
+def _patch_hero_name(
     monkeypatch: pytest.MonkeyPatch,
-    usernames: list[str] | None,
+    hero_name: str | None,
 ) -> None:
-    """Monkeypatch _load_mtgo_usernames in card_stats."""
+    """Monkeypatch _resolve_hero_name in card_stats."""
     from analytics_service import card_stats as _cs
 
-    async def fake_loader(_db: Any, _user_id: int) -> list[str] | None:
-        return usernames
+    async def fake_resolver(_db: Any, _user_id: int) -> str | None:
+        return hero_name
 
-    monkeypatch.setattr(_cs, "_load_mtgo_usernames", fake_loader)
+    monkeypatch.setattr(_cs, "_resolve_hero_name", fake_resolver)
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,7 @@ async def test_card_stats_empty(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, [])
 
     # Still need a fake session for the catalog.cards query (won't be called since no agg)
@@ -218,6 +218,7 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -226,6 +227,7 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Mountain",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g2,
@@ -234,9 +236,10 @@ async def test_card_stats_aggregates(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 5,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     # Fake session only needed for the catalog.cards metadata query
@@ -289,6 +292,7 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card A",
             "first_turn": 2,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -297,6 +301,7 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card B",
             "first_turn": 2,
+            "hero": "alice",
         },
         {
             "game_id": g1,
@@ -305,9 +310,10 @@ async def test_card_stats_pagination(
             "format": "Modern",
             "card_name": "Card C",
             "first_turn": 2,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     # catalog.cards — none found
@@ -352,6 +358,7 @@ async def test_card_detail(
             "format": "Modern",
             "card_name": "Lightning Bolt",
             "first_turn": 3,
+            "hero": "alice",
         },
         {
             "game_id": g2,
@@ -360,9 +367,10 @@ async def test_card_detail(
             "format": "Pioneer",
             "card_name": "Lightning Bolt",
             "first_turn": 5,
+            "hero": "alice",
         },
     ]
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, appearances)
 
     session = _FakeSession(queue=[])
@@ -392,7 +400,7 @@ async def test_card_detail_not_found(
     from analytics_service import deps as _deps
     from analytics_service import main as _main
 
-    _patch_mtgo_usernames(monkeypatch, ["alice"])
+    _patch_hero_name(monkeypatch, "alice")
     _patch_card_loader(monkeypatch, [])
 
     session = _FakeSession(queue=[])

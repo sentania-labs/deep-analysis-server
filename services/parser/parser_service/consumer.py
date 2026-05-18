@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import redis.asyncio as redis
+from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
@@ -74,6 +75,46 @@ class ParserConsumer:
         finally:
             await pubsub.unsubscribe(FILE_INGESTED)
             await pubsub.aclose()
+
+    async def _resolve_hero(
+        self, user_id: int, players: list[str],
+    ) -> str | None:
+        """Look up the uploader's MTGO usernames and match against
+        the parsed player list to identify the hero.
+
+        Returns the matching player name from the parsed list, or
+        ``None`` if no match is found (falls back to ``players[0]``
+        in that case).
+        """
+        if not players:
+            return None
+        try:
+            async with self._sessionmaker() as session:
+                row = (
+                    await session.execute(
+                        sa_text(
+                            "SELECT mtgo_usernames FROM auth.users WHERE id = :uid"
+                        ),
+                        {"uid": user_id},
+                    )
+                ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001
+            _log.debug("failed to load mtgo_usernames for user_id=%s", user_id)
+            return str(players[0]) if players else None
+
+        mtgo_usernames: list[str] | None = None
+        if row and isinstance(row, list):
+            mtgo_usernames = row
+
+        if mtgo_usernames:
+            names_lower = {n.lower() for n in mtgo_usernames}
+            for p in players:
+                if str(p).lower() in names_lower:
+                    return str(p)
+
+        # Fallback: first player in the list (parser convention puts
+        # the uploader-side account first).
+        return str(players[0])
 
     async def _iter_messages(self, pubsub: Any) -> AsyncIterator[dict[str, Any]]:
         while not self._stop_event.is_set():
@@ -139,9 +180,15 @@ class ParserConsumer:
             _log.warning("parsed log is empty sha=%s user_id=%s", sha256, user_id)
             return parsed
 
+        # Resolve the hero player name from auth.users.mtgo_usernames.
+        hero_player_name = await self._resolve_hero(user_id, parsed.players)
+
         async with self._sessionmaker() as session:
             try:
-                match = await persist_match(session, parsed, sha256, user_id)
+                match = await persist_match(
+                    session, parsed, sha256, user_id,
+                    hero_player_name=hero_player_name,
+                )
             except Exception:
                 _log.exception("persist failed sha=%s user_id=%s", sha256, user_id)
                 await session.rollback()

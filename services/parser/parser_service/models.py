@@ -70,6 +70,7 @@ class Match(Base):
     played_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    hero_player_name: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
@@ -157,4 +158,33 @@ class GameEventRow(Base):
         UniqueConstraint("game_id", "seq", name="uq_game_events_game_seq"),
         Index("ix_game_events_game_id", "game_id"),
         Index("ix_game_events_game_id_turn", "game_id", "turn_number"),
+    )
+
+
+class GamePlayer(Base):
+    """Per-game player row with hero/opponent identification.
+
+    Denormalises the hero resolution that was previously done at query
+    time.  ``is_local`` is ``True`` for the hero (uploader), ``False``
+    for the opponent, or ``None`` when identification failed.
+    ``on_play`` indicates whether *this* player chose to play first.
+    ``mulligan_count`` is ``7 - opening_hand_size`` (0 for a full hand).
+    """
+
+    __tablename__ = "game_players"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    game_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    player_name: Mapped[str] = mapped_column(Text, nullable=False)
+    is_local: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    on_play: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    mulligan_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "player_name", name="uq_game_players_game_player"),
+        Index("ix_game_players_game_id", "game_id"),
     )

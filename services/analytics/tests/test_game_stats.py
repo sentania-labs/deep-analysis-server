@@ -3,6 +3,10 @@
 Overrides ``get_session`` with a fake session that returns prefab rows,
 and ``require_user`` with a fake user dep. Tests exercise the handler
 aggregation logic without a live Postgres.
+
+v0.9.6: Updated to include ``hero`` column (index 8) in fake game rows,
+matching the new ``_load_games_with_context`` query that JOINs
+``parser.game_players``.
 """
 
 from __future__ import annotations
@@ -111,6 +115,7 @@ def _game_row(
     players: list | None = None,
     fmt: str = "Modern",
     game_id: Any | None = None,
+    hero: str = "alice",
 ) -> tuple:
     return (
         game_number,
@@ -121,6 +126,7 @@ def _game_row(
         players or ["alice", "bob"],
         fmt,
         game_id or uuid.uuid4(),
+        hero,
     )
 
 
@@ -135,8 +141,7 @@ async def test_play_draw_empty(
 
     session = _FakeSession(
         queue=[
-            [],  # games query
-            [],  # mtgo_usernames query
+            [],  # games query (no separate mtgo_usernames needed in v0.9.6)
         ]
     )
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -160,14 +165,12 @@ async def test_play_draw_splits(app_client: httpx.AsyncClient) -> None:
 
     session = _FakeSession(
         queue=[
-            # games: alice on play wins, alice on draw loses, alice on play loses
+            # games (hero resolved via game_players JOIN in v0.9.6)
             [
                 _game_row(1, "alice", True),
                 _game_row(2, "bob", False),
                 _game_row(1, "bob", True),
             ],
-            # mtgo_usernames
-            [(["alice"],)],
         ]
     )
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -200,14 +203,12 @@ async def test_preboard_postboard(app_client: httpx.AsyncClient) -> None:
 
     session = _FakeSession(
         queue=[
-            # games: game 1 win, game 2 loss, game 3 win
+            # games (hero resolved via game_players JOIN in v0.9.6)
             [
                 _game_row(1, "alice", True),
                 _game_row(2, "bob", False),
                 _game_row(3, "alice", True),
             ],
-            # mtgo_usernames
-            [(["alice"],)],
         ]
     )
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -245,8 +246,6 @@ async def test_mulligans(app_client: httpx.AsyncClient) -> None:
                 _game_row(2, "bob", False, opening_hand_sizes={"alice": 6, "bob": 7}),
                 _game_row(1, "alice", True, opening_hand_sizes={"alice": 7, "bob": 6}),
             ],
-            # mtgo_usernames
-            [(["alice"],)],
         ]
     )
     _main.app.dependency_overrides[_deps.require_user] = _override_user()
@@ -287,13 +286,11 @@ async def test_game_length_buckets(app_client: httpx.AsyncClient) -> None:
 
     session = _FakeSession(
         queue=[
-            # mtgo_usernames
-            [(["alice"],)],
-            # game-length query: (game_id, winner, players, max_turn)
+            # game-length query: (game_id, winner, players, max_turn, hero)
             [
-                (g1, "alice", ["alice", "bob"], 5),
-                (g2, "bob", ["alice", "bob"], 11),
-                (g3, "alice", ["alice", "bob"], 14),
+                (g1, "alice", ["alice", "bob"], 5, "alice"),
+                (g2, "bob", ["alice", "bob"], 11, "alice"),
+                (g3, "alice", ["alice", "bob"], 14, "alice"),
             ],
         ]
     )
