@@ -1,6 +1,6 @@
 """SQLAlchemy models for the parser service.
 
-Three tables in the ``parser`` schema:
+Tables in the ``parser`` schema:
 
 - ``matches`` — one row per parsed match. Carries match metadata
   (format, event, players, result) plus attribution to the source
@@ -9,6 +9,8 @@ Three tables in the ``parser`` schema:
 - ``game_states`` — one row per turn snapshot per game. JSONB columns
   hold the per-player zone contents, life totals, mana pool, and the
   stack at the start of that turn.
+- ``deck_compositions`` — one row per parsed MTGO grouping XML file.
+- ``deck_composition_items`` — individual card entries within a deck.
 
 Cross-schema columns (``sha256``, ``user_id``) are stored as plain
 columns rather than foreign keys: parser is built from the root
@@ -72,6 +74,11 @@ class Match(Base):
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     hero_player_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deck_composition_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
@@ -218,4 +225,69 @@ class MatchArchetype(Base):
         UniqueConstraint("match_id", "player_name", name="uq_match_archetypes_match_player"),
         Index("ix_match_archetypes_match_id", "match_id"),
         Index("ix_match_archetypes_archetype_id", "archetype_id"),
+    )
+
+
+class DeckComposition(Base):
+    """Parsed MTGO grouping XML file — one row per deck/wishlist/binder.
+
+    Content-addressed via ``sha256`` (references ``ingest.game_log_files``).
+    Only ``grouping_type='Deck'`` rows are linked to matches.
+    """
+
+    __tablename__ = "deck_compositions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    deck_uuid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    net_deck_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grouping_type: Mapped[str] = mapped_column(Text, nullable=False)
+    format_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deck_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    parsed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("sha256", "user_id", name="uq_deck_compositions_sha256_user"),
+        Index("ix_deck_compositions_user_id", "user_id"),
+        Index("ix_deck_compositions_format_code", "format_code"),
+    )
+
+
+class DeckCompositionItem(Base):
+    """Individual card entry within a deck composition.
+
+    ``mtgo_id`` is the MTGO CatId.  ``card_name`` is resolved from
+    ``catalog.cards`` at parse time and may be ``None`` if the CatId
+    is not in the catalog.
+    """
+
+    __tablename__ = "deck_composition_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    deck_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.deck_compositions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    mtgo_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_sideboard: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    card_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_deck_composition_items_deck_id", "deck_id"),
+        Index("ix_deck_composition_items_mtgo_id", "mtgo_id"),
     )

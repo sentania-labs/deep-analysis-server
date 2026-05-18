@@ -1,7 +1,12 @@
-"""Persist a :class:`ParsedMatch` to the parser schema."""
+"""Persist parsed data to the parser schema.
+
+Handles both :class:`ParsedMatch` (match logs) and
+:class:`ParsedGrouping` (grouping XML deck compositions).
+"""
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -9,9 +14,20 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from parser_service.models import Game, GameEventRow, GamePlayer, GameState, Match
+from parser_service.models import (
+    DeckComposition,
+    DeckCompositionItem,
+    Game,
+    GameEventRow,
+    GamePlayer,
+    GameState,
+    Match,
+)
+from parser_service.parsing.grouping_parser import ParsedGrouping, extract_deck_uuid
 from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.settings import PARSER_VERSION
+
+_log = logging.getLogger("parser.persistence")
 
 
 def _extract_player_names(
@@ -221,3 +237,181 @@ async def persist_match(
     await session.commit()
     match = (await session.execute(select(Match).where(Match.id == match_id))).scalar_one()
     return match
+
+
+# ---------------------------------------------------------------------------
+# Deck composition persistence
+# ---------------------------------------------------------------------------
+
+# MTGO format code → system format string
+FORMAT_CODE_MAP: dict[str, str] = {
+    "CLEGACY": "Legacy",
+    "CMODERN": "Modern",
+    "CVINTAGE": "Vintage",
+    "CPAUPER": "Pauper",
+    "CPIONEER": "Pioneer",
+    "CSTANDARD": "Standard",
+}
+
+
+async def resolve_mtgo_ids(
+    session: AsyncSession,
+    mtgo_ids: list[int],
+) -> dict[int, str]:
+    """Resolve MTGO catalog IDs to card names via ``catalog.cards``.
+
+    Returns a mapping of mtgo_id → card name for all IDs that exist
+    in the catalog.  Missing IDs are silently omitted.
+    """
+    if not mtgo_ids:
+        return {}
+    try:
+        rows = (
+            await session.execute(
+                text("SELECT mtgo_id, name FROM catalog.cards WHERE mtgo_id = ANY(:ids)"),
+                {"ids": mtgo_ids},
+            )
+        ).all()
+        return {int(r[0]): str(r[1]) for r in rows}
+    except Exception:  # noqa: BLE001
+        _log.debug("catalog.cards mtgo_id lookup failed; proceeding without card names")
+        return {}
+
+
+async def persist_deck_composition(
+    session: AsyncSession,
+    parsed: ParsedGrouping,
+    sha256: str,
+    user_id: int,
+    original_filename: str | None = None,
+) -> DeckComposition:
+    """Insert or update a parsed deck composition with its items.
+
+    Idempotent on ``(sha256, user_id)`` — re-uploads overwrite the
+    previous row's metadata.  CatId → card_name resolution is done
+    here via ``catalog.cards.mtgo_id``.
+    """
+    now = datetime.now(UTC)
+    deck_uuid = extract_deck_uuid(original_filename)
+
+    new_id = uuid.uuid4()
+    insert_stmt = pg_insert(DeckComposition).values(
+        id=new_id,
+        sha256=sha256,
+        user_id=user_id,
+        deck_uuid=deck_uuid,
+        net_deck_id=parsed.net_deck_id,
+        name=parsed.name,
+        grouping_type=parsed.grouping_type,
+        format_code=parsed.format_code,
+        deck_timestamp=parsed.deck_timestamp,
+        parsed_at=now,
+    )
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        constraint="uq_deck_compositions_sha256_user",
+        set_={
+            "deck_uuid": insert_stmt.excluded.deck_uuid,
+            "net_deck_id": insert_stmt.excluded.net_deck_id,
+            "name": insert_stmt.excluded.name,
+            "grouping_type": insert_stmt.excluded.grouping_type,
+            "format_code": insert_stmt.excluded.format_code,
+            "deck_timestamp": insert_stmt.excluded.deck_timestamp,
+            "parsed_at": insert_stmt.excluded.parsed_at,
+        },
+    ).returning(DeckComposition.id)
+
+    deck_id = (await session.execute(upsert_stmt)).scalar_one()
+
+    # If this was an upsert (re-upload), clear stale items before re-inserting.
+    is_reparse = deck_id != new_id
+    if is_reparse:
+        await session.execute(
+            delete(DeckCompositionItem).where(DeckCompositionItem.deck_id == deck_id),
+        )
+
+    # Resolve CatId → card_name in bulk.
+    mtgo_ids = [item.cat_id for item in parsed.items]
+    name_map = await resolve_mtgo_ids(session, mtgo_ids)
+
+    if parsed.items:
+        item_values = [
+            {
+                "deck_id": deck_id,
+                "mtgo_id": item.cat_id,
+                "quantity": item.quantity,
+                "is_sideboard": item.is_sideboard,
+                "card_name": name_map.get(item.cat_id),
+            }
+            for item in parsed.items
+        ]
+        await session.execute(pg_insert(DeckCompositionItem).values(item_values))
+
+    await session.commit()
+    deck = (
+        await session.execute(
+            select(DeckComposition).where(DeckComposition.id == deck_id),
+        )
+    ).scalar_one()
+    return deck
+
+
+async def link_deck_to_match(
+    session: AsyncSession,
+    match_id: uuid.UUID,
+    user_id: int,
+    match_format: str | None,
+) -> uuid.UUID | None:
+    """Best-effort: find the most likely deck composition for a match.
+
+    Links by user, format, and ``grouping_type='Deck'``.  When
+    multiple candidates exist, picks the one with the most recent
+    ``deck_timestamp`` (the most recently saved version of the deck).
+
+    Returns the linked ``deck_composition_id`` or ``None``.
+    """
+    if not match_format:
+        return None
+
+    # Reverse-map system format → MTGO format codes.
+    reverse_map: dict[str, list[str]] = {}
+    for code, fmt in FORMAT_CODE_MAP.items():
+        reverse_map.setdefault(fmt, []).append(code)
+
+    format_codes = reverse_map.get(match_format)
+    if not format_codes:
+        return None
+
+    try:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT id FROM parser.deck_compositions "
+                    "WHERE user_id = :uid "
+                    "  AND grouping_type = 'Deck' "
+                    "  AND format_code = ANY(:codes) "
+                    "ORDER BY deck_timestamp DESC NULLS LAST, parsed_at DESC "
+                    "LIMIT 1"
+                ),
+                {"uid": user_id, "codes": format_codes},
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        _log.debug("deck-to-match link query failed match_id=%s", match_id)
+        return None
+
+    if row is None:
+        return None
+
+    deck_comp_id = row
+    try:
+        await session.execute(
+            text("UPDATE parser.matches SET deck_composition_id = :did WHERE id = :mid"),
+            {"did": deck_comp_id, "mid": match_id},
+        )
+        await session.commit()
+    except Exception:  # noqa: BLE001
+        _log.debug("failed to write deck_composition_id on match %s", match_id)
+        await session.rollback()
+        return None
+
+    return deck_comp_id
