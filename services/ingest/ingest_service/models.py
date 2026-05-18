@@ -52,7 +52,7 @@ class GameLogFile(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "content_type IN ('match-log', 'decklist', 'unknown')",
+            "content_type IN ('match-log', 'decklist', 'reference-data', 'unknown')",
             name="ck_game_log_files_content_type",
         ),
         CheckConstraint(

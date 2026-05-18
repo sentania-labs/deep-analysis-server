@@ -475,6 +475,8 @@ async def _link_deck_version(
     ).scalar_one_or_none()
 
     if prev_link_row is not None:
+        if prev_link_row.deck_composition_id == deck_id:
+            return
         next_version = prev_link_row.version_number + 1
         prev_comp_id = prev_link_row.deck_composition_id
     else:
