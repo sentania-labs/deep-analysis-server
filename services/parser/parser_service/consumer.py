@@ -26,12 +26,14 @@ from typing import Any
 
 import redis.asyncio as redis
 from sqlalchemy import text as sa_text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
 from common.format_inference import collect_card_names, infer_format_for_match
 from common.redis_client import EventPublisher
 from parser_service import analytics_client
+from parser_service.models import MatchArchetype
 from parser_service.parsing import LogParser, ParsedMatch
 from parser_service.persistence import persist_match
 from parser_service.settings import get_settings as get_parser_settings
@@ -211,20 +213,70 @@ class ParserConsumer:
                     _log.debug("format inference failed sha=%s", sha256)
 
             # Archetype classification — best-effort, never fails the parse.
+            # Classify BOTH sides (hero + opponent) and write MatchArchetype rows.
             try:
-                if not card_names:
-                    card_names = collect_card_names(parsed)
-                if card_names:
-                    settings = get_parser_settings()
-                    archetype_id = await analytics_client.classify(
-                        settings.analytics_service_url,
-                        card_names,
+                settings = get_parser_settings()
+                if settings.analytics_service_url:
+                    hero_cards, opponent_cards = _collect_cards_by_side(
+                        parsed, hero_player_name,
                     )
-                    if archetype_id and match.archetype_id != archetype_id:
-                        match.archetype_id = archetype_id
-                        await session.commit()
+                    if not hero_cards:
+                        # Fallback: use the old battlefield-scan method
+                        hero_cards = card_names or collect_card_names(parsed)
+
+                    # Classify hero side
+                    hero_result = await analytics_client.classify_with_confidence(
+                        settings.analytics_service_url, hero_cards,
+                    ) if hero_cards else None
+
+                    # Classify opponent side
+                    opp_result = await analytics_client.classify_with_confidence(
+                        settings.analytics_service_url, opponent_cards,
+                    ) if opponent_cards else None
+
+                    # Write MatchArchetype rows
+                    ma_values: list[dict[str, Any]] = []
+                    if hero_player_name and hero_result:
+                        ma_values.append({
+                            "match_id": match.id,
+                            "player_name": hero_player_name,
+                            "archetype_id": hero_result.archetype_id,
+                            "confidence": hero_result.confidence,
+                        })
+                    # Find opponent name
+                    opponent_name = _get_opponent_name(parsed.players, hero_player_name)
+                    if opponent_name and opp_result:
+                        ma_values.append({
+                            "match_id": match.id,
+                            "player_name": opponent_name,
+                            "archetype_id": opp_result.archetype_id,
+                            "confidence": opp_result.confidence,
+                        })
+                    if ma_values:
+                        ma_stmt = pg_insert(MatchArchetype).values(ma_values)
+                        ma_stmt = ma_stmt.on_conflict_do_update(
+                            constraint="uq_match_archetypes_match_player",
+                            set_={
+                                "archetype_id": ma_stmt.excluded.archetype_id,
+                                "confidence": ma_stmt.excluded.confidence,
+                            },
+                        )
+                        await session.execute(ma_stmt)
+
+                    # Backward compat: keep match.archetype_id = hero-side result
+                    if hero_result and match.archetype_id != hero_result.archetype_id:
+                        match.archetype_id = hero_result.archetype_id
+                    await session.commit()
             except Exception:  # noqa: BLE001
                 _log.debug("archetype classification failed sha=%s", sha256)
+
+            # Card game stats materialization — best-effort.
+            try:
+                await _materialize_card_game_stats(session, match, parsed, hero_player_name)
+                await session.commit()
+            except Exception:  # noqa: BLE001
+                _log.debug("card_game_stats materialization failed sha=%s", sha256)
+                await session.rollback()
 
         out: MatchParsedPayload = {
             "match_id": str(match.id),
@@ -245,3 +297,204 @@ class ParserConsumer:
             parsed.game_count,
         )
         return parsed
+
+
+# ---------------------------------------------------------------------------
+# Helpers — card collection per side, card_game_stats materialization
+# ---------------------------------------------------------------------------
+
+
+def _collect_cards_by_side(
+    parsed: ParsedMatch,
+    hero_player_name: str | None,
+) -> tuple[list[str], list[str]]:
+    """Collect unique card names for hero and opponent from game events.
+
+    Returns (hero_cards, opponent_cards) as sorted lists.
+    """
+    hero_cards: set[str] = set()
+    opp_cards: set[str] = set()
+    for game in parsed.games:
+        for evt in game.events:
+            if evt.card_name is None:
+                continue
+            if hero_player_name and evt.player.lower() == hero_player_name.lower():
+                hero_cards.add(evt.card_name)
+            else:
+                opp_cards.add(evt.card_name)
+    return sorted(hero_cards), sorted(opp_cards)
+
+
+def _get_opponent_name(
+    players: list[str],
+    hero_player_name: str | None,
+) -> str | None:
+    """Return the opponent's name from the player list."""
+    if not hero_player_name or not players:
+        return None
+    hero_lower = hero_player_name.lower()
+    for p in players:
+        if p.lower() != hero_lower:
+            return p
+    return None
+
+
+async def _materialize_card_game_stats(
+    session: Any,
+    match: Any,
+    parsed: ParsedMatch,
+    hero_player_name: str | None,
+) -> None:
+    """Write card_game_stats rows from game events.
+
+    One row per (game_id, card_name, is_local). Aggregates seen/cast/played
+    counts from game_events, resolves oracle_id from catalog.cards, and
+    records win/loss from the game winner and game_players.
+
+    Uses raw SQL INSERT ... ON CONFLICT for performance and to target the
+    ``analytics`` schema (the parser ORM's metadata is bound to ``parser``).
+    """
+    if not parsed.games:
+        return
+
+    # Pre-fetch oracle_id lookup: card_name → oracle_id
+    all_card_names: set[str] = set()
+    for game in parsed.games:
+        for evt in game.events:
+            if evt.card_name:
+                all_card_names.add(evt.card_name)
+    if not all_card_names:
+        return
+
+    oracle_map: dict[str, str | None] = {}
+    try:
+        rows = (
+            await session.execute(
+                sa_text(
+                    "SELECT name, oracle_id FROM catalog.cards WHERE name = ANY(:names)"
+                ),
+                {"names": sorted(all_card_names)},
+            )
+        ).all()
+        for name, oid in rows:
+            oracle_map[str(name)] = str(oid) if oid else None
+    except Exception:  # noqa: BLE001
+        _log.debug("oracle_id lookup failed; proceeding without oracle_ids")
+
+    # Build per-game game_id mapping from persistence. We need the actual
+    # game UUIDs from the DB. Query them by match_id + game_number.
+    game_id_rows = (
+        await session.execute(
+            sa_text(
+                "SELECT game_number, id FROM parser.games WHERE match_id = :mid"
+            ),
+            {"mid": match.id},
+        )
+    ).all()
+    game_id_map: dict[int, str] = {int(r[0]): str(r[1]) for r in game_id_rows}
+
+    # Build game_players is_local map: game_id → {player_name_lower: is_local}
+    gp_rows = (
+        await session.execute(
+            sa_text(
+                "SELECT gp.game_id, gp.player_name, gp.is_local "
+                "FROM parser.game_players gp "
+                "JOIN parser.games g ON g.id = gp.game_id "
+                "WHERE g.match_id = :mid"
+            ),
+            {"mid": match.id},
+        )
+    ).all()
+    is_local_map: dict[str, dict[str, bool | None]] = {}
+    for gid, pname, is_local in gp_rows:
+        gid_str = str(gid)
+        if gid_str not in is_local_map:
+            is_local_map[gid_str] = {}
+        is_local_map[gid_str][str(pname).lower()] = is_local
+
+    # Delete existing card_game_stats for this match (reparse support).
+    await session.execute(
+        sa_text("DELETE FROM analytics.card_game_stats WHERE match_id = :mid"),
+        {"mid": match.id},
+    )
+
+    insert_values: list[dict[str, Any]] = []
+
+    for parsed_game in parsed.games:
+        game_id = game_id_map.get(parsed_game.game_number)
+        if not game_id:
+            continue
+
+        # Aggregate events by (card_name, player)
+        card_player_agg: dict[tuple[str, str], dict[str, int]] = {}
+        for evt in parsed_game.events:
+            if evt.card_name is None:
+                continue
+            key = (evt.card_name, evt.player)
+            agg = card_player_agg.setdefault(key, {"seen": 0, "cast": 0, "played": 0})
+            agg["seen"] += 1
+            if evt.verb == "cast":
+                agg["cast"] += 1
+            elif evt.verb == "play":
+                agg["played"] += 1
+
+        is_postboard = parsed_game.game_number > 1
+        game_winner = parsed_game.winner
+
+        # Get the is_local map for this game
+        gp_local = is_local_map.get(game_id, {})
+
+        for (card_name, player), counts in card_player_agg.items():
+            # Determine is_local from game_players
+            is_local_val = gp_local.get(player.lower())
+            if is_local_val is None:
+                # Fallback: compare to hero_player_name
+                if hero_player_name:
+                    is_local_val = player.lower() == hero_player_name.lower()
+                else:
+                    is_local_val = False  # default to opponent if unknown
+
+            # Determine won
+            won: bool | None = None
+            if game_winner:
+                player_won = game_winner.lower() == player.lower()
+                won = player_won if is_local_val else not player_won
+                # won is from the local (hero) perspective:
+                # if is_local and player won → won=True
+                # if not is_local and player won → won=False (hero lost)
+                won = player_won == is_local_val if is_local_val is not None else None
+
+            oracle_id = oracle_map.get(card_name)
+
+            insert_values.append({
+                "match_id": str(match.id),
+                "game_id": game_id,
+                "oracle_id": oracle_id,
+                "card_name": card_name,
+                "is_local": is_local_val,
+                "seen": counts["seen"],
+                "cast": counts["cast"],
+                "played": counts["played"],
+                "is_postboard": is_postboard,
+                "won": won,
+                "quantity": counts["seen"],
+                "game_number": parsed_game.game_number,
+            })
+
+    if insert_values:
+        # Batch insert using raw SQL for cross-schema write.
+        for row in insert_values:
+            await session.execute(
+                sa_text(
+                    "INSERT INTO analytics.card_game_stats "
+                    "(match_id, game_id, oracle_id, card_name, is_local, "
+                    " seen, cast, played, is_postboard, won, quantity, game_number) "
+                    "VALUES (:match_id, :game_id, :oracle_id::uuid, :card_name, :is_local, "
+                    " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number) "
+                    "ON CONFLICT (game_id, card_name, is_local) DO UPDATE SET "
+                    " seen = EXCLUDED.seen, cast = EXCLUDED.cast, played = EXCLUDED.played, "
+                    " won = EXCLUDED.won, quantity = EXCLUDED.quantity, "
+                    " oracle_id = EXCLUDED.oracle_id"
+                ),
+                row,
+            )

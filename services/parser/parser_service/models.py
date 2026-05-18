@@ -28,6 +28,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -187,4 +188,34 @@ class GamePlayer(Base):
     __table_args__ = (
         UniqueConstraint("game_id", "player_name", name="uq_game_players_game_player"),
         Index("ix_game_players_game_id", "game_id"),
+    )
+
+
+class MatchArchetype(Base):
+    """Per-player archetype classification for a match.
+
+    Captures both hero and opponent archetype assignments with
+    confidence scores.  The hero-side archetype is also written to
+    ``matches.archetype_id`` for backward compatibility.
+    """
+
+    __tablename__ = "match_archetypes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    match_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("parser.matches.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    player_name: Mapped[str] = mapped_column(Text, nullable=False)
+    archetype_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "player_name", name="uq_match_archetypes_match_player"),
+        Index("ix_match_archetypes_match_id", "match_id"),
+        Index("ix_match_archetypes_archetype_id", "archetype_id"),
     )
