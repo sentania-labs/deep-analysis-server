@@ -21,6 +21,7 @@ from ingest_service.schemas import ContentType
 _EXT_BY_CONTENT_TYPE: dict[str, str] = {
     ContentType.MATCH_LOG.value: ".dat",
     ContentType.DECKLIST.value: ".xml",
+    ContentType.REFERENCE_DATA.value: ".xml",
     ContentType.UNKNOWN.value: ".bin",
 }
 
