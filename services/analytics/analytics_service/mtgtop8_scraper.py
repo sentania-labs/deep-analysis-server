@@ -652,23 +652,7 @@ async def store_event(
     event_data: dict[str, Any],
     results: list[dict[str, Any]],
 ) -> int:
-    """Insert event + per-player results. Returns count of results stored.
-
-    If *results* is empty the event is **not** inserted — an event row
-    with ``scraped_at`` set but zero result rows looks like a successful
-    scrape in the admin UI ("scraped" status, "no results available")
-    when it actually means extraction failed.
-    """
-    if not results:
-        _log.warning(
-            "mtgtop8 store_event: skipping event with zero results "
-            "(extraction likely failed)",
-            extra={
-                "event_url": event_data.get("event_url"),
-                "event_name": event_data.get("event_name"),
-            },
-        )
-        return 0
+    """Insert event + per-player results. Returns count of results stored."""
     event_id = (
         await session.execute(
             _INSERT_EVENT_SQL,
@@ -694,7 +678,8 @@ async def store_event(
         }
         for r in results
     ]
-    await session.execute(_INSERT_RESULT_SQL, rows)
+    if rows:
+        await session.execute(_INSERT_RESULT_SQL, rows)
     return len(rows)
 
 
@@ -821,7 +806,7 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
                                 )
 
                         stored = await store_event(session, event_data, decklists)
-                        if stored > 0:
+                        if stored > 0 or decklists:
                             result.events_new += 1
                             result.results_stored += stored
                     except asyncio.CancelledError:

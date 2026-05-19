@@ -343,7 +343,7 @@ def _extract_decklists_strategy_mtgo_js_data(
 
 def _decklists_from_mtgo_js(entries: list[Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for idx, entry in enumerate(entries):
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         player = entry.get("player")
@@ -370,48 +370,12 @@ def _decklists_from_mtgo_js(entries: list[Any]) -> list[dict[str, Any]]:
             is_side = str(card.get("sideboard", "false")).lower() == "true"
             target = side if is_side else main
             target[name] = target.get(name, 0) + qty
-
-        # Also check a dedicated "sideboard_deck" array — some mtgo.com
-        # payloads separate sideboards from main_deck entirely.
-        for card in entry.get("sideboard_deck") or []:
-            if not isinstance(card, dict):
-                continue
-            attrs = card.get("card_attributes")
-            if not isinstance(attrs, dict):
-                continue
-            name = attrs.get("card_name")
-            if not isinstance(name, str) or not name.strip():
-                continue
-            try:
-                qty = int(card.get("qty", 0))
-            except (TypeError, ValueError):
-                continue
-            if qty <= 0:
-                continue
-            side[name.strip()] = side.get(name.strip(), 0) + qty
-
         if not main and not side:
             continue
-
-        # Extract placement from the entry if available; fall back to
-        # 1-based list position (mtgo.com orders players by standing).
-        placement: int | None = None
-        for key in ("placement", "rank", "place", "finishing_position", "loginrank"):
-            raw = entry.get(key)
-            if raw is not None:
-                try:
-                    placement = int(raw)
-                except (TypeError, ValueError):
-                    pass
-                else:
-                    break
-        if placement is None:
-            placement = idx + 1
-
         out.append(
             {
                 "player_name": player.strip(),
-                "placement": placement,
+                "placement": None,
                 "decklist_main": main,
                 "decklist_sideboard": side,
             }
@@ -442,20 +406,9 @@ def _decklist_from_block(block: Tag) -> dict[str, Any] | None:
     side = _cards_from_section(block, kind="side")
     if not main and not side:
         return None
-    placement = _placement_from_block(block)
-    if not side:
-        _log.debug(
-            "mtgo player block: no sideboard found",
-            extra={"player": player},
-        )
-    if placement is None:
-        _log.debug(
-            "mtgo player block: no placement found",
-            extra={"player": player},
-        )
     return {
         "player_name": player,
-        "placement": placement,
+        "placement": _placement_from_block(block),
         "decklist_main": main,
         "decklist_sideboard": side,
     }
@@ -737,20 +690,7 @@ async def store_event(
     """Insert event + per-player results. Returns count of results stored.
 
     Skips entirely on conflict (already-stored ``event_url``).
-    If *results* is empty the event is **not** inserted — an event row
-    with ``scraped_at`` set but zero result rows looks like a successful
-    scrape in the admin UI when it actually means extraction failed.
     """
-    if not results:
-        _log.warning(
-            "mtgo store_event: skipping event with zero results "
-            "(extraction likely failed)",
-            extra={
-                "event_url": event_data.get("event_url"),
-                "event_name": event_data.get("event_name"),
-            },
-        )
-        return 0
     event_id = (await session.execute(_INSERT_EVENT_SQL, event_data)).scalar()
     if event_id is None:
         return 0
@@ -764,7 +704,8 @@ async def store_event(
         }
         for r in results
     ]
-    await session.execute(_INSERT_RESULT_SQL, rows)
+    if rows:
+        await session.execute(_INSERT_RESULT_SQL, rows)
     return len(rows)
 
 
@@ -950,7 +891,7 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
                         continue
                     decklists = extract_decklists_from_html(event_html, event_data["event_url"])
                     stored = await store_event(session, event_data, decklists)
-                    if stored > 0:
+                    if stored > 0 or decklists:
                         result.events_new += 1
                         result.results_stored += stored
                 await session.commit()
