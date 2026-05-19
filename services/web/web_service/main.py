@@ -3512,7 +3512,6 @@ def _render_admin_cards(
     user: BrowserUser,
     *,
     cards_status_view: dict[str, Any] | None,
-    scraper_health: dict[str, Any] | None,
     error: str | None,
     synced: bool,
     status_code: int,
@@ -3523,7 +3522,6 @@ def _render_admin_cards(
         {
             "user": user,
             "cards_status": cards_status_view,
-            "scraper_health": scraper_health,
             "error": error,
             "synced": synced,
         },
@@ -3543,7 +3541,6 @@ async def admin_cards_page(
         return blocked
 
     cards_status_view: dict[str, Any] | None = None
-    scraper_health: dict[str, Any] | None = None
     error: str | None = None
     try:
         cards_status_view = await analytics_client.admin_get_cards_status(
@@ -3572,14 +3569,13 @@ async def admin_cards_page(
 
     code = (
         status.HTTP_503_SERVICE_UNAVAILABLE
-        if error and cards_status_view is None and scraper_health is None
+        if error and cards_status_view is None
         else 200
     )
     return _render_admin_cards(
         request,
         user,
         cards_status_view=cards_status_view,
-        scraper_health=scraper_health,
         error=error,
         synced=synced == 1,
         status_code=code,

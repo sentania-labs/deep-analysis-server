@@ -1,9 +1,8 @@
 """Tests for the /admin/cards admin route.
 
 Bypasses browser auth via FastAPI dependency overrides and patches the
-analytics client. Covers admin gating, the happy path (status + scraper
-health render), the sync trigger redirect, and the analytics-outage
-banner.
+analytics client. Covers admin gating, the happy path (card-mirror status
+render), the sync trigger redirect, and the analytics-outage banner.
 """
 
 from __future__ import annotations
@@ -74,17 +73,6 @@ def _sample_status() -> dict[str, Any]:
     }
 
 
-def _sample_health(broken: bool = False) -> dict[str, Any]:
-    return {
-        "scraper_name": "mtgo",
-        "last_run_at": datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
-        "last_success_at": datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
-        "consecutive_failures": 3 if broken else 0,
-        "is_broken": broken,
-        "last_error": "boom" if broken else None,
-    }
-
-
 @pytest.mark.asyncio
 async def test_admin_cards_renders(
     app_client: httpx.AsyncClient,
@@ -97,11 +85,7 @@ async def test_admin_cards_renders(
     async def fake_status(_url: str, _token: str) -> Any:
         return _sample_status()
 
-    async def fake_health(_url: str, _token: str) -> Any:
-        return _sample_health()
-
     monkeypatch.setattr(analytics_client, "admin_get_cards_status", fake_status)
-    monkeypatch.setattr(analytics_client, "admin_get_scraper_health", fake_health)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_admin()
     try:
@@ -112,11 +96,9 @@ async def test_admin_cards_renders(
     assert r.status_code == 200
     text = r.text
     assert "31337" in text
-    assert "MTGO scraper health" in text
-    # Sync button + form present
     assert 'action="/admin/cards/sync"' in text
-    assert "OK" in text  # not broken
-    assert "Sync started" not in text  # not via ?synced=1
+    assert "Sync started" not in text
+    assert "MTGO scraper health" not in text
 
 
 @pytest.mark.asyncio
@@ -131,11 +113,7 @@ async def test_admin_cards_shows_synced_banner(
     async def fake_status(*_a: Any, **_kw: Any) -> Any:
         return _sample_status()
 
-    async def fake_health(*_a: Any, **_kw: Any) -> Any:
-        return _sample_health()
-
     monkeypatch.setattr(analytics_client, "admin_get_cards_status", fake_status)
-    monkeypatch.setattr(analytics_client, "admin_get_scraper_health", fake_health)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_admin()
     try:
@@ -159,11 +137,7 @@ async def test_admin_cards_outage_banner_when_status_unavailable(
     async def boom_status(*_a: Any, **_kw: Any) -> Any:
         raise analytics_client.AnalyticsClientError("simulated outage")
 
-    async def boom_health(*_a: Any, **_kw: Any) -> Any:
-        raise analytics_client.AnalyticsClientError("simulated outage")
-
     monkeypatch.setattr(analytics_client, "admin_get_cards_status", boom_status)
-    monkeypatch.setattr(analytics_client, "admin_get_scraper_health", boom_health)
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_admin()
     try:
@@ -171,7 +145,6 @@ async def test_admin_cards_outage_banner_when_status_unavailable(
     finally:
         _main.app.dependency_overrides.clear()
 
-    # Both panels failed → 503.
     assert r.status_code == 503
     assert "Analytics service unavailable" in r.text
 
@@ -211,8 +184,6 @@ async def test_admin_cards_sync_redirects_to_synced_marker(
 
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_admin()
     try:
-        # follow_redirects defaults to False on AsyncClient — we want
-        # to assert the redirect target itself.
         r = await app_client.post("/admin/cards/sync")
     finally:
         _main.app.dependency_overrides.clear()
