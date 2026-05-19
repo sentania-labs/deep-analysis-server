@@ -55,6 +55,9 @@ def _sample_match(
     match_id: str,
     games_won_by_uploader: int = 2,
     games_won_by_opponent: int = 1,
+    hero: str = "alice",
+    opponent: str = "bob",
+    players: list[str] | None = None,
 ) -> Any:
     from web_service import analytics_client
 
@@ -62,15 +65,16 @@ def _sample_match(
     n = 0
     for _ in range(games_won_by_uploader):
         n += 1
-        games.append(analytics_client.GameItem(game_number=n, winner="alice", turns=7))
+        games.append(analytics_client.GameItem(game_number=n, winner=hero, turns=7))
     for _ in range(games_won_by_opponent):
         n += 1
-        games.append(analytics_client.GameItem(game_number=n, winner="bob", turns=10))
+        games.append(analytics_client.GameItem(game_number=n, winner=opponent, turns=10))
     return analytics_client.MatchDetail(
         match_id=match_id,
         format_="Modern",
-        players=["alice", "bob"],
+        players=players if players is not None else [hero, opponent],
         played_at=datetime(2026, 5, 9, 12, 0, tzinfo=UTC),
+        hero_player_name=hero,
         games=games,
     )
 
@@ -137,6 +141,41 @@ async def test_match_detail_overall_loss(
 
     assert r.status_code == 200
     assert "result-loss" in r.text
+
+
+@pytest.mark.asyncio
+async def test_match_detail_uses_hero_player_name_not_players0(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: hero as players[1] must not invert W/L."""
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    match_id = str(uuid.uuid4())
+
+    async def fake_detail(_url: str, _token: str, mid: str) -> Any:
+        assert mid == match_id
+        return _sample_match(
+            match_id=match_id,
+            games_won_by_uploader=2,
+            games_won_by_opponent=1,
+            hero="alice",
+            opponent="bob",
+            players=["bob", "alice"],
+        )
+
+    monkeypatch.setattr(analytics_client, "get_match_detail", fake_detail)
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
+    try:
+        r = await app_client.get(f"/matches/{match_id}")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "result-win" in r.text
+    assert "result-loss" not in r.text
 
 
 @pytest.mark.asyncio

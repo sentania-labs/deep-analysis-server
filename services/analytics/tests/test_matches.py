@@ -121,7 +121,7 @@ async def test_match_detail_returns_match_with_games(app_client: httpx.AsyncClie
     session = _FakeSession(
         queue=[
             # match row
-            [(match_id, "Modern", "inferred", ["alice", "bob"], played_at)],
+            [(match_id, "Modern", "inferred", ["alice", "bob"], played_at, "alice")],
             # games rows: (game_id, game_number, winner, turns)
             [
                 (game_1_id, 1, "alice", 8),
@@ -141,6 +141,7 @@ async def test_match_detail_returns_match_with_games(app_client: httpx.AsyncClie
     assert body["match_id"] == str(match_id)
     assert body["format"] == "Modern"
     assert body["players"] == ["alice", "bob"]
+    assert body["hero_player_name"] == "alice"
     assert len(body["games"]) == 2
     assert body["games"][0]["game_number"] == 1
     assert body["games"][0]["winner"] == "alice"
@@ -192,7 +193,7 @@ async def test_match_detail_handles_missing_turns_gracefully(
     game_id = uuid.uuid4()
     session = _FakeSession(
         queue=[
-            [(match_id, None, None, ["alice", "bob"], None)],
+            [(match_id, None, None, ["alice", "bob"], None, None)],
             # turns column is NULL when the parser didn't store game states
             [(game_id, 1, "alice", None)],
         ]

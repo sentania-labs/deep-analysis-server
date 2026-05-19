@@ -580,6 +580,7 @@ class MatchDetail:
     format_: str | None
     players: list[str]
     played_at: datetime | None
+    hero_player_name: str | None = None
     games: list[GameItem] = field(default_factory=list)
 
 
@@ -602,6 +603,7 @@ def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
         format_=payload.get("format"),
         players=[str(p) for p in (payload.get("players") or [])],
         played_at=_parse_dt(payload.get("played_at")),
+        hero_player_name=payload.get("hero_player_name"),
         games=[_to_game(g) for g in (payload.get("games") or [])],
     )
 

@@ -973,13 +973,14 @@ async def match_detail_page(
     if match is None:
         return Response(content="Match not found.", status_code=status.HTTP_404_NOT_FOUND)
 
-    # Compute overall W/L/D from the games list using the same
-    # "uploader is players[0]" convention the dashboard uses.
+    # Compute overall W/L/D from the games list.  Use hero_player_name
+    # (resolved at parse time) to identify the uploading player.  Falls
+    # back to players[0] only when the field is not available.
     overall_result = ""
     if match.players and match.games:
-        uploader = match.players[0]
-        user_wins = sum(1 for g in match.games if g.winner == uploader)
-        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != uploader)
+        hero = match.hero_player_name or match.players[0]
+        user_wins = sum(1 for g in match.games if g.winner == hero)
+        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != hero)
         if user_wins > opp_wins:
             overall_result = "W"
         elif user_wins < opp_wins:
@@ -3512,7 +3513,6 @@ def _render_admin_cards(
     user: BrowserUser,
     *,
     cards_status_view: dict[str, Any] | None,
-    scraper_health: dict[str, Any] | None,
     error: str | None,
     synced: bool,
     status_code: int,
@@ -3523,7 +3523,6 @@ def _render_admin_cards(
         {
             "user": user,
             "cards_status": cards_status_view,
-            "scraper_health": scraper_health,
             "error": error,
             "synced": synced,
         },
@@ -3543,7 +3542,6 @@ async def admin_cards_page(
         return blocked
 
     cards_status_view: dict[str, Any] | None = None
-    scraper_health: dict[str, Any] | None = None
     error: str | None = None
     try:
         cards_status_view = await analytics_client.admin_get_cards_status(
@@ -3556,30 +3554,11 @@ async def admin_cards_page(
         _log.exception("analytics GET /admin/cards-status call failed")
         error = "Analytics service unavailable. Please try again."
 
-    try:
-        scraper_health = await analytics_client.admin_get_scraper_health(
-            settings.analytics_service_url, user.token
-        )
-    except analytics_client.AnalyticsForbidden:
-        _log.info("admin.cards.health.forbidden", extra={"user_id": user.user_id})
-        return _admin_forbidden(request, user)
-    except analytics_client.AnalyticsClientError:
-        _log.exception("analytics GET /admin/scraper-health call failed")
-        # Surface partial data — the status panel is independent of the
-        # scraper-health panel. Avoid overwriting an earlier error.
-        if error is None:
-            error = "Scraper health unavailable. Please try again."
-
-    code = (
-        status.HTTP_503_SERVICE_UNAVAILABLE
-        if error and cards_status_view is None and scraper_health is None
-        else 200
-    )
+    code = status.HTTP_503_SERVICE_UNAVAILABLE if error and cards_status_view is None else 200
     return _render_admin_cards(
         request,
         user,
         cards_status_view=cards_status_view,
-        scraper_health=scraper_health,
         error=error,
         synced=synced == 1,
         status_code=code,

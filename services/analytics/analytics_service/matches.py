@@ -53,6 +53,7 @@ class MatchDetail(BaseModel):
     format_: str | None = Field(default=None, alias="format")
     format_source: str | None = None
     players: list[str] = Field(default_factory=list)
+    hero_player_name: str | None = None
     played_at: datetime | None = None
     games: list[GameDetail] = Field(default_factory=list)
 
@@ -72,7 +73,8 @@ async def get_match(
             text(
                 """
                 SELECT id, format, format_source, players,
-                       COALESCE(played_at, parsed_at) AS played_at
+                       COALESCE(played_at, parsed_at) AS played_at,
+                       hero_player_name
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
                 """
@@ -85,7 +87,7 @@ async def get_match(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "match_not_found"},
         )
-    row_id, fmt, fmt_source, players, played_at = match_row
+    row_id, fmt, fmt_source, players, played_at, hero_name = match_row
     game_rows = (
         await db.execute(
             text(
@@ -116,6 +118,7 @@ async def get_match(
         format=fmt,
         format_source=fmt_source,
         players=[str(p) for p in raw_players],
+        hero_player_name=hero_name,
         played_at=played_at,
         games=games,
     )
