@@ -743,8 +743,7 @@ async def store_event(
     """
     if not results:
         _log.warning(
-            "mtgo store_event: skipping event with zero results "
-            "(extraction likely failed)",
+            "mtgo store_event: skipping event with zero results (extraction likely failed)",
             extra={
                 "event_url": event_data.get("event_url"),
                 "event_name": event_data.get("event_name"),

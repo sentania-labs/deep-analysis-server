@@ -661,8 +661,7 @@ async def store_event(
     """
     if not results:
         _log.warning(
-            "mtgtop8 store_event: skipping event with zero results "
-            "(extraction likely failed)",
+            "mtgtop8 store_event: skipping event with zero results (extraction likely failed)",
             extra={
                 "event_url": event_data.get("event_url"),
                 "event_name": event_data.get("event_name"),
