@@ -973,13 +973,14 @@ async def match_detail_page(
     if match is None:
         return Response(content="Match not found.", status_code=status.HTTP_404_NOT_FOUND)
 
-    # Compute overall W/L/D from the games list using the same
-    # "uploader is players[0]" convention the dashboard uses.
+    # Compute overall W/L/D from the games list.  Use hero_player_name
+    # (resolved at parse time) to identify the uploading player.  Falls
+    # back to players[0] only when the field is not available.
     overall_result = ""
     if match.players and match.games:
-        uploader = match.players[0]
-        user_wins = sum(1 for g in match.games if g.winner == uploader)
-        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != uploader)
+        hero = match.hero_player_name or match.players[0]
+        user_wins = sum(1 for g in match.games if g.winner == hero)
+        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != hero)
         if user_wins > opp_wins:
             overall_result = "W"
         elif user_wins < opp_wins:

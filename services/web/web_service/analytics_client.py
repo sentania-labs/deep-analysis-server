@@ -214,6 +214,7 @@ async def admin_delete_archetype(
 class RecentMatchItem:
     match_id: str
     played_at: datetime | None
+    hero_player_name: str | None = None
     opponent: str | None
     result: str
     format_: str | None
@@ -255,6 +256,7 @@ def _to_recent(payload: dict[str, Any]) -> RecentMatchItem:
     return RecentMatchItem(
         match_id=str(payload.get("match_id", "")),
         played_at=_parse_dt(payload.get("played_at")),
+        hero_player_name=payload.get("hero_player_name"),
         opponent=payload.get("opponent"),
         result=str(payload.get("result") or ""),
         format_=payload.get("format"),
@@ -580,6 +582,7 @@ class MatchDetail:
     format_: str | None
     players: list[str]
     played_at: datetime | None
+    hero_player_name: str | None = None
     games: list[GameItem] = field(default_factory=list)
 
 
@@ -602,6 +605,7 @@ def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
         format_=payload.get("format"),
         players=[str(p) for p in (payload.get("players") or [])],
         played_at=_parse_dt(payload.get("played_at")),
+        hero_player_name=payload.get("hero_player_name"),
         games=[_to_game(g) for g in (payload.get("games") or [])],
     )
 
@@ -651,6 +655,7 @@ async def update_match_format(base_url: str, token: str, match_id: str, format_:
 class MatchListItem:
     match_id: str
     played_at: datetime | None
+    hero_player_name: str | None = None
     opponent: str | None
     result: str
     format_: str | None
@@ -670,6 +675,7 @@ def _to_match_list_item(payload: dict[str, Any]) -> MatchListItem:
     return MatchListItem(
         match_id=str(payload.get("match_id", "")),
         played_at=_parse_dt(payload.get("played_at")),
+        hero_player_name=payload.get("hero_player_name"),
         opponent=payload.get("opponent"),
         result=str(payload.get("result") or ""),
         format_=payload.get("format"),
@@ -795,6 +801,7 @@ class AdminMatchItem:
     winner: str | None
     game_count: int
     played_at: datetime | None
+    hero_player_name: str | None = None
 
 
 @dataclass
@@ -816,6 +823,7 @@ def _to_admin_match(payload: dict[str, Any]) -> AdminMatchItem:
         winner=payload.get("winner"),
         game_count=int(payload.get("game_count") or 0),
         played_at=_parse_dt(payload.get("played_at")),
+        hero_player_name=payload.get("hero_player_name"),
     )
 
 
