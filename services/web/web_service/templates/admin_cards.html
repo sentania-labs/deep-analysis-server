@@ -16,7 +16,6 @@
     <a href="/admin/cards" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Cards</a>
     <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
     <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
-    <a href="/admin/scrapers" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Scrapers</a>
 </nav>
 
 {% if error %}
@@ -57,43 +56,4 @@
     </form>
 </div>
 
-{# MTGO scraper health #}
-<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6">
-    <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">MTGO scraper health</h2>
-    {% if scraper_health %}
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
-        <div>
-            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Last run</div>
-            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">
-                {% if scraper_health.last_run_at %}{{ scraper_health.last_run_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Never{% endif %}
-            </div>
-        </div>
-        <div>
-            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Last success</div>
-            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">
-                {% if scraper_health.last_success_at %}{{ scraper_health.last_success_at.strftime("%Y-%m-%d %H:%M UTC") }}{% else %}Never{% endif %}
-            </div>
-        </div>
-        <div>
-            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Status</div>
-            <div class="mt-0.5">
-                {% if scraper_health.is_broken %}
-                    <span class="bg-danger-muted text-danger text-xs font-medium px-2 py-0.5 rounded">Broken</span>
-                {% else %}
-                    <span class="bg-success-muted text-success text-xs font-medium px-2 py-0.5 rounded">OK</span>
-                {% endif %}
-            </div>
-        </div>
-        <div>
-            <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-0.5">Consecutive failures</div>
-            <div class="text-sm font-mono dark:text-txt-primary text-txt-primary-light">{{ scraper_health.consecutive_failures }}</div>
-        </div>
-    </div>
-    {% if scraper_health.last_error %}
-    <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Last error: {{ scraper_health.last_error }}</p>
-    {% endif %}
-    {% else %}
-        <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">Scraper health unavailable.</p>
-    {% endif %}
-</div>
 {% endblock %}

@@ -55,9 +55,10 @@
 {# ── Format Filter + Stats Panels (Alpine.js state) ── #}
 <div x-data="{ selectedFormat: null, _initialized: false }"
      x-effect="
+        var fmt = selectedFormat;
         if (!_initialized) { _initialized = true; return; }
-        if (selectedFormat) {
-            var f = encodeURIComponent(selectedFormat);
+        if (fmt) {
+            var f = encodeURIComponent(fmt);
             htmx.ajax('GET', '/dashboard/partials/play-draw?format=' + f, {target: '#play-draw-panel', swap: 'innerHTML'});
             htmx.ajax('GET', '/dashboard/partials/preboard-postboard?format=' + f, {target: '#preboard-postboard-panel', swap: 'innerHTML'});
             htmx.ajax('GET', '/dashboard/partials/mulligans?format=' + f, {target: '#mulligan-panel', swap: 'innerHTML'});
