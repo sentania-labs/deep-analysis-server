@@ -75,6 +75,7 @@ _CARD_LINE_RE = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
 class ScrapeResult:
     events_found: int = 0
     events_new: int = 0
+    events_empty: int = 0
     results_stored: int = 0
     consecutive_failures: int = 0
     is_broken: bool = False
@@ -652,7 +653,22 @@ async def store_event(
     event_data: dict[str, Any],
     results: list[dict[str, Any]],
 ) -> int:
-    """Insert event + per-player results. Returns count of results stored."""
+    """Insert event + per-player results. Returns count of results stored.
+
+    If *results* is empty the event is **not** inserted — an event row
+    with ``scraped_at`` set but zero result rows looks like a successful
+    scrape in the admin UI ("scraped" status, "no results available")
+    when it actually means extraction failed.
+    """
+    if not results:
+        _log.warning(
+            "mtgtop8 store_event: skipping event with zero results (extraction likely failed)",
+            extra={
+                "event_url": event_data.get("event_url"),
+                "event_name": event_data.get("event_name"),
+            },
+        )
+        return 0
     event_id = (
         await session.execute(
             _INSERT_EVENT_SQL,
@@ -678,8 +694,7 @@ async def store_event(
         }
         for r in results
     ]
-    if rows:
-        await session.execute(_INSERT_RESULT_SQL, rows)
+    await session.execute(_INSERT_RESULT_SQL, rows)
     return len(rows)
 
 
@@ -806,9 +821,11 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
                                 )
 
                         stored = await store_event(session, event_data, decklists)
-                        if stored > 0 or decklists:
+                        if stored > 0:
                             result.events_new += 1
                             result.results_stored += stored
+                        else:
+                            result.events_empty += 1
                     except asyncio.CancelledError:
                         raise
                     except Exception:  # noqa: BLE001
@@ -836,6 +853,29 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
             _log.warning(
                 "mtgtop8 scrape parsed zero events",
                 extra={"consecutive_failures": result.consecutive_failures},
+            )
+            return result
+
+        # If we attempted new events but every one had zero results,
+        # treat that as an extraction failure so the admin health panel
+        # surfaces the problem instead of showing a green "last success."
+        if result.events_empty > 0 and result.events_new == 0:
+            err = f"{result.events_empty} event(s) fetched but all had zero results"
+            async with sm() as session:
+                await record_health(
+                    session,
+                    SCRAPER_NAME,
+                    success=False,
+                    error=err,
+                    raw_snippet=last_html_snippet,
+                )
+                health = await get_health(session, SCRAPER_NAME)
+            result.consecutive_failures = int(health.get("consecutive_failures") or 0)
+            result.is_broken = bool(health.get("is_broken"))
+            result.error = err
+            _log.warning(
+                "mtgtop8 scrape: all event extractions empty",
+                extra={"events_empty": result.events_empty},
             )
             return result
 
