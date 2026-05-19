@@ -3554,20 +3554,6 @@ async def admin_cards_page(
         _log.exception("analytics GET /admin/cards-status call failed")
         error = "Analytics service unavailable. Please try again."
 
-    try:
-        scraper_health = await analytics_client.admin_get_scraper_health(
-            settings.analytics_service_url, user.token
-        )
-    except analytics_client.AnalyticsForbidden:
-        _log.info("admin.cards.health.forbidden", extra={"user_id": user.user_id})
-        return _admin_forbidden(request, user)
-    except analytics_client.AnalyticsClientError:
-        _log.exception("analytics GET /admin/scraper-health call failed")
-        # Surface partial data — the status panel is independent of the
-        # scraper-health panel. Avoid overwriting an earlier error.
-        if error is None:
-            error = "Scraper health unavailable. Please try again."
-
     code = (
         status.HTTP_503_SERVICE_UNAVAILABLE
         if error and cards_status_view is None
