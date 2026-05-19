@@ -158,8 +158,12 @@ async def test_match_detail_uses_hero_player_name_not_players0(
     async def fake_detail(_url: str, _token: str, mid: str) -> Any:
         assert mid == match_id
         return _sample_match(
-            match_id=match_id, games_won_by_uploader=2, games_won_by_opponent=1,
-            hero="alice", opponent="bob", players=["bob", "alice"],
+            match_id=match_id,
+            games_won_by_uploader=2,
+            games_won_by_opponent=1,
+            hero="alice",
+            opponent="bob",
+            players=["bob", "alice"],
         )
 
     monkeypatch.setattr(analytics_client, "get_match_detail", fake_detail)

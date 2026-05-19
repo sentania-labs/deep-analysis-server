@@ -3554,11 +3554,7 @@ async def admin_cards_page(
         _log.exception("analytics GET /admin/cards-status call failed")
         error = "Analytics service unavailable. Please try again."
 
-    code = (
-        status.HTTP_503_SERVICE_UNAVAILABLE
-        if error and cards_status_view is None
-        else 200
-    )
+    code = status.HTTP_503_SERVICE_UNAVAILABLE if error and cards_status_view is None else 200
     return _render_admin_cards(
         request,
         user,
