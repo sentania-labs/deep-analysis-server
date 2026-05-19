@@ -173,7 +173,9 @@ def test_extract_decklists_mtgo_js_data_sideboard_deck() -> None:
             {
                 "player": "Eve",
                 "main_deck": [_card("Lightning Bolt", 4)],
-                "sideboard_deck": [{"qty": "2", "card_attributes": {"card_name": "Smash to Smithereens"}}],
+                "sideboard_deck": [
+                    {"qty": "2", "card_attributes": {"card_name": "Smash to Smithereens"}},
+                ],
             },
         ],
     }
