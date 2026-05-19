@@ -133,9 +133,60 @@ def test_extract_decklists_mtgo_js_data() -> None:
     alice = by_player["Alice"]
     assert alice["decklist_main"] == {"Lightning Bolt": 4, "Goblin Guide": 4}
     assert alice["decklist_sideboard"] == {"Smash to Smithereens": 2}
+    # Placement inferred from list position (1-based)
+    assert alice["placement"] == 1
     bob = by_player["Bob"]
     assert bob["decklist_main"] == {"Karn Liberated": 4}
     assert bob["decklist_sideboard"] == {"Nature's Claim": 3}
+    assert bob["placement"] == 2
+
+
+def test_extract_decklists_mtgo_js_data_explicit_placement() -> None:
+    """JS payload with explicit placement fields."""
+    import json
+
+    data = {
+        "decklists": [
+            {"player": "Carol", "loginrank": 3, "main_deck": [_card("Counterspell", 4)]},
+            {"player": "Dave", "loginrank": 1, "main_deck": [_card("Dark Ritual", 4)]},
+        ],
+    }
+    html = f"""
+    <html><body><script>
+        window.MTGO = window.MTGO || {{}};
+        window.MTGO.decklists = window.MTGO.decklists || {{}};
+        window.MTGO.decklists.data = {json.dumps(data)};
+    </script></body></html>
+    """
+    decks = extract_decklists_from_html(html, "https://example.com/event")
+    by_player = {d["player_name"]: d for d in decks}
+    assert by_player["Carol"]["placement"] == 3
+    assert by_player["Dave"]["placement"] == 1
+
+
+def test_extract_decklists_mtgo_js_data_sideboard_deck() -> None:
+    """JS payload with a separate sideboard_deck array."""
+    import json
+
+    data = {
+        "decklists": [
+            {
+                "player": "Eve",
+                "main_deck": [_card("Lightning Bolt", 4)],
+                "sideboard_deck": [{"qty": "2", "card_attributes": {"card_name": "Smash to Smithereens"}}],
+            },
+        ],
+    }
+    html = f"""
+    <html><body><script>
+        window.MTGO = window.MTGO || {{}};
+        window.MTGO.decklists = window.MTGO.decklists || {{}};
+        window.MTGO.decklists.data = {json.dumps(data)};
+    </script></body></html>
+    """
+    decks = extract_decklists_from_html(html, "https://example.com/event")
+    assert len(decks) == 1
+    assert decks[0]["decklist_sideboard"] == {"Smash to Smithereens": 2}
 
 
 def test_extract_decklists_mtgo_js_data_bad_json() -> None:
