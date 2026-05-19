@@ -75,6 +75,7 @@ _CARD_LINE_RE = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
 class ScrapeResult:
     events_found: int = 0
     events_new: int = 0
+    events_empty: int = 0
     results_stored: int = 0
     consecutive_failures: int = 0
     is_broken: bool = False
@@ -823,6 +824,8 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
                         if stored > 0:
                             result.events_new += 1
                             result.results_stored += stored
+                        else:
+                            result.events_empty += 1
                     except asyncio.CancelledError:
                         raise
                     except Exception:  # noqa: BLE001
@@ -850,6 +853,29 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
             _log.warning(
                 "mtgtop8 scrape parsed zero events",
                 extra={"consecutive_failures": result.consecutive_failures},
+            )
+            return result
+
+        # If we attempted new events but every one had zero results,
+        # treat that as an extraction failure so the admin health panel
+        # surfaces the problem instead of showing a green "last success."
+        if result.events_empty > 0 and result.events_new == 0:
+            err = f"{result.events_empty} event(s) fetched but all had zero results"
+            async with sm() as session:
+                await record_health(
+                    session,
+                    SCRAPER_NAME,
+                    success=False,
+                    error=err,
+                    raw_snippet=last_html_snippet,
+                )
+                health = await get_health(session, SCRAPER_NAME)
+            result.consecutive_failures = int(health.get("consecutive_failures") or 0)
+            result.is_broken = bool(health.get("is_broken"))
+            result.error = err
+            _log.warning(
+                "mtgtop8 scrape: all event extractions empty",
+                extra={"events_empty": result.events_empty},
             )
             return result
 
