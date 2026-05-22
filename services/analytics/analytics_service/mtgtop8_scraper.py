@@ -269,33 +269,43 @@ def extract_decklists_from_event_page(html: str, event_url: str) -> list[dict[st
 def _extract_decklists_strategy_player_rows(
     soup: BeautifulSoup, event_url: str
 ) -> list[dict[str, Any]]:
-    """Primary strategy: player links in table rows on the event page.
+    """Primary strategy: player rows in the event-page div layout.
 
-    mtgtop8 event pages list players in rows with a link containing ``d=ID``.
-    Each player row has a placement and a deck archetype name. The actual
-    decklist cards are sometimes shown inline on the page.
+    mtgtop8 event pages render finisher rows as ``<div class="chosen_tr">``
+    (top finisher) and ``<div class="hover_tr">`` (everyone else) — *not*
+    real ``<tr>`` table rows. Each row has the shape::
+
+        <div class="chosen_tr"> | <div class="hover_tr">
+          <div class="S14">PLACEMENT</div>     <!-- "1", "3-4", "5-8", ... -->
+          <div>...thumbnail...</div>
+          <div style="flex:1;">
+            <div class="S14"><a href="?e=…&d=…">DECK_ARCHETYPE</a></div>
+            <div class="G11"><a class="player" href="search?player=…">PLAYER</a></div>
+          </div>
+        </div>
     """
     out: list[dict[str, Any]] = []
     seen_players: set[str] = set()
 
-    # Look for rows with deck links
-    for anchor in soup.find_all("a", href=_DECK_HREF_RE):
-        if not isinstance(anchor, Tag):
+    rows = soup.find_all("div", class_=re.compile(r"^(chosen_tr|hover_tr)$"))
+    for row in rows:
+        if not isinstance(row, Tag):
             continue
 
-        # Extract player info from surrounding context
-        parent_row = anchor.find_parent("tr")
-        if not isinstance(parent_row, Tag):
+        # Each row has two deck anchors with the same href: a thumbnail
+        # (image, no text) and a text label. Pick the first one with text.
+        deck_name: str | None = None
+        for candidate in row.find_all("a", href=_DECK_HREF_RE):
+            if not isinstance(candidate, Tag):
+                continue
+            text_val = candidate.get_text(strip=True)
+            if text_val:
+                deck_name = text_val
+                break
+        player_anchor = row.find("a", class_="player")
+        if not isinstance(player_anchor, Tag):
             continue
-
-        cells = parent_row.find_all("td")
-        if len(cells) < 2:
-            continue
-
-        deck_name = anchor.get_text(strip=True) or None
-
-        # Player name: look for a separate text element in the row
-        player_name = _extract_player_name(cells, anchor)
+        player_name = player_anchor.get_text(strip=True)
         if not player_name:
             continue
 
@@ -304,7 +314,7 @@ def _extract_decklists_strategy_player_rows(
             continue
         seen_players.add(dedup_key)
 
-        placement = _extract_placement(cells)
+        placement = _placement_from_row(row)
 
         out.append(
             {
@@ -317,6 +327,29 @@ def _extract_decklists_strategy_player_rows(
         )
 
     return out
+
+
+def _placement_from_row(row: Tag) -> int | None:
+    """Pull the leading placement int from a finisher row.
+
+    mtgtop8 prints placement as ``"1"``, ``"3-4"``, ``"5-8"``, ``"9-16"``,
+    etc. We collapse ranges to the top finishing position (3 for "3-4").
+    """
+    # The first <div class="S14"> in the row holds the placement;
+    # fall back to any leading "N" / "N-M" text in the row.
+    placement_div = row.find("div", class_="S14")
+    if isinstance(placement_div, Tag):
+        match = _PLACEMENT_RE.match(placement_div.get_text(strip=True))
+        if match:
+            value = int(match.group(1))
+            if 1 <= value <= 999:
+                return value
+    match = _PLACEMENT_RE.match(row.get_text(" ", strip=True))
+    if match:
+        value = int(match.group(1))
+        if 1 <= value <= 999:
+            return value
+    return None
 
 
 def _extract_decklists_strategy_deck_blocks(
@@ -388,28 +421,36 @@ def _extract_cards_from_detail(soup: BeautifulSoup) -> tuple[dict[str, int], dic
     side: dict[str, int] = {}
     in_sideboard = False
 
-    # Strategy 1: look for card name spans with quantity divs
-    # mtgtop8 uses a structure where card quantities and names appear
-    # in adjacent elements
-    card_containers = soup.find_all(
-        "div", attrs={"class": re.compile(r"(deck_line|G\d)", re.IGNORECASE)}
-    )
-    if card_containers:
-        for container in card_containers:
-            if not isinstance(container, Tag):
-                continue
-            text_content = container.get_text(" ", strip=True)
-            # Check for sideboard header
-            if re.search(r"sideboard", text_content, re.IGNORECASE) and len(text_content) < 30:
-                in_sideboard = True
-                continue
-            match = _CARD_LINE_RE.match(text_content)
-            if match:
-                qty = int(match.group(1))
-                name = match.group(2).strip()
-                if qty > 0 and name:
-                    target = side if in_sideboard else main
-                    target[name] = target.get(name, 0) + qty
+    # Strategy 1: walk the deck-column container in document order so the
+    # SIDEBOARD section header (a sibling ``<div class="O14">SIDEBOARD</div>``,
+    # not a deck_line) flips the in_sideboard flag for everything after it.
+    deck_columns = _find_deck_column_parents(soup)
+    if deck_columns:
+        for column in deck_columns:
+            # Reset per column so a SIDEBOARD header in an earlier column
+            # doesn't leak the flag into the next column's main-deck cards.
+            in_sideboard = False
+            for elem in column.find_all("div", recursive=True):
+                if not isinstance(elem, Tag):
+                    continue
+                raw_classes: str | list[str] = elem.get("class") or []
+                classes = raw_classes if isinstance(raw_classes, list) else [raw_classes]
+                text_content = elem.get_text(" ", strip=True)
+                # Section header (LANDS / CREATURES / SIDEBOARD / …) lives
+                # in <div class="O14">. Only "SIDEBOARD" flips the board flag.
+                if "O14" in classes:
+                    if re.search(r"sideboard", text_content, re.IGNORECASE):
+                        in_sideboard = True
+                    continue
+                if "deck_line" not in classes:
+                    continue
+                match = _CARD_LINE_RE.match(text_content)
+                if match:
+                    qty = int(match.group(1))
+                    name = match.group(2).strip()
+                    if qty > 0 and name:
+                        target = side if in_sideboard else main
+                        target[name] = target.get(name, 0) + qty
         if main or side:
             return main, side
 
@@ -434,6 +475,33 @@ def _extract_cards_from_detail(soup: BeautifulSoup) -> tuple[dict[str, int], dic
                 target[name] = target.get(name, 0) + qty
 
     return main, side
+
+
+def _find_deck_column_parents(soup: BeautifulSoup) -> list[Tag]:
+    """Return the smallest containers that hold both deck_line cards and
+    the SIDEBOARD section header.
+
+    mtgtop8 deck pages render mainboard + sideboard inside a single flex
+    column. Walking that column in document order lets the SIDEBOARD
+    header act as a separator. We pick the narrowest ancestor so adjacent
+    page chrome (sidebar, related decks) doesn't bleed in.
+    """
+    deck_lines = soup.find_all("div", class_="deck_line")
+    if not deck_lines:
+        return []
+    columns: list[Tag] = []
+    seen: set[int] = set()
+    for deck_line in deck_lines:
+        if not isinstance(deck_line, Tag):
+            continue
+        parent = deck_line.parent
+        if not isinstance(parent, Tag):
+            continue
+        if id(parent) in seen:
+            continue
+        seen.add(id(parent))
+        columns.append(parent)
+    return columns
 
 
 def _looks_like_non_card(name: str) -> bool:
@@ -490,43 +558,6 @@ def _extract_player_from_block(block: Tag) -> str | None:
             text_blob = heading.get_text(strip=True)
             if text_blob and len(text_blob) < 60:
                 return text_blob
-    return None
-
-
-def _extract_player_name(cells: list[Tag], deck_anchor: Tag) -> str | None:
-    """Extract player name from table cells adjacent to the deck link."""
-    for cell in cells:
-        if not isinstance(cell, Tag):
-            continue
-        # Skip the cell that contains the deck link itself
-        if cell.find("a", href=_DECK_HREF_RE):
-            continue
-        text_blob = cell.get_text(strip=True)
-        if not text_blob:
-            continue
-        # Skip cells that are purely numeric (placement, player count)
-        if text_blob.isdigit():
-            continue
-        # Skip very short or date-like cells
-        if len(text_blob) < 2 or _DATE_RE.match(text_blob):
-            continue
-        return text_blob
-    return None
-
-
-def _extract_placement(cells: list[Tag]) -> int | None:
-    """Extract placement from a row's first numeric cell."""
-    for cell in cells:
-        if not isinstance(cell, Tag):
-            continue
-        text_blob = cell.get_text(strip=True)
-        if not text_blob:
-            continue
-        match = _PLACEMENT_RE.match(text_blob)
-        if match:
-            value = int(match.group(1))
-            if 1 <= value <= 999:
-                return value
     return None
 
 
