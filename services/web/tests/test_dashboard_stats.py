@@ -341,3 +341,193 @@ async def test_dashboard_admin_redirects_to_admin_users(
 
     assert r.status_code == 302
     assert r.headers["location"] == "/admin/users"
+
+
+# ---------------------------------------------------------------------------
+# Format filter (#70)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dashboard_format_filter_threads_through(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``?format=Modern`` is forwarded to the per-dimension analytics calls."""
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_summary(_url: str, _token: str) -> Any:
+        return _sample_summary(total=7)
+
+    async def fake_format(_url: str, _token: str) -> Any:
+        return _sample_format_stats()
+
+    async def fake_play_draw(_url: str, _token: str, **kw: Any) -> Any:
+        captured["play_draw"] = kw.get("format_filter")
+        return analytics_client.PlayDrawStats(
+            on_play_matches=4,
+            on_play_wins=3,
+            on_play_win_rate=75.0,
+            on_draw_matches=1,
+            on_draw_wins=0,
+            on_draw_win_rate=0.0,
+        )
+
+    async def fake_preboard(_url: str, _token: str, **kw: Any) -> Any:
+        captured["preboard"] = kw.get("format_filter")
+        return analytics_client.PreboardPostboardStats(
+            game1_matches=5,
+            game1_wins=3,
+            game1_win_rate=60.0,
+            games23_matches=4,
+            games23_wins=2,
+            games23_win_rate=50.0,
+        )
+
+    async def fake_mulligan(_url: str, _token: str, **kw: Any) -> Any:
+        captured["mulligan"] = kw.get("format_filter")
+        return analytics_client.MulliganStats(buckets=[])
+
+    async def fake_card_stats(_url: str, _token: str, **kw: Any) -> Any:
+        captured["card_stats"] = kw.get("format_filter")
+        return analytics_client.CardStatsResponse(cards=[], total=0, page=1, per_page=10)
+
+    monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
+    monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", fake_play_draw)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", fake_preboard)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", fake_mulligan)
+    monkeypatch.setattr(analytics_client, "get_card_stats", fake_card_stats)
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
+    try:
+        r = await app_client.get("/dashboard?format=Modern")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # Every filterable dimension received the format.
+    assert captured["play_draw"] == "Modern"
+    assert captured["preboard"] == "Modern"
+    assert captured["mulligan"] == "Modern"
+    assert captured["card_stats"] == "Modern"
+    # Filtered view exposes a Clear filter affordance back to /dashboard.
+    assert "Clear filter" in r.text
+    assert 'href="/dashboard"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_format_filter_overrides_headline_numbers(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headline cards reflect the selected format's row when filtered."""
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_summary(_url: str, _token: str) -> Any:
+        # Overall: 7 matches, 4-2-1, win rate 66.7%.
+        return _sample_summary(total=7)
+
+    async def fake_format(_url: str, _token: str) -> Any:
+        return [
+            analytics_client.FormatStatItem(
+                format_="Modern",
+                matches=5,
+                wins=3,
+                losses=2,
+                draws=0,
+                win_rate=60.0,
+            ),
+            analytics_client.FormatStatItem(
+                format_="Legacy",
+                matches=2,
+                wins=1,
+                losses=0,
+                draws=1,
+                win_rate=100.0,
+            ),
+        ]
+
+    async def fake_play_draw(_url: str, _token: str, **_kw: Any) -> Any:
+        return analytics_client.PlayDrawStats(
+            on_play_matches=3,
+            on_play_wins=2,
+            on_play_win_rate=66.7,
+            on_draw_matches=2,
+            on_draw_wins=1,
+            on_draw_win_rate=50.0,
+        )
+
+    async def fake_none(*_a: Any, **_kw: Any) -> Any:
+        raise analytics_client.AnalyticsClientError("not needed")
+
+    monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
+    monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", fake_play_draw)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_card_stats", fake_none)
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
+    try:
+        r = await app_client.get("/dashboard?format=Modern")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # Modern row (60.0%) replaces the overall 66.7% in the headline card.
+    assert "60.0%" in r.text
+    # Selected-state highlight class is present on the active row.
+    assert 'data-format="Modern"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_unfiltered_has_no_clear_link(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``?format=``, no Clear filter affordance is rendered."""
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_summary(_url: str, _token: str) -> Any:
+        return _sample_summary(total=7)
+
+    async def fake_format(_url: str, _token: str) -> Any:
+        return _sample_format_stats()
+
+    async def fake_play_draw(_url: str, _token: str, **_kw: Any) -> Any:
+        return analytics_client.PlayDrawStats(
+            on_play_matches=3,
+            on_play_wins=2,
+            on_play_win_rate=66.7,
+            on_draw_matches=2,
+            on_draw_wins=1,
+            on_draw_win_rate=50.0,
+        )
+
+    async def fake_none(*_a: Any, **_kw: Any) -> Any:
+        raise analytics_client.AnalyticsClientError("not needed")
+
+    monkeypatch.setattr(analytics_client, "get_stats_summary", fake_summary)
+    monkeypatch.setattr(analytics_client, "get_stats_by_format", fake_format)
+    monkeypatch.setattr(analytics_client, "get_play_draw_stats", fake_play_draw)
+    monkeypatch.setattr(analytics_client, "get_preboard_postboard_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_mulligan_stats", fake_none)
+    monkeypatch.setattr(analytics_client, "get_card_stats", fake_none)
+
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
+    try:
+        r = await app_client.get("/dashboard")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert "Clear filter" not in r.text
