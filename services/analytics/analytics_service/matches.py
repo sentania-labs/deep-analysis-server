@@ -77,6 +77,7 @@ async def get_match(
                        hero_player_name
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
+                  AND review_status IS NULL
                 """
             ),
             {"match_id": match_id, "user_id": user.user_id},
@@ -143,6 +144,7 @@ async def update_match_format(
             UPDATE parser.matches
                SET format = :format, format_source = 'user'
              WHERE id = :match_id AND user_id = :user_id
+               AND review_status IS NULL
             """
         ),
         {"format": key.title(), "match_id": match_id, "user_id": user.user_id},

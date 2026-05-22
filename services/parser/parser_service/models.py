@@ -29,6 +29,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -76,6 +77,13 @@ class Match(Base):
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     hero_player_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Holding-pen state for inconclusive parses. NULL = normal,
+    # user-visible. ``'pending_review'`` = parse came in without a
+    # match winner or any per-game winner; hidden from users and
+    # analytics until an admin accepts (back to NULL) or rejects.
+    # ``'rejected'`` = admin discarded; permanently hidden. The DB
+    # CHECK constraint (alembic 025) enforces the allowed values.
+    review_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     deck_composition_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),
@@ -98,6 +106,15 @@ class Match(Base):
         Index("ix_matches_user_id_parsed_at", "user_id", "parsed_at"),
         Index("ix_matches_sha256", "sha256"),
         Index("ix_matches_raw_match_id", "raw_match_id"),
+        Index(
+            "ix_matches_review_status",
+            "review_status",
+            postgresql_where=text("review_status IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "review_status IS NULL OR review_status IN ('pending_review', 'rejected')",
+            name="ck_matches_review_status_valid",
+        ),
     )
 
 

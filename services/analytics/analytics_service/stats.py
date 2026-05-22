@@ -142,6 +142,7 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
                        hero_player_name
                 FROM parser.matches
                 WHERE user_id = :user_id
+                  AND review_status IS NULL
                 ORDER BY COALESCE(played_at, parsed_at) DESC
                 """
             ),
@@ -371,6 +372,7 @@ async def get_username_suggestion(
                 FROM parser.matches m
                 CROSS JOIN LATERAL jsonb_array_elements_text(m.players) AS pname
                 WHERE m.user_id = :user_id
+                  AND m.review_status IS NULL
                 GROUP BY pname
                 ORDER BY n DESC
                 LIMIT 5
@@ -431,8 +433,10 @@ async def list_matches(
     v0.9.6: Uses ``hero_player_name`` from the match row instead of
     a separate ``auth.users`` lookup.
     """
-    # Build SQL WHERE dynamically for filters that can be pushed to SQL
-    where = "WHERE m.user_id = :user_id"
+    # Build SQL WHERE dynamically for filters that can be pushed to SQL.
+    # ``review_status IS NULL`` keeps holding-pen rows out of the
+    # user-facing list — admins see them via /analytics/admin/matches.
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user.user_id}
 
     if format and format.lower() != "all":

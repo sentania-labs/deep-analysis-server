@@ -128,6 +128,7 @@ async def _insert_new_match(
     user_id: int,
     raw_match_id: str | None,
     hero_player_name: str | None,
+    review_status: str | None,
     now: datetime,
 ) -> uuid.UUID:
     """Insert a fresh ``matches`` row and return its id."""
@@ -146,6 +147,7 @@ async def _insert_new_match(
         played_at=parsed.played_at,
         parsed_with_version=PARSER_VERSION,
         hero_player_name=hero_player_name,
+        review_status=review_status,
     )
     session.add(match)
     # Flush surfaces unique-violation collisions to the caller without
@@ -162,6 +164,8 @@ async def _update_match_row(
     raw_match_id: str | None,
     parsed: ParsedMatch,
     hero_player_name: str | None,
+    review_status: str | None,
+    existing_review_status: str | None,
     now: datetime,
     preserve_manual_format: bool,
 ) -> None:
@@ -170,6 +174,15 @@ async def _update_match_row(
     ``preserve_manual_format`` keeps the stored ``format`` and
     ``format_source`` when an admin has set ``format_source='manual'``
     so reparses don't clobber the manual override.
+
+    ``review_status`` is the new desired status from the caller
+    (``None`` for a conclusive parse, ``'pending_review'`` for a
+    partial one). ``existing_review_status`` is what's already on the
+    row. The rule: a row that an admin has already ``'rejected'`` stays
+    rejected on reparse — admin verdicts are not auto-undone. Otherwise
+    the new status wins, which is what upgrades a previous
+    ``pending_review`` row to NULL when a later conclusive snapshot
+    arrives for the same logical match.
     """
     values: dict[str, Any] = {
         "sha256": sha256,
@@ -186,6 +199,11 @@ async def _update_match_row(
         "parsed_with_version": PARSER_VERSION,
         "hero_player_name": hero_player_name,
     }
+    if existing_review_status == "rejected":
+        # Preserve admin's rejection — a later snapshot must not undo it.
+        values["review_status"] = "rejected"
+    else:
+        values["review_status"] = review_status
     if not preserve_manual_format:
         values["format"] = parsed.format
         values["format_source"] = None
@@ -198,6 +216,7 @@ async def persist_match(
     sha256: str,
     user_id: int,
     hero_player_name: str | None = None,
+    review_status: str | None = None,
 ) -> Match:
     """Insert or update a parsed match (plus games and per-turn states).
 
@@ -226,6 +245,14 @@ async def persist_match(
     ``hero_player_name`` is the resolved MTGO username of the uploader,
     determined by cross-referencing ``auth.users.mtgo_usernames`` with
     the parsed player list.
+
+    ``review_status`` carries the consumer's verdict on the incoming
+    parse — ``None`` for conclusive parses, ``'pending_review'`` for
+    holding-pen parses (winner-less but at least one game observed).
+    On reparse, the new status wins so a later, conclusive snapshot
+    upgrades a ``pending_review`` row back to NULL. Admin rejections
+    (``'rejected'``) survive across reparses — see
+    :func:`_update_match_row`.
     """
     now = datetime.now(UTC)
     raw_match_id = parsed.raw_match_id
@@ -279,6 +306,8 @@ async def persist_match(
             raw_match_id=raw_match_id or existing.raw_match_id,
             parsed=parsed,
             hero_player_name=hero_player_name,
+            review_status=review_status,
+            existing_review_status=existing.review_status,
             now=now,
             preserve_manual_format=existing.format_source == "manual",
         )
@@ -291,6 +320,7 @@ async def persist_match(
                 user_id=user_id,
                 raw_match_id=raw_match_id,
                 hero_player_name=hero_player_name,
+                review_status=review_status,
                 now=now,
             )
         except IntegrityError:
@@ -310,6 +340,8 @@ async def persist_match(
                 raw_match_id=raw_match_id or existing.raw_match_id,
                 parsed=parsed,
                 hero_player_name=hero_player_name,
+                review_status=review_status,
+                existing_review_status=existing.review_status,
                 now=now,
                 preserve_manual_format=existing.format_source == "manual",
             )

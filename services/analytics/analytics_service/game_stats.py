@@ -104,7 +104,7 @@ async def _load_games_with_context(
     Returns a list of dicts with keys: game_number, winner, on_play,
     play_first, opening_hand_sizes, players, format, hero.
     """
-    where = "WHERE m.user_id = :user_id"
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
     if format_filter:
         where += " AND LOWER(m.format) = LOWER(:format)"
@@ -311,7 +311,7 @@ async def get_game_length(
     v0.9.6: JOINs ``parser.game_players`` for hero resolution
     instead of querying ``auth.users`` separately.
     """
-    where = "WHERE m.user_id = :user_id"
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user.user_id}
     if format:
         where += " AND LOWER(m.format) = LOWER(:format)"
