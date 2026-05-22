@@ -182,21 +182,34 @@ class ParserConsumer:
             return None
 
         parsed = self._parser.parse(content)
-        if _is_partial_parse(parsed):
-            # Either nothing extractable, or only a game header with no
-            # resolved winners. MTGO appends to the log throughout the
-            # match, so the agent ships intermediate snapshots before
-            # any game finishes. Skipping these prevents winner-less
-            # "Draw" husks (issue #71) — a later snapshot of the same
-            # match will carry the resolved winners.
+        if _is_empty_parse(parsed):
+            # No games at all — nothing the agent has captured. There's
+            # no admin value in surfacing these; drop on the floor.
             _log.warning(
-                "skipping partial parse sha=%s user_id=%s games=%d match_winner=%s",
+                "skipping empty parse sha=%s user_id=%s games=0 match_winner=%s",
+                sha256,
+                user_id,
+                parsed.winner,
+            )
+            return parsed
+
+        review_status: str | None = None
+        if _is_partial_parse(parsed):
+            # Games observed but no resolved winners anywhere — could
+            # be an in-progress MTGO snapshot the agent caught during
+            # a natural lull, or a genuine broken parse. Persist with
+            # ``pending_review`` so an admin can decide; a later, more
+            # complete snapshot of the same logical match will UPDATE
+            # this row back to ``review_status=NULL`` automatically
+            # (see persist_match → _update_match_row).
+            _log.info(
+                "holding-pen partial parse sha=%s user_id=%s games=%d match_winner=%s",
                 sha256,
                 user_id,
                 len(parsed.games),
                 parsed.winner,
             )
-            return parsed
+            review_status = "pending_review"
 
         # Resolve the hero player name from auth.users.mtgo_usernames.
         hero_player_name = await self._resolve_hero(user_id, parsed.players)
@@ -209,6 +222,7 @@ class ParserConsumer:
                     sha256,
                     user_id,
                     hero_player_name=hero_player_name,
+                    review_status=review_status,
                 )
             except Exception:
                 _log.exception("persist failed sha=%s user_id=%s", sha256, user_id)
@@ -419,22 +433,35 @@ class ParserConsumer:
 # ---------------------------------------------------------------------------
 
 
+def _is_empty_parse(parsed: ParsedMatch) -> bool:
+    """True when the parse extracted no games at all.
+
+    Distinct from :func:`_is_partial_parse`: an empty parse is pure
+    garbage (no header, no game data, nothing observable) and there's
+    no admin value in surfacing it for review. Empty parses are dropped
+    outright; partial parses with games but no winners land in the
+    holding pen.
+    """
+    return not parsed.games
+
+
 def _is_partial_parse(parsed: ParsedMatch) -> bool:
-    """Decide whether a parse is too incomplete to persist (issue #71).
+    """Decide whether a parse is "winner-less" — holding-pen candidate.
 
-    A parse is "partial" — and must NOT be stored — when there is no
-    match-level winner AND no game has a resolved winner either. That
-    catches both:
-
-    * empty parses (no games, no winner, no format)
-    * snapshots where MTGO has emitted a game header but the game has
-      not finished yet (the agent's 5-second stability gate fires
-      during natural lulls in play)
+    Returns True when there is no match-level winner AND no game has a
+    resolved winner either. That catches snapshots where MTGO has
+    emitted a game header but the game has not finished yet (the
+    agent's 5-second stability gate fires during natural lulls in
+    play).
 
     A real Magic draw is *not* partial: each game has a winner field
     but neither player wins the majority, so ``parsed.winner`` is None
     while ``parsed.games[*].winner`` is populated. That case must be
-    persisted.
+    persisted normally.
+
+    Under v0.9.8 the consumer no longer drops partial parses outright
+    — it now persists them with ``review_status='pending_review'`` so
+    an admin can choose to accept or reject.
     """
     if parsed.winner:
         return False
