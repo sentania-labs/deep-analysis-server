@@ -100,7 +100,7 @@
                         {% if m.winner %}
                             {{ m.match_result or "—" }}
                             <span class="dark:text-txt-tertiary text-txt-secondary-light">({{ m.winner }})</span>
-                        {% elif m.game_count > 0 %}
+                        {% elif m.is_draw %}
                             {{ m.match_result or "Draw" }}
                         {% else %}
                             —

@@ -470,6 +470,18 @@ _ADMIN_MATCHES_DEFAULT_PER_PAGE = 20
 _ADMIN_MATCHES_MAX_PER_PAGE = 100
 
 
+def _is_true_draw(wins_by_player: dict[str, int]) -> bool:
+    """A match is a true draw when at least two players have equal,
+    nonzero game-win counts. Mirrors ``stats._classify_match`` and
+    fixes the "null winner = Draw" template bug from issue #71 —
+    incomplete matches (no game winners, or only one player has any)
+    are not draws."""
+    if len(wins_by_player) < 2:
+        return False
+    distinct = set(wins_by_player.values())
+    return len(distinct) == 1 and 0 not in distinct
+
+
 class AdminMatchItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -482,6 +494,10 @@ class AdminMatchItem(BaseModel):
     winner: str | None = None
     game_count: int = 0
     played_at: datetime | None = None
+    # True only when both players have equal nonzero game-win counts —
+    # mirrors analytics.list_matches / _classify_match. A null winner
+    # with no resolved game winners is "incomplete", not a draw.
+    is_draw: bool = False
 
 
 class AdminMatchListResponse(BaseModel):
@@ -547,11 +563,37 @@ async def admin_list_matches(
         params["offset"] = offset
         rows = (await session.execute(fetch_sql, params)).all()
 
+    # Compute per-match game-winner counts so we can mark *true* draws
+    # (both players have equal nonzero game wins) — see issue #71.
+    match_ids = [row[0] for row in rows]
+    draw_match_ids: set[Any] = set()
+    if match_ids:
+        async with sm() as session:
+            game_win_rows = (
+                await session.execute(
+                    text(
+                        """
+                        SELECT match_id, winner, COUNT(*) AS n
+                        FROM parser.games
+                        WHERE match_id = ANY(:match_ids)
+                          AND winner IS NOT NULL
+                        GROUP BY match_id, winner
+                        """
+                    ),
+                    {"match_ids": match_ids},
+                )
+            ).all()
+        by_match: dict[Any, dict[str, int]] = {}
+        for mid, gwinner, n in game_win_rows:
+            by_match.setdefault(mid, {})[str(gwinner)] = int(n)
+        for mid, wins_by_player in by_match.items():
+            if _is_true_draw(wins_by_player):
+                draw_match_ids.add(mid)
+
     # Post-filter by result if requested (W/L/D classification needs
     # game-winner counts which are expensive to do in SQL; since we're
     # paginated and the filter is rare, we accept slightly imprecise
     # total counts when a result filter is active).
-    # For the result filter, classify using match_result string.
     items: list[AdminMatchItem] = []
     for row in rows:
         (
@@ -575,6 +617,7 @@ async def admin_list_matches(
             winner=winner,
             game_count=int(game_count) if game_count else 0,
             played_at=played_at,
+            is_draw=match_id in draw_match_ids,
         )
         items.append(item)
 
@@ -589,7 +632,7 @@ async def admin_list_matches(
             elif result_key in ("l", "losses") and item.winner and item.players:
                 if item.winner != (item.players[0] if item.players else ""):
                     filtered.append(item)
-            elif result_key in ("d", "draws") and not item.winner and item.game_count > 0:
+            elif result_key in ("d", "draws") and item.is_draw:
                 filtered.append(item)
         items = filtered
 
