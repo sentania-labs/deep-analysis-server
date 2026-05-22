@@ -498,6 +498,11 @@ class AdminMatchItem(BaseModel):
     # mirrors analytics.list_matches / _classify_match. A null winner
     # with no resolved game winners is "incomplete", not a draw.
     is_draw: bool = False
+    # Holding-pen state — see alembic 025. ``None`` is normal /
+    # user-visible, ``'pending_review'`` is awaiting an admin verdict,
+    # ``'rejected'`` is admin-discarded. Admin endpoints surface all
+    # three; user-facing endpoints only return None rows.
+    review_status: str | None = None
 
 
 class AdminMatchListResponse(BaseModel):
@@ -505,6 +510,9 @@ class AdminMatchListResponse(BaseModel):
     total: int = 0
     page: int = 1
     per_page: int = _ADMIN_MATCHES_DEFAULT_PER_PAGE
+
+
+_VALID_REVIEW_STATUS_FILTERS = {"all", "pending_review", "rejected", "normal"}
 
 
 @admin_router.get("/matches", response_model=AdminMatchListResponse)
@@ -519,8 +527,21 @@ async def admin_list_matches(
     result: Annotated[str | None, Query()] = None,
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
+    review_status: Annotated[str | None, Query()] = None,
 ) -> AdminMatchListResponse:
-    """System-wide match listing for admins — all users' matches."""
+    """System-wide match listing for admins — all users' matches.
+
+    Unlike the user-facing list, this surfaces ``pending_review`` and
+    ``'rejected'`` rows (the holding pen) so an admin can triage them.
+    The ``review_status`` filter controls visibility:
+
+    * ``None`` / ``'all'`` — every row, default.
+    * ``'pending_review'`` — only inconclusive parses waiting on a
+      verdict.
+    * ``'rejected'`` — only admin-discarded rows.
+    * ``'normal'`` — only ``review_status IS NULL`` (matches what
+      regular users see).
+    """
     sm = get_sessionmaker()
     async with sm() as session:
         # Build WHERE clauses dynamically
@@ -539,6 +560,23 @@ async def admin_list_matches(
             conditions.append("m.players::text ILIKE :opponent")
             params["opponent"] = f"%{opponent}%"
 
+        rs_filter = (review_status or "").lower()
+        if rs_filter and rs_filter not in _VALID_REVIEW_STATUS_FILTERS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error": "invalid_review_status",
+                    "allowed": sorted(_VALID_REVIEW_STATUS_FILTERS),
+                },
+            )
+        if rs_filter == "pending_review":
+            conditions.append("m.review_status = 'pending_review'")
+        elif rs_filter == "rejected":
+            conditions.append("m.review_status = 'rejected'")
+        elif rs_filter == "normal":
+            conditions.append("m.review_status IS NULL")
+        # rs_filter == "" or "all" leaves all rows visible.
+
         where_clause = (" AND " + " AND ".join(conditions)) if conditions else ""
 
         # Count total
@@ -551,7 +589,8 @@ async def admin_list_matches(
             f"""
             SELECT m.id, m.user_id, u.email, m.format, m.players,
                    m.match_result, m.winner, m.game_count,
-                   COALESCE(m.played_at, m.parsed_at) AS played_at
+                   COALESCE(m.played_at, m.parsed_at) AS played_at,
+                   m.review_status
             FROM parser.matches m
             LEFT JOIN auth.users u ON u.id = m.user_id
             WHERE 1=1{where_clause}
@@ -606,6 +645,7 @@ async def admin_list_matches(
             winner,
             game_count,
             played_at,
+            row_review_status,
         ) = row
         item = AdminMatchItem(
             match_id=str(match_id),
@@ -618,6 +658,7 @@ async def admin_list_matches(
             game_count=int(game_count) if game_count else 0,
             played_at=played_at,
             is_draw=match_id in draw_match_ids,
+            review_status=row_review_status,
         )
         items.append(item)
 
@@ -637,6 +678,123 @@ async def admin_list_matches(
         items = filtered
 
     return AdminMatchListResponse(matches=items, total=total, page=page, per_page=per_page)
+
+
+# ---------------------------------------------------------------------------
+# Admin match review — holding pen verdicts
+# ---------------------------------------------------------------------------
+
+
+# Values an admin can set via POST /admin/matches/{id}/review. ``None``
+# (encoded as ``null`` in JSON) accepts a held-back parse and makes it
+# user-visible. ``'pending_review'`` re-flags a normal row. ``'rejected'``
+# permanently discards a held parse from users + analytics.
+_VALID_REVIEW_VERDICTS: set[str | None] = {None, "pending_review", "rejected"}
+
+
+class MatchReviewRequest(BaseModel):
+    review_status: str | None = None
+
+
+@admin_router.post("/matches/{match_id}/review", response_model=AdminMatchItem)
+async def admin_update_match_review_status(
+    match_id: uuid.UUID,
+    body: MatchReviewRequest,
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> AdminMatchItem:
+    """Set the holding-pen verdict on a single match.
+
+    ``review_status=null`` accepts the parse (back to user-visible).
+    ``'rejected'`` permanently discards. ``'pending_review'`` flags a
+    normal row for admin re-review. Other values are 422.
+    """
+    verdict = body.review_status
+    if verdict not in _VALID_REVIEW_VERDICTS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "invalid_review_status",
+                "allowed": [None, "pending_review", "rejected"],
+            },
+        )
+    sm = get_sessionmaker()
+    async with sm() as session:
+        result = await session.execute(
+            text("UPDATE parser.matches SET review_status = :rs WHERE id = :mid RETURNING id"),
+            {"rs": verdict, "mid": match_id},
+        )
+        updated = result.one_or_none()
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "match_not_found"},
+            )
+        await session.commit()
+        # Cache invalidation — clear the match's user's analytics
+        # summary so the dashboard recomputes with the new visibility.
+        # Best-effort; the user-facing endpoints already filter live.
+        try:
+            owner_row = (
+                await session.execute(
+                    text("SELECT user_id FROM parser.matches WHERE id = :mid"),
+                    {"mid": match_id},
+                )
+            ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001
+            owner_row = None
+        # Re-read the row so the caller gets a coherent post-update view
+        # alongside the user_email and computed is_draw flag.
+        row = (
+            await session.execute(
+                text(
+                    """
+                    SELECT m.id, m.user_id, u.email, m.format, m.players,
+                           m.match_result, m.winner, m.game_count,
+                           COALESCE(m.played_at, m.parsed_at) AS played_at,
+                           m.review_status
+                    FROM parser.matches m
+                    LEFT JOIN auth.users u ON u.id = m.user_id
+                    WHERE m.id = :mid
+                    """
+                ),
+                {"mid": match_id},
+            )
+        ).one()
+        # Recompute is_draw the same way the list endpoint does.
+        game_win_rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT winner, COUNT(*) AS n
+                    FROM parser.games
+                    WHERE match_id = :mid AND winner IS NOT NULL
+                    GROUP BY winner
+                    """
+                ),
+                {"mid": match_id},
+            )
+        ).all()
+    wins_by_player = {str(w): int(n) for w, n in game_win_rows}
+    is_draw_flag = _is_true_draw(wins_by_player)
+    if owner_row is not None:
+        try:
+            redis_client = await get_redis(get_settings().redis_url)
+            await invalidate_user(redis_client, int(owner_row))
+        except Exception:  # noqa: BLE001
+            _log.debug("review-status cache invalidate failed user_id=%s", owner_row)
+    return AdminMatchItem(
+        match_id=str(row[0]),
+        user_id=int(row[1]),
+        user_email=row[2],
+        format=row[3],
+        players=[str(p) for p in (row[4] or [])],
+        match_result=row[5],
+        winner=row[6],
+        game_count=int(row[7]) if row[7] else 0,
+        played_at=row[8],
+        review_status=row[9],
+        is_draw=is_draw_flag,
+    )
 
 
 # ---------------------------------------------------------------------------

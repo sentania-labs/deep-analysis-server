@@ -23,10 +23,31 @@
 <div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
 {% endif %}
 
+{% if msg %}
+<div class="bg-surface-3 dark:bg-surface-2 border dark:border-border border-border-light rounded-md p-3 text-sm dark:text-txt-primary text-txt-primary-light mb-4" role="status">{{ msg }}</div>
+{% endif %}
+
+{# Review-status filter chips — kept outside the main filter form so
+   they navigate independently and pre-set the dropdown for the user. #}
+{% set rs = filters.review_status %}
+<div class="flex flex-wrap gap-2 mb-4 text-xs">
+    {% set chip_base = "px-3 py-1 rounded-full border no-underline transition-colors" %}
+    {% set chip_off = "dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3" %}
+    {% set chip_on = "bg-accent text-white border-accent" %}
+    <a href="/admin/matches" class="{{ chip_base }} {% if not rs %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">All</a>
+    <a href="/admin/matches?review_status=pending_review" class="{{ chip_base }} {% if rs == 'pending_review' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Pending review</a>
+    <a href="/admin/matches?review_status=rejected" class="{{ chip_base }} {% if rs == 'rejected' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Rejected</a>
+    <a href="/admin/matches?review_status=normal" class="{{ chip_base }} {% if rs == 'normal' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Normal</a>
+</div>
+
 {# Filter bar #}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md mb-6 overflow-hidden">
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
         <form method="get" action="/admin/matches" class="flex flex-wrap gap-3 items-end">
+            {# Preserve the review_status chip selection across other-filter submits. #}
+            {% if filters.review_status %}
+            <input type="hidden" name="review_status" value="{{ filters.review_status }}">
+            {% endif %}
             <label class="flex flex-col gap-1">
                 <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Format</span>
                 <select name="format" class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
@@ -70,6 +91,7 @@
     {% if not match_list or not match_list.matches %}
         <div class="px-4 py-6 text-sm dark:text-txt-secondary text-txt-secondary-light">No matches found.</div>
     {% else %}
+    {% set return_to = "/admin/matches?" ~ filter_qs ~ ("&" if filter_qs else "") ~ "page=" ~ match_list.page ~ "&per_page=" ~ match_list.per_page %}
     <div class="overflow-x-auto">
         <table class="w-full">
             <thead>
@@ -80,6 +102,8 @@
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Result</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Games</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Played</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Review</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -113,6 +137,43 @@
                         {% else %}
                             —
                         {% endif %}
+                    </td>
+                    <td class="px-4 py-2.5 text-sm">
+                        {% if m.review_status == "pending_review" %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-warning/10 text-warning border border-warning/20">Pending review</span>
+                        {% elif m.review_status == "rejected" %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-danger-muted text-danger border border-danger/20">Rejected</span>
+                        {% else %}
+                            <span class="dark:text-txt-tertiary text-txt-secondary-light">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-2.5 text-sm">
+                        <div class="flex gap-1 items-center">
+                        {% if m.review_status == "pending_review" %}
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="verdict" value="">
+                                <input type="hidden" name="return_to" value="{{ return_to }}">
+                                <button type="submit" class="border border-success/40 text-success hover:bg-success/10 rounded px-2 py-0.5 text-xs transition-colors" title="Accept this match — back to user-visible.">Accept</button>
+                            </form>
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="verdict" value="rejected">
+                                <input type="hidden" name="return_to" value="{{ return_to }}">
+                                <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Discard permanently.">Reject</button>
+                            </form>
+                        {% elif m.review_status == "rejected" %}
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="verdict" value="">
+                                <input type="hidden" name="return_to" value="{{ return_to }}">
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Restore — back to user-visible.">Restore</button>
+                            </form>
+                        {% else %}
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="verdict" value="pending_review">
+                                <input type="hidden" name="return_to" value="{{ return_to }}">
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Flag this match for review — hidden from users.">Flag</button>
+                            </form>
+                        {% endif %}
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}

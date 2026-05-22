@@ -3126,6 +3126,13 @@ _MATCH_FORMAT_OPTIONS = [
 ]
 
 
+_VALID_REVIEW_STATUS_FILTERS = {"all", "pending_review", "rejected", "normal"}
+# Accept verdicts the admin can post via the inline action buttons.
+# ``""`` encodes "accept" (back to NULL); the form posts the verdict as
+# a string and we translate to ``None`` on the way to the JSON client.
+_VALID_REVIEW_VERDICT_FORM_VALUES = {"", "pending_review", "rejected"}
+
+
 @app.get("/admin/matches", response_class=HTMLResponse)
 async def admin_matches_list(
     request: Request,
@@ -3141,10 +3148,16 @@ async def admin_matches_list(
     result: Annotated[str, Query()] = "",
     date_from: Annotated[str, Query()] = "",
     date_to: Annotated[str, Query()] = "",
+    review_status: Annotated[str, Query()] = "",
+    msg: Annotated[str, Query()] = "",
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
+
+    review_status_clean = review_status.lower() if review_status else ""
+    if review_status_clean and review_status_clean not in _VALID_REVIEW_STATUS_FILTERS:
+        review_status_clean = ""
 
     filters = {
         "format": format,
@@ -3152,6 +3165,7 @@ async def admin_matches_list(
         "result": result,
         "date_from": date_from,
         "date_to": date_to,
+        "review_status": review_status_clean,
     }
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
 
@@ -3166,6 +3180,7 @@ async def admin_matches_list(
             result=result or None,
             date_from=date_from or None,
             date_to=date_to or None,
+            review_status=review_status_clean or None,
         )
     except analytics_client.AnalyticsForbidden:
         _log.info("admin.matches.list.forbidden", extra={"user_id": user.user_id})
@@ -3182,6 +3197,7 @@ async def admin_matches_list(
                 "filter_qs": filter_qs,
                 "format_options": _MATCH_FORMAT_OPTIONS,
                 "error": "Analytics service unavailable. Please try again.",
+                "msg": msg,
             },
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
@@ -3195,7 +3211,74 @@ async def admin_matches_list(
             "filter_qs": filter_qs,
             "format_options": _MATCH_FORMAT_OPTIONS,
             "error": None,
+            "msg": msg,
         },
+    )
+
+
+@app.post("/admin/matches/{match_id}/review")
+async def admin_match_set_review_status(
+    match_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    # ``verdict`` is intentionally optional: the Accept button submits
+    # an empty string (which encodes "back to NULL = user-visible").
+    # Newer FastAPI versions reject empty form fields when the param is
+    # typed as a required ``str``; a default value keeps the form
+    # working without making the field optional in the template.
+    verdict: Annotated[str, Form()] = "",
+    return_to: Annotated[str, Form()] = "",
+) -> Response:
+    """Accept, reject, or flag a match.
+
+    ``verdict`` is one of ``""`` (accept → back to NULL),
+    ``"pending_review"`` (flag for admin review), or ``"rejected"``
+    (permanently discard). Anything else 422s.
+    """
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    if verdict not in _VALID_REVIEW_VERDICT_FORM_VALUES:
+        return Response(
+            content="Invalid verdict.",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    new_review_status: str | None = verdict if verdict else None
+
+    try:
+        item, err = await analytics_client.admin_set_match_review_status(
+            settings.analytics_service_url,
+            user.token,
+            str(match_id),
+            new_review_status,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.matches.review.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /admin/matches/%s/review failed", match_id)
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if item is None and err == "match_not_found":
+        msg = "That match no longer exists."
+    elif item is None:
+        msg = "Could not update match."
+    elif new_review_status is None:
+        msg = "Match accepted."
+    elif new_review_status == "rejected":
+        msg = "Match rejected."
+    else:
+        msg = "Match flagged for review."
+
+    target = _safe_next(return_to) if return_to else "/admin/matches"
+    sep = "&" if "?" in target else "?"
+    return RedirectResponse(
+        url=f"{target}{sep}{urlencode({'msg': msg})}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

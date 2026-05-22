@@ -798,6 +798,7 @@ class AdminMatchItem:
     game_count: int
     played_at: datetime | None
     is_draw: bool = False
+    review_status: str | None = None
 
 
 @dataclass
@@ -820,6 +821,7 @@ def _to_admin_match(payload: dict[str, Any]) -> AdminMatchItem:
         game_count=int(payload.get("game_count") or 0),
         played_at=_parse_dt(payload.get("played_at")),
         is_draw=bool(payload.get("is_draw") or False),
+        review_status=payload.get("review_status"),
     )
 
 
@@ -834,6 +836,7 @@ async def admin_list_matches(
     result: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    review_status: str | None = None,
 ) -> AdminMatchListResponse:
     params: dict[str, Any] = {"page": page, "per_page": per_page}
     if format_filter and format_filter.lower() != "all":
@@ -846,6 +849,8 @@ async def admin_list_matches(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
+    if review_status and review_status.lower() != "all":
+        params["review_status"] = review_status
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -867,6 +872,46 @@ async def admin_list_matches(
         total=int(data.get("total", 0)),
         page=int(data.get("page", 1)),
         per_page=int(data.get("per_page", 20)),
+    )
+
+
+async def admin_set_match_review_status(
+    base_url: str,
+    token: str,
+    match_id: str,
+    review_status: str | None,
+) -> tuple[AdminMatchItem | None, str | None]:
+    """Set the holding-pen verdict on a match.
+
+    ``review_status`` may be ``None`` (accept), ``'pending_review'``
+    (flag for review), or ``'rejected'`` (permanently discard). Returns
+    ``(item, None)`` on success, ``(None, "match_not_found")`` on 404,
+    or ``(None, "invalid_review_status")`` on 422.
+    """
+    body = {"review_status": review_status}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/admin/matches/{match_id}/review",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /admin/matches/{{id}}/review transport error: {exc}"
+        ) from exc
+    if resp.status_code == 200:
+        return _to_admin_match(resp.json()), None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics POST /admin/matches/{{id}}/review returned {resp.status_code}"
+        )
+    if resp.status_code == 404:
+        return None, "match_not_found"
+    if resp.status_code in (400, 422):
+        return None, "invalid_review_status"
+    raise AnalyticsClientError(
+        f"analytics POST /admin/matches/{{id}}/review returned {resp.status_code}: {resp.text}"
     )
 
 
