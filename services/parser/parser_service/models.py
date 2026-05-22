@@ -39,6 +39,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -60,6 +61,7 @@ class Match(Base):
     )
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_match_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     format: Mapped[str | None] = mapped_column(String(64), nullable=True)
     format_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -82,8 +84,20 @@ class Match(Base):
 
     __table_args__ = (
         UniqueConstraint("sha256", "user_id", name="uq_matches_sha256_user"),
+        # Partial unique index on (raw_match_id, user_id) enforced only
+        # when raw_match_id is non-null — created in alembic 024 with
+        # postgresql_where because SQLAlchemy's UniqueConstraint can't
+        # express the partial predicate directly.
+        Index(
+            "uq_matches_raw_match_id_user",
+            "raw_match_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("raw_match_id IS NOT NULL"),
+        ),
         Index("ix_matches_user_id_parsed_at", "user_id", "parsed_at"),
         Index("ix_matches_sha256", "sha256"),
+        Index("ix_matches_raw_match_id", "raw_match_id"),
     )
 
 

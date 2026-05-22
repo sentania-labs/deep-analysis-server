@@ -182,10 +182,20 @@ class ParserConsumer:
             return None
 
         parsed = self._parser.parse(content)
-        if not parsed.games and not parsed.winner and not parsed.format:
-            # Nothing extractable — log and skip persistence so we don't
-            # store an empty husk row.
-            _log.warning("parsed log is empty sha=%s user_id=%s", sha256, user_id)
+        if _is_partial_parse(parsed):
+            # Either nothing extractable, or only a game header with no
+            # resolved winners. MTGO appends to the log throughout the
+            # match, so the agent ships intermediate snapshots before
+            # any game finishes. Skipping these prevents winner-less
+            # "Draw" husks (issue #71) — a later snapshot of the same
+            # match will carry the resolved winners.
+            _log.warning(
+                "skipping partial parse sha=%s user_id=%s games=%d match_winner=%s",
+                sha256,
+                user_id,
+                len(parsed.games),
+                parsed.winner,
+            )
             return parsed
 
         # Resolve the hero player name from auth.users.mtgo_usernames.
@@ -407,6 +417,28 @@ class ParserConsumer:
 # ---------------------------------------------------------------------------
 # Helpers — card collection per side, card_game_stats materialization
 # ---------------------------------------------------------------------------
+
+
+def _is_partial_parse(parsed: ParsedMatch) -> bool:
+    """Decide whether a parse is too incomplete to persist (issue #71).
+
+    A parse is "partial" — and must NOT be stored — when there is no
+    match-level winner AND no game has a resolved winner either. That
+    catches both:
+
+    * empty parses (no games, no winner, no format)
+    * snapshots where MTGO has emitted a game header but the game has
+      not finished yet (the agent's 5-second stability gate fires
+      during natural lulls in play)
+
+    A real Magic draw is *not* partial: each game has a winner field
+    but neither player wins the majority, so ``parsed.winner`` is None
+    while ``parsed.games[*].winner`` is populated. That case must be
+    persisted.
+    """
+    if parsed.winner:
+        return False
+    return not any(g.winner for g in parsed.games)
 
 
 def _collect_cards_by_side(

@@ -797,6 +797,7 @@ class AdminMatchItem:
     winner: str | None
     game_count: int
     played_at: datetime | None
+    is_draw: bool = False
 
 
 @dataclass
@@ -818,6 +819,7 @@ def _to_admin_match(payload: dict[str, Any]) -> AdminMatchItem:
         winner=payload.get("winner"),
         game_count=int(payload.get("game_count") or 0),
         played_at=_parse_dt(payload.get("played_at")),
+        is_draw=bool(payload.get("is_draw") or False),
     )
 
 
