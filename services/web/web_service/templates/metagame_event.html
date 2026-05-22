@@ -26,12 +26,18 @@
         <div class="text-sm dark:text-txt-primary text-txt-primary-light">{{ format }}</div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
-        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Source</div>
-        <div class="text-sm">
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Source{% if event.sources and event.sources|length > 1 %}s{% endif %}</div>
+        <div class="text-sm flex flex-wrap gap-1">
+            {% set source_list = event.sources if event.sources else [event.source] %}
+            {% for src in source_list %}
             <span class="text-xs font-medium uppercase tracking-wider px-2 py-0.5 rounded
-                         {% if event.source == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
-                {{ event.source }}
+                         {% if src == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
+                {{ src }}
             </span>
+            {% endfor %}
+            {% if source_list|length > 1 %}
+            <span class="text-xs dark:text-txt-tertiary text-txt-secondary-light self-center" title="Participants are unioned across feeds">merged</span>
+            {% endif %}
         </div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">

@@ -97,7 +97,15 @@ class MetagameEvent(BaseModel):
     event_name: str
     event_date: date | None = None
     player_count: int | None = None
-    source: str = Field(description="'mtgtop8' or 'mtgo'")
+    source: str = Field(description="primary source — 'mtgtop8' or 'mtgo'")
+    sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "All scraper feeds that contributed to this canonical event, "
+            "primary first. E.g. ['mtgtop8', 'mtgo'] when the same event "
+            "appears in both."
+        ),
+    )
 
 
 class MetagameEventList(BaseModel):
@@ -125,6 +133,14 @@ class EventDetail(BaseModel):
     event_date: date | None = None
     player_count: int | None = None
     source: str
+    sources: list[str] = Field(
+        default_factory=list,
+        description=(
+            "All scraper feeds that contributed to this event view, "
+            "primary first. When more than one feed contributed, the "
+            "participant list is a union across feeds."
+        ),
+    )
     results: list[EventResultEntry] = Field(default_factory=list)
 
 

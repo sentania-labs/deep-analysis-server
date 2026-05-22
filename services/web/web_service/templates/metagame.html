@@ -136,10 +136,18 @@
                     </td>
                     <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ ev.event_date or "--" }}</td>
                     <td class="px-4 py-2.5 text-sm dark:text-txt-secondary text-txt-secondary-light">
-                        <span class="text-xs font-medium uppercase tracking-wider px-2 py-0.5 rounded
-                                     {% if ev.source == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
-                            {{ ev.source }}
-                        </span>
+                        {% set source_list = ev.sources if ev.sources else [ev.source] %}
+                        <div class="flex flex-wrap gap-1">
+                            {% for src in source_list %}
+                            <span class="text-xs font-medium uppercase tracking-wider px-2 py-0.5 rounded
+                                         {% if src == 'mtgo' %}bg-accent-muted text-accent{% else %}bg-success-muted text-success{% endif %}">
+                                {{ src }}
+                            </span>
+                            {% endfor %}
+                            {% if source_list|length > 1 %}
+                            <span class="text-xs dark:text-txt-tertiary text-txt-secondary-light" title="Participants are unioned across feeds">merged</span>
+                            {% endif %}
+                        </div>
                     </td>
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-secondary text-txt-secondary-light">{{ ev.player_count or "--" }}</td>
                 </tr>
