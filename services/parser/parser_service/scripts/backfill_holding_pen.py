@@ -132,12 +132,16 @@ async def _flush_analytics_caches(
     *,
     apply: bool,
 ) -> None:
-    """Best-effort: invalidate per-user analytics summary keys.
+    """Best-effort: invalidate per-user analytics cache keys.
 
     Mirrors :func:`cleanup_71_duplicates._flush_analytics_caches`. The
     backfill changes what shows up on the user dashboard for every
     affected user, so caches must be flushed for the change to be
     visible without waiting for the cached value to expire.
+
+    Uses :func:`common.cache.invalidate_user`, which deletes everything
+    matching ``da:stats:{user_id}:*`` — the namespace the analytics
+    service actually writes (see ``common/cache.py``).
     """
     if not affected_user_ids:
         return
@@ -146,7 +150,7 @@ async def _flush_analytics_caches(
     except ImportError:
         _log.warning(
             "redis client unavailable — cannot flush analytics caches. "
-            "Operator: flush per-user analytics:* keys manually."
+            "Operator: flush per-user `da:stats:{user_id}:*` keys manually."
         )
         return
 
@@ -155,28 +159,32 @@ async def _flush_analytics_caches(
         client = redis.from_url(settings.redis_url)
     except Exception:  # noqa: BLE001
         _log.warning(
-            "could not connect to redis — flush analytics:summary:user:* "
-            "and analytics:by-format:user:* keys manually",
+            "could not connect to redis — flush per-user `da:stats:{user_id}:*` keys manually",
         )
         return
 
-    patterns = [
-        "analytics:summary:user:*",
-        "analytics:by-format:user:*",
-        "analytics:stats:user:*",
-    ]
-    matched: list[bytes] = []
+    if not apply:
+        _log.info(
+            "cache flush: would invalidate da:stats:{user_id}:* for %d user(s)",
+            len(affected_user_ids),
+        )
+        with contextlib.suppress(Exception):
+            await client.aclose()
+        return
+
+    from common.cache import invalidate_user
+
+    total = 0
     try:
-        for pattern in patterns:
-            async for key in client.scan_iter(match=pattern, count=200):
-                matched.append(key)
-        if not matched:
-            _log.info("cache flush: no analytics keys matched standard patterns")
-        elif apply:
-            await client.delete(*matched)
-            _log.info("cache flush: deleted %d analytics keys", len(matched))
-        else:
-            _log.info("cache flush: would delete %d analytics keys", len(matched))
+        for user_id in affected_user_ids:
+            deleted = await invalidate_user(client, user_id)
+            _log.info("cache flush: user_id=%s deleted=%d keys", user_id, deleted)
+            total += deleted
+        _log.info(
+            "cache flush: deleted %d da:stats keys across %d user(s)",
+            total,
+            len(affected_user_ids),
+        )
     finally:
         with contextlib.suppress(Exception):
             await client.aclose()
