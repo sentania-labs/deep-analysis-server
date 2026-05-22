@@ -342,7 +342,11 @@ async def event_detail(
     if siblings:
         sources_used.append(other_source)
 
-    merged = merge_results(primary_results, supplement_rows)
+    merged = merge_results(
+        primary_results,
+        supplement_rows,
+        supplement_source=other_source,
+    )
 
     return EventDetail(
         event_id=int(primary_event["id"]),
@@ -428,6 +432,7 @@ async def _load_candidate_events(db: AsyncSession, source: str, fmt: str) -> lis
                 "event_date": r[2],
                 "format": r[3],
                 "player_count": int(r[4]) if r[4] is not None else None,
+                "source": "mtgtop8",
             }
             for r in rows
         ]
@@ -448,6 +453,7 @@ async def _load_candidate_events(db: AsyncSession, source: str, fmt: str) -> lis
             "event_date": r[2],
             "format": r[3],
             "player_count": None,
+            "source": "mtgo",
         }
         for r in rows
     ]

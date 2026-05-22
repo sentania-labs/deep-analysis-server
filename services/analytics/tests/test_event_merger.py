@@ -335,6 +335,31 @@ def test_merge_results_top8_plus_top32_union() -> None:
         assert entry["decklist_main"] == {"Card": 4}
 
 
+def test_merge_results_preserves_mtgtop8_supplement_deck_name() -> None:
+    """Regression: when the primary is MTGO and the supplement is
+    mtgtop8, an mtgtop8-only player's archetype label must survive.
+    Previously merge_results unconditionally nulled supplement
+    deck_names, erasing the only archetype source we have."""
+    primary = [_result("Alice", 1, deck_name=None)]  # MTGO primary
+    supplement = [
+        _result("Bob", 2, deck_name="Mono-Red Burn"),  # mtgtop8 sibling
+    ]
+    merged = merge_results(primary, supplement, supplement_source="mtgtop8")
+    bob = next(r for r in merged if r["player_name"] == "Bob")
+    assert bob["deck_name"] == "Mono-Red Burn"
+
+
+def test_merge_results_nulls_mtgo_supplement_deck_name() -> None:
+    """When the supplement source is MTGO, any deck_name on the row
+    is cleared — MTGO doesn't carry archetypes, so a value there is
+    schema noise we don't want to render."""
+    primary = [_result("Alice", 1, deck_name="Burn")]  # mtgtop8 primary
+    supplement = [_result("Bob", 2, deck_name="stale-value")]
+    merged = merge_results(primary, supplement, supplement_source="mtgo")
+    bob = next(r for r in merged if r["player_name"] == "Bob")
+    assert bob["deck_name"] is None
+
+
 def test_merge_results_no_collision_simple_union() -> None:
     primary = [_result("Alice", 1, deck_name="Burn")]
     supplement = [_result("Bob", 2, deck_name=None)]
@@ -388,6 +413,67 @@ def test_find_supplements_for_matches_on_key() -> None:
         _mtgo(7, "Pauper League May212026", event_date=date(2026, 5, 21)),
         _mtgo(8, "Modern Challenge", event_date=date(2026, 5, 21), fmt="Modern"),
         _mtgo(9, "Pauper League", event_date=date(2026, 5, 14)),  # wrong date
+    ]
+    found = find_supplements_for(
+        primary_source="mtgtop8",
+        primary_event=primary,
+        candidate_events=candidates,
+    )
+    assert [c["id"] for c in found] == [7]
+
+
+def test_find_supplements_for_cross_source_id_collision_untagged() -> None:
+    """Regression — original failure shape: candidates loaded without a
+    ``source`` key. Pre-fix the skip logic compared
+    ``candidate.get("source", primary_source) == primary_source`` so an
+    untagged candidate always looked like 'same source as primary',
+    and a sibling from the OTHER feed that happened to share the
+    primary's numeric id got silently dropped. Post-fix the skip
+    requires an explicit source match, so an untagged candidate is
+    never treated as the primary itself."""
+    primary = _mtgtop8(10, "Pauper League", event_date=date(2026, 5, 21))
+    # Candidate has the SAME numeric id as the primary and no source
+    # tag — mirrors the pre-fix _load_candidate_events output.
+    candidates = [_mtgo(10, "Pauper League May212026", event_date=date(2026, 5, 21))]
+    found = find_supplements_for(
+        primary_source="mtgtop8",
+        primary_event=primary,
+        candidate_events=candidates,
+    )
+    assert [c["id"] for c in found] == [10]
+
+
+def test_find_supplements_for_cross_source_id_collision_tagged() -> None:
+    """Same regression in the post-fix data shape: candidates loaded
+    WITH ``source`` set. The (id, source) pair must be compared, not
+    just id — a candidate from the other feed sharing the primary's
+    numeric id is a sibling, not the primary."""
+    primary = _mtgtop8(10, "Pauper League", event_date=date(2026, 5, 21))
+    candidates = [
+        {
+            **_mtgo(10, "Pauper League May212026", event_date=date(2026, 5, 21)),
+            "source": "mtgo",
+        }
+    ]
+    found = find_supplements_for(
+        primary_source="mtgtop8",
+        primary_event=primary,
+        candidate_events=candidates,
+    )
+    assert [c["id"] for c in found] == [10]
+
+
+def test_find_supplements_for_skips_primary_when_mixed_into_pool() -> None:
+    """The skip logic still fires when a candidate has the SAME id and
+    SAME source as the primary — i.e., the caller really did fold the
+    primary into the candidate pool."""
+    primary = _mtgtop8(10, "Pauper League", event_date=date(2026, 5, 21))
+    candidates = [
+        {**_mtgtop8(10, "Pauper League", event_date=date(2026, 5, 21)), "source": "mtgtop8"},
+        {
+            **_mtgo(7, "Pauper League May212026", event_date=date(2026, 5, 21)),
+            "source": "mtgo",
+        },
     ]
     found = find_supplements_for(
         primary_source="mtgtop8",

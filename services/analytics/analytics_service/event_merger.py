@@ -314,10 +314,13 @@ def find_supplements_for(
     for candidate in candidate_events:
         if match_key(candidate) == primary_key:
             # Skip the primary itself if the caller mixed it into the
-            # candidate pool (same source, same id).
+            # candidate pool. Both id AND source must match — ids are
+            # only unique within their source table, so a candidate
+            # from the other feed with the same numeric id is a
+            # legitimate sibling, not the primary.
             if (
                 candidate.get("id") == primary_event.get("id")
-                and candidate.get("source", primary_source) == primary_source
+                and candidate.get("source") == primary_source
             ):
                 continue
             out.append(candidate)
@@ -327,14 +330,22 @@ def find_supplements_for(
 def merge_results(
     primary_results: list[dict[str, Any]],
     supplement_results: list[dict[str, Any]],
+    *,
+    supplement_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """Union per-player rows from the primary and supplementing sources.
 
     Keyed by ``player_name`` (case-insensitive, trimmed). Primary
     entries always win — they carry the archetype label (``deck_name``)
     from mtgtop8 which we don't want to drop. Supplement-only players
-    (e.g., the top-9-to-32 from an MTGO league that mtgtop8 skipped)
-    land in the merged list with their MTGO data and ``deck_name=None``.
+    land in the merged list with their supplement-source data; whether
+    the archetype label survives depends on *supplement_source*:
+
+    - ``"mtgo"`` — clear ``deck_name`` (MTGO doesn't carry archetype
+      labels; null any stale value so the UI doesn't render schema
+      noise).
+    - ``"mtgtop8"`` (or any other value, or ``None``) — preserve
+      ``deck_name`` as-is. mtgtop8 IS the archetype source.
 
     The function never mutates its inputs.
 
@@ -360,10 +371,8 @@ def merge_results(
         if not key or key in seen:
             continue
         copied = dict(entry)
-        # MTGO-only players don't carry an archetype label; null it
-        # explicitly so the UI doesn't render a stale value from the
-        # supplement source's schema.
-        copied["deck_name"] = None
+        if supplement_source == "mtgo":
+            copied["deck_name"] = None
         seen[key] = copied
         out.append(copied)
 
