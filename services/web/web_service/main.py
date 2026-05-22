@@ -223,9 +223,12 @@ async def dashboard(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    format_filter = format or None
 
     stats_summary: Any = None
     format_stats: list[Any] = []
@@ -248,38 +251,48 @@ async def dashboard(
         _log.exception("analytics stats call failed; rendering dashboard with error banner")
         stats_error = True
 
-    # Play/draw stats for the overview stat card (unfiltered).
     try:
         play_draw_stats = await analytics_client.get_play_draw_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, format_filter=format_filter
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("play/draw stats unavailable")
 
-    # Pre-board / post-board stats (unfiltered).
     try:
         preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, format_filter=format_filter
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("preboard/postboard stats unavailable")
 
-    # Mulligan stats (unfiltered).
     try:
         mulligan_stats = await analytics_client.get_mulligan_stats(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, format_filter=format_filter
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("mulligan stats unavailable")
 
-    # Card stats (unfiltered). Use same page size as the HTMX partial so
-    # pagination stays consistent when the user clicks "Next".
+    # Card stats. Page size matches the HTMX partial so pagination stays
+    # consistent when the user clicks "Next".
     try:
         card_stats = await analytics_client.get_card_stats(
-            settings.analytics_service_url, user.token, per_page=_CARD_PERF_PER_PAGE
+            settings.analytics_service_url,
+            user.token,
+            per_page=_CARD_PERF_PER_PAGE,
+            format_filter=format_filter,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("card stats unavailable")
+
+    # When a format is selected, swap in that format's row from the
+    # by-format breakdown as the headline numbers (Total / Record /
+    # Win rate). Falls back to the overall summary when no row matches.
+    filtered_summary: Any = None
+    if format_filter:
+        for row in format_stats:
+            if row.format_ == format_filter:
+                filtered_summary = row
+                break
 
     return templates.TemplateResponse(
         request,
@@ -293,6 +306,8 @@ async def dashboard(
             "preboard_postboard_stats": preboard_postboard_stats,
             "mulligan_stats": mulligan_stats,
             "card_stats": card_stats,
+            "format_filter": format,
+            "filtered_summary": filtered_summary,
         },
     )
 

@@ -24,20 +24,29 @@
     <p class="dark:text-txt-secondary text-txt-secondary-light">No matches yet. Upload a game log to get started.</p>
 </div>
 {% else %}
+{# When a format filter is active and we have a matching row, use it
+   for the headline numbers so the cards reflect the filter. #}
+{% set headline_total = filtered_summary.matches if filtered_summary else stats_summary.total_matches %}
+{% set headline_wins = filtered_summary.wins if filtered_summary else stats_summary.wins %}
+{% set headline_losses = filtered_summary.losses if filtered_summary else stats_summary.losses %}
+{% set headline_draws = filtered_summary.draws if filtered_summary else stats_summary.draws %}
+{% set headline_win_rate = filtered_summary.win_rate if filtered_summary else stats_summary.win_rate %}
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
-        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Total matches</div>
-        <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ stats_summary.total_matches }}</div>
+        <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">
+            Total matches{% if format_filter %} &middot; {{ format_filter }}{% endif %}
+        </div>
+        <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ headline_total }}</div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
         <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Record</div>
         <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">
-            <span class="text-success">{{ stats_summary.wins }}</span><span class="dark:text-txt-tertiary text-txt-secondary-light">-</span><span class="text-danger">{{ stats_summary.losses }}</span><span class="dark:text-txt-tertiary text-txt-secondary-light">-</span><span class="text-warning">{{ stats_summary.draws }}</span>
+            <span class="text-success">{{ headline_wins }}</span><span class="dark:text-txt-tertiary text-txt-secondary-light">-</span><span class="text-danger">{{ headline_losses }}</span><span class="dark:text-txt-tertiary text-txt-secondary-light">-</span><span class="text-warning">{{ headline_draws }}</span>
         </div>
     </div>
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
         <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Win rate</div>
-        <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ "%.1f"|format(stats_summary.win_rate) }}%</div>
+        <div class="text-2xl font-mono font-semibold dark:text-txt-primary text-txt-primary-light">{{ "%.1f"|format(headline_win_rate) }}%</div>
     </div>
     {% if play_draw_stats %}
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
@@ -47,30 +56,12 @@
     {% else %}
     <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
         <div class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-1">Matches Won</div>
-        <div class="text-2xl font-mono font-semibold text-success">{{ stats_summary.wins }}</div>
+        <div class="text-2xl font-mono font-semibold text-success">{{ headline_wins }}</div>
     </div>
     {% endif %}
 </div>
 
-{# ── Format Filter + Stats Panels (Alpine.js state) ── #}
-<div x-data="{ selectedFormat: null, _initialized: false }"
-     x-effect="
-        var fmt = selectedFormat;
-        if (!_initialized) { _initialized = true; return; }
-        if (fmt) {
-            var f = encodeURIComponent(fmt);
-            htmx.ajax('GET', '/dashboard/partials/play-draw?format=' + f, {target: '#play-draw-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/preboard-postboard?format=' + f, {target: '#preboard-postboard-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/mulligans?format=' + f, {target: '#mulligan-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/card-performance?format=' + f, {target: '#card-performance-panel', swap: 'innerHTML'});
-        } else {
-            htmx.ajax('GET', '/dashboard/partials/play-draw', {target: '#play-draw-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/preboard-postboard', {target: '#preboard-postboard-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/mulligans', {target: '#mulligan-panel', swap: 'innerHTML'});
-            htmx.ajax('GET', '/dashboard/partials/card-performance', {target: '#card-performance-panel', swap: 'innerHTML'});
-        }
-     "
-     class="space-y-6">
+<div class="space-y-6">
 
 {# ── By Format Table ── #}
 {% if format_stats|default([]) %}
@@ -80,11 +71,12 @@
             <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">By format</h2>
             <p class="text-xs dark:text-txt-secondary text-txt-secondary-light mt-0.5">Click a format to filter stats below.</p>
         </div>
-        <button x-show="selectedFormat" x-cloak
-                @click="selectedFormat = null"
-                class="text-xs dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border dark:border-border border-border-light rounded-md px-2 py-1 transition-colors cursor-pointer bg-transparent">
+        {% if format_filter %}
+        <a href="/dashboard"
+           class="text-xs dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border dark:border-border border-border-light rounded-md px-2 py-1 transition-colors no-underline">
             Clear filter
-        </button>
+        </a>
+        {% endif %}
     </div>
     <div class="overflow-x-auto">
         <table class="w-full">
@@ -100,12 +92,16 @@
             </thead>
             <tbody>
                 {% for row in format_stats %}
-                <tr @click="selectedFormat === {{ row.format_|tojson }} ? selectedFormat = null : selectedFormat = {{ row.format_|tojson }}"
-                    :class="selectedFormat === {{ row.format_|tojson }} ? 'dark:bg-accent-muted bg-accent-muted border-l-2 border-accent' : ''"
-                    class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors cursor-pointer">
-                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">
-                        {{ row.format_ }}
-                    </td>
+                {% set is_selected = (format_filter == row.format_) %}
+                {% set row_href = "/dashboard" if is_selected else "/dashboard?format=" + (row.format_|urlencode) %}
+                <tr data-format="{{ row.format_ }}"
+                    data-href="{{ row_href }}"
+                    role="button"
+                    tabindex="0"
+                    onclick="window.location.href=this.dataset.href"
+                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();window.location.href=this.dataset.href}"
+                    class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors cursor-pointer {% if is_selected %}dark:bg-accent-muted bg-accent-muted border-l-2 border-accent{% endif %}">
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-primary text-txt-primary-light">{{ row.format_ }}</td>
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ row.matches }}</td>
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ row.wins }}</td>
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ row.losses }}</td>
@@ -119,7 +115,7 @@
 </div>
 {% endif %}
 
-{# ── Stats Panels (visible on load with unfiltered data) ── #}
+{# ── Stats Panels (rendered server-side; filtered by ?format= when set) ── #}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     <div id="play-draw-panel">
         {% include "_partials_play_draw.html" %}
@@ -135,7 +131,7 @@
     {% include "_partials_card_performance.html" %}
 </div>
 
-</div>{# end Alpine x-data #}
+</div>
 
 {% endif %}{# end stats_summary.total_matches > 0 #}
 {% endif %}{# end stats available #}
