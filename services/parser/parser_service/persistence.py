@@ -32,6 +32,28 @@ from parser_service.settings import PARSER_VERSION
 _log = logging.getLogger("parser.persistence")
 
 
+def _parse_quality_key(
+    winner: str | None,
+    game_count: int,
+) -> tuple[int, int]:
+    """Ordering key for "is this parse better than the one we already have?".
+
+    Used to decide whether a new snapshot of the same logical match
+    (same ``raw_match_id``) should overwrite the stored row. Higher
+    tuple wins. The ordering is:
+
+    1. Has a match winner (1 / 0). MTGO appends to ``Match_GameLog_*.dat``
+       throughout play, so intermediate snapshots reach the parser
+       before the "wins the match" line is written. A snapshot with a
+       winner is strictly more complete than one without.
+    2. Game count. More games observed is more of the match captured.
+
+    A new parse wins on ties so re-parses with the same quality stamp
+    fresh ``parsed_at`` / ``parsed_with_version`` values.
+    """
+    return (1 if winner else 0, int(game_count))
+
+
 def _extract_player_names(
     parsed_game: ParsedGame,
     match_players: list[str],
@@ -66,11 +88,19 @@ async def persist_match(
 ) -> Match:
     """Insert or update a parsed match (plus games and per-turn states).
 
-    Idempotent on ``(sha256, user_id)`` at the database layer — uses
-    ``INSERT ... ON CONFLICT (sha256, user_id) DO UPDATE`` so that
-    re-parses (e.g. from the backfill scanner after a parser upgrade)
-    overwrite the previous row's metadata and stamp the current
-    ``parsed_with_version``.
+    Identity resolution (issue #71):
+
+    * If ``parsed.raw_match_id`` is set, the row is keyed on
+      ``(raw_match_id, user_id)``. MTGO appends to the gamelog
+      throughout a match, so the agent ships multiple sha256s for the
+      same logical match. Without raw_match_id keying every snapshot
+      would become its own row.
+    * If an existing row exists for that key and the new parse is
+      *not better* than the stored one (per :func:`_parse_quality_key`),
+      we skip the overwrite — preserves the more-complete earlier
+      parse instead of clobbering a winner-bearing row with a partial.
+    * If ``parsed.raw_match_id`` is NULL (very old logs, unparseable
+      header), we fall back to the legacy ``(sha256, user_id)`` upsert.
 
     ``hero_player_name`` is the resolved MTGO username of the uploader,
     determined by cross-referencing ``auth.users.mtgo_usernames`` with
@@ -78,10 +108,49 @@ async def persist_match(
     """
     now = datetime.now(UTC)
     new_id = uuid.uuid4()
+    raw_match_id = parsed.raw_match_id
+
+    if raw_match_id is not None:
+        existing = (
+            await session.execute(
+                select(Match).where(
+                    Match.raw_match_id == raw_match_id,
+                    Match.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing_key = _parse_quality_key(existing.winner, existing.game_count)
+            new_key = _parse_quality_key(parsed.winner, parsed.game_count)
+            if new_key < existing_key:
+                # Stored parse is strictly better — don't downgrade it.
+                # We still bump parsed_at + parsed_with_version + sha256
+                # so the latest snapshot's bytes are still attributed.
+                _log.info(
+                    "persist: keeping existing better parse "
+                    "raw_match_id=%s user_id=%s "
+                    "existing=(winner=%s,games=%s) new=(winner=%s,games=%s)",
+                    raw_match_id,
+                    user_id,
+                    existing.winner,
+                    existing.game_count,
+                    parsed.winner,
+                    parsed.game_count,
+                )
+                existing.sha256 = sha256
+                existing.parsed_at = now
+                existing.parsed_with_version = PARSER_VERSION
+                await session.commit()
+                refreshed = (
+                    await session.execute(select(Match).where(Match.id == existing.id))
+                ).scalar_one()
+                return refreshed
+
     insert_stmt = pg_insert(Match).values(
         id=new_id,
         sha256=sha256,
         user_id=user_id,
+        raw_match_id=raw_match_id,
         format=parsed.format,
         event_type=parsed.event_type,
         players=parsed.players,
@@ -97,28 +166,42 @@ async def persist_match(
     # set format_source='manual', the UPSERT must keep the existing
     # format and format_source rather than overwriting with the parsed
     # (or null) value.
-    upsert_stmt = insert_stmt.on_conflict_do_update(
-        constraint="uq_matches_sha256_user",
-        set_={
-            "format": text(
-                "CASE WHEN matches.format_source = 'manual'"
-                " THEN matches.format ELSE EXCLUDED.format END"
-            ),
-            "format_source": text(
-                "CASE WHEN matches.format_source = 'manual'"
-                " THEN matches.format_source ELSE EXCLUDED.format_source END"
-            ),
-            "event_type": insert_stmt.excluded.event_type,
-            "players": insert_stmt.excluded.players,
-            "match_result": insert_stmt.excluded.match_result,
-            "winner": insert_stmt.excluded.winner,
-            "game_count": insert_stmt.excluded.game_count,
-            "parsed_at": insert_stmt.excluded.parsed_at,
-            "played_at": insert_stmt.excluded.played_at,
-            "parsed_with_version": insert_stmt.excluded.parsed_with_version,
-            "hero_player_name": insert_stmt.excluded.hero_player_name,
-        },
-    ).returning(Match.id)
+    upsert_set = {
+        "sha256": insert_stmt.excluded.sha256,
+        # COALESCE: never downgrade a non-null raw_match_id to NULL —
+        # otherwise a later parse that fails to extract the UUID would
+        # clobber a row that the #71 cleanup script (or a prior parse)
+        # already backfilled.
+        "raw_match_id": text("COALESCE(EXCLUDED.raw_match_id, matches.raw_match_id)"),
+        "format": text(
+            "CASE WHEN matches.format_source = 'manual'"
+            " THEN matches.format ELSE EXCLUDED.format END"
+        ),
+        "format_source": text(
+            "CASE WHEN matches.format_source = 'manual'"
+            " THEN matches.format_source ELSE EXCLUDED.format_source END"
+        ),
+        "event_type": insert_stmt.excluded.event_type,
+        "players": insert_stmt.excluded.players,
+        "match_result": insert_stmt.excluded.match_result,
+        "winner": insert_stmt.excluded.winner,
+        "game_count": insert_stmt.excluded.game_count,
+        "parsed_at": insert_stmt.excluded.parsed_at,
+        "played_at": insert_stmt.excluded.played_at,
+        "parsed_with_version": insert_stmt.excluded.parsed_with_version,
+        "hero_player_name": insert_stmt.excluded.hero_player_name,
+    }
+    if raw_match_id is not None:
+        upsert_stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["raw_match_id", "user_id"],
+            index_where=text("raw_match_id IS NOT NULL"),
+            set_=upsert_set,
+        ).returning(Match.id)
+    else:
+        upsert_stmt = insert_stmt.on_conflict_do_update(
+            constraint="uq_matches_sha256_user",
+            set_=upsert_set,
+        ).returning(Match.id)
 
     match_id = (await session.execute(upsert_stmt)).scalar_one()
 
