@@ -427,6 +427,9 @@ def _extract_cards_from_detail(soup: BeautifulSoup) -> tuple[dict[str, int], dic
     deck_columns = _find_deck_column_parents(soup)
     if deck_columns:
         for column in deck_columns:
+            # Reset per column so a SIDEBOARD header in an earlier column
+            # doesn't leak the flag into the next column's main-deck cards.
+            in_sideboard = False
             for elem in column.find_all("div", recursive=True):
                 if not isinstance(elem, Tag):
                     continue

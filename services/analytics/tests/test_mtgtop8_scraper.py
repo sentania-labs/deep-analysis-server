@@ -272,6 +272,44 @@ def test_extract_decklist_detail_page() -> None:
     assert result["decklist_sideboard"]["Searing Blood"] == 3
 
 
+def test_extract_decklist_detail_page_multi_column_sideboard_isolated() -> None:
+    """Regression: ``in_sideboard`` must reset between deck columns.
+
+    mtgtop8 detail pages sometimes render multiple sibling deck columns
+    (e.g. a separate sideboard column). Without a per-column reset the
+    SIDEBOARD header in the first column would leak the flag into the
+    second column, mis-routing its main-deck cards into the sideboard
+    bucket.
+    """
+    html = """
+    <html><body>
+      <div style="margin:3px;flex:1;">
+        <div class="O14">SIDEBOARD</div>
+        <div class="deck_line">2 Smash to Smithereens</div>
+        <div class="deck_line">3 Searing Blood</div>
+      </div>
+      <div style="margin:3px;flex:1;">
+        <div class="O14">20 LANDS</div>
+        <div class="deck_line">4 Mountain</div>
+        <div class="O14">28 INSTANTS and SORC.</div>
+        <div class="deck_line">4 Lightning Bolt</div>
+      </div>
+    </body></html>
+    """
+    result = extract_decklist_from_detail_page(
+        html, "Alice", "https://mtgtop8.com/event?e=1&d=2&f=MO"
+    )
+    assert result is not None
+    # Second column's cards belong in main, not sideboard.
+    assert result["decklist_main"]["Mountain"] == 4
+    assert result["decklist_main"]["Lightning Bolt"] == 4
+    assert "Mountain" not in result["decklist_sideboard"]
+    assert "Lightning Bolt" not in result["decklist_sideboard"]
+    # First column's cards still land in sideboard.
+    assert result["decklist_sideboard"]["Smash to Smithereens"] == 2
+    assert result["decklist_sideboard"]["Searing Blood"] == 3
+
+
 def test_extract_decklist_detail_page_text_fallback() -> None:
     """Fallback: plain text card lines without deck_line class."""
     html = """
