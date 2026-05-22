@@ -319,3 +319,83 @@ def _session_maker_returning(session):
             return False
 
     return _Wrapper()
+
+
+# ---------------------------------------------------------------------------
+# Cache invalidation — `da:stats:{user_id}:*` namespace
+# ---------------------------------------------------------------------------
+
+
+class _StubRedis:
+    """Minimal stand-in for redis.asyncio.Redis used by the cache flush."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _install_redis_and_settings_stubs(monkeypatch) -> _StubRedis:
+    """Patch `redis.asyncio.from_url` + `get_settings` for cache-flush tests.
+
+    Avoids needing the parser service's full env-var stack
+    (database_url, jwt_public_key_path, etc.) just to exercise the flush.
+    """
+    stub_client = _StubRedis()
+
+    import redis.asyncio as redis_asyncio
+
+    monkeypatch.setattr(redis_asyncio, "from_url", lambda _url: stub_client)
+
+    from parser_service.scripts import cleanup_71_duplicates as mod
+
+    monkeypatch.setattr(mod, "get_settings", lambda: type("S", (), {"redis_url": "redis://stub"})())
+    return stub_client
+
+
+@pytest.mark.asyncio
+async def test_flush_calls_invalidate_user_per_affected_user(monkeypatch) -> None:
+    """`--apply` path calls `invalidate_user` once per affected user."""
+    from parser_service.scripts import cleanup_71_duplicates as mod
+
+    stub_client = _install_redis_and_settings_stubs(monkeypatch)
+
+    calls: list[tuple[object, int]] = []
+
+    async def _fake_invalidate(client, user_id: int) -> int:
+        calls.append((client, user_id))
+        return 5
+
+    import common.cache
+
+    monkeypatch.setattr(common.cache, "invalidate_user", _fake_invalidate)
+
+    await mod._flush_analytics_caches(None, [2, 4, 8], apply=True)
+
+    assert [uid for _c, uid in calls] == [2, 4, 8]
+    assert all(c is stub_client for c, _uid in calls)
+    assert stub_client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_flush_dry_run_does_not_invalidate(monkeypatch) -> None:
+    """`--dry-run` path must not call `invalidate_user` (no Redis writes)."""
+    from parser_service.scripts import cleanup_71_duplicates as mod
+
+    stub_client = _install_redis_and_settings_stubs(monkeypatch)
+
+    calls: list[int] = []
+
+    async def _fake_invalidate(_client, user_id: int) -> int:
+        calls.append(user_id)
+        return 0
+
+    import common.cache
+
+    monkeypatch.setattr(common.cache, "invalidate_user", _fake_invalidate)
+
+    await mod._flush_analytics_caches(None, [2, 4], apply=False)
+
+    assert calls == []
+    assert stub_client.closed is True
