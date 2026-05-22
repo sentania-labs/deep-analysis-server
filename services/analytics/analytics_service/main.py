@@ -978,6 +978,24 @@ async def scraper_events(
     return {"events": events, "total": total, "page": page, "per_page": per_page}
 
 
+def _decklist_card_count(decklist: Any) -> int:
+    """Sum the quantities in a ``{card_name: qty}`` decklist.
+
+    Used so the dashboard can show "60/15" for results that have cards
+    but no archetype name (MTGO, which doesn't tag deck archetypes).
+    Tolerant of None, non-dict values, and non-integer qty fields.
+    """
+    if not isinstance(decklist, dict):
+        return 0
+    total = 0
+    for qty in decklist.values():
+        try:
+            total += int(qty)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 @admin_router.get("/scrapers/{name}/events/{event_id}")
 async def scraper_event_detail(
     name: str,
@@ -1034,6 +1052,8 @@ async def scraper_event_detail(
                         "deck_name": r[2],
                         "decklist_main": r[3],
                         "decklist_sideboard": r[4],
+                        "main_card_count": _decklist_card_count(r[3]),
+                        "sideboard_card_count": _decklist_card_count(r[4]),
                     }
                     for r in result_rows
                 ],
@@ -1080,6 +1100,8 @@ async def scraper_event_detail(
                         "deck_name": None,
                         "decklist_main": r[2],
                         "decklist_sideboard": r[3],
+                        "main_card_count": _decklist_card_count(r[2]),
+                        "sideboard_card_count": _decklist_card_count(r[3]),
                     }
                     for r in result_rows
                 ],
