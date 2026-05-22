@@ -179,7 +179,7 @@ async def _flush_analytics_caches(
             _log.info("cache flush: would delete %d analytics keys", len(matched))
     finally:
         with contextlib.suppress(Exception):
-            await client.aclose()  # type: ignore[attr-defined]
+            await client.aclose()
 
 
 async def _run(apply: bool) -> int:
