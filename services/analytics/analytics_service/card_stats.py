@@ -120,7 +120,9 @@ async def _resolve_hero_name(
                 """
                 SELECT hero_player_name
                 FROM parser.matches
-                WHERE user_id = :user_id AND hero_player_name IS NOT NULL
+                WHERE user_id = :user_id
+                  AND hero_player_name IS NOT NULL
+                  AND review_status IS NULL
                 ORDER BY COALESCE(played_at, parsed_at) DESC
                 LIMIT 1
                 """
@@ -138,6 +140,7 @@ async def _resolve_hero_name(
                 SELECT players->>0
                 FROM parser.matches
                 WHERE user_id = :user_id
+                  AND review_status IS NULL
                 ORDER BY COALESCE(played_at, parsed_at) DESC
                 LIMIT 1
                 """
@@ -156,8 +159,12 @@ def _build_match_where(
     date_to: str | None = None,
     opponent_archetype_id: str | None = None,
 ) -> str:
-    """Build WHERE fragments that filter on parser.matches columns."""
-    clauses: list[str] = []
+    """Build WHERE fragments that filter on parser.matches columns.
+
+    Always emits a ``m.review_status IS NULL`` clause so holding-pen
+    rows never feed into user-facing card stats.
+    """
+    clauses: list[str] = ["m.review_status IS NULL"]
     if format_filter:
         clauses.append("LOWER(m.format) = LOWER(:format)")
         params["format"] = format_filter
@@ -215,6 +222,7 @@ async def _has_card_game_stats(db: AsyncSession, user_id: int) -> bool:
                 "  SELECT 1 FROM analytics.card_game_stats cgs"
                 "  JOIN parser.matches m ON m.id = cgs.match_id"
                 "  WHERE m.user_id = :user_id AND cgs.is_local = true"
+                "    AND m.review_status IS NULL"
                 "  LIMIT 1"
                 ")"
             ),
@@ -346,7 +354,7 @@ async def _load_card_appearances(
     date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     """Load per-game card appearance data using SQL-level JSONB extraction."""
-    where = "WHERE m.user_id = :user_id"
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
     if format_filter:
         where += " AND LOWER(m.format) = LOWER(:format)"
@@ -424,7 +432,7 @@ async def _load_card_appearances_fallback(
     date_to: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fallback loader for battlefield entries stored as plain strings."""
-    where = "WHERE m.user_id = :user_id"
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
     if format_filter:
         where += " AND LOWER(m.format) = LOWER(:format)"
@@ -537,7 +545,7 @@ async def _load_card_appearances_auto(
     if results:
         return results
 
-    where = "WHERE m.user_id = :user_id"
+    where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
     if format_filter:
         where += " AND LOWER(m.format) = LOWER(:format)"
@@ -1005,13 +1013,15 @@ async def get_game_turns(
 
     Scoped to authenticated user (the match must belong to them).
     """
-    # Verify match ownership
+    # Verify match ownership; pending_review / rejected matches are
+    # invisible to the user so the per-game turn view 404s for them too.
     match_row = (
         await db.execute(
             text(
                 """
                 SELECT id FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
+                  AND review_status IS NULL
                 """
             ),
             {"match_id": match_id, "user_id": user.user_id},
