@@ -7,6 +7,7 @@ last admin; cannot disable/delete yourself).
 
 from __future__ import annotations
 
+import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -596,11 +597,18 @@ _TUNABLE_DEFAULTS: dict[str, int] = {
     "mtgo_scraper_interval_hours": 24,
 }
 
-# Read-only constants surfaced in the tunables view for admin visibility
-# but not persisted to server_settings — they live in code.
-_PARSER_VERSION = "0.9.0"
-_REPARSE_MIN_VERSION = "0.9.0"
-_MIN_AGENT_VERSION = "0.4.14"
+# Defaults for string-valued tunables (version constants surfaced and
+# editable from the admin UI). Same DB-row-or-fallback pattern as
+# _TUNABLE_DEFAULTS; the compiled default applies until an admin saves.
+_STRING_TUNABLE_DEFAULTS: dict[str, str] = {
+    "parser_version": "0.9.0",
+    "reparse_min_version": "0.9.0",
+    "min_agent_version": "0.5.0",
+}
+
+# Loose semver-ish gate: X.Y.Z or vX.Y.Z plus an optional -suffix
+# (e.g. "0.5.0", "v1.2.3", "0.5.0-rc1"). Numeric components only.
+_VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$")
 
 
 async def _read_tunable(db: AsyncSession, key: str) -> int:
@@ -617,15 +625,33 @@ async def _read_tunable(db: AsyncSession, key: str) -> int:
         return _TUNABLE_DEFAULTS[key]
 
 
+async def _read_string_tunable(db: AsyncSession, key: str) -> str:
+    """Read a string-valued tunable from server_settings, falling back
+    to the compiled default. Used for the version constants admins can
+    edit from the settings UI."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == f"tunable:{key}"))
+    ).scalar_one_or_none()
+    if row is None or not isinstance(row.value, str) or not row.value.strip():
+        return _STRING_TUNABLE_DEFAULTS[key]
+    return row.value
+
+
+async def read_min_agent_version(db: AsyncSession) -> str:
+    """Public accessor for the heartbeat handler. Returns the
+    DB-backed minimum agent version with the compiled fallback."""
+    return await _read_string_tunable(db, "min_agent_version")
+
+
 async def _read_all_tunables(db: AsyncSession) -> TunablesView:
     return TunablesView(
         backfill_batch_size=await _read_tunable(db, "backfill_batch_size"),
         backfill_interval_seconds=await _read_tunable(db, "backfill_interval_seconds"),
         scryfall_sync_interval_days=await _read_tunable(db, "scryfall_sync_interval_days"),
         mtgo_scraper_interval_hours=await _read_tunable(db, "mtgo_scraper_interval_hours"),
-        reparse_min_version=_REPARSE_MIN_VERSION,
-        min_agent_version=_MIN_AGENT_VERSION,
-        parser_version=_PARSER_VERSION,
+        reparse_min_version=await _read_string_tunable(db, "reparse_min_version"),
+        min_agent_version=await _read_string_tunable(db, "min_agent_version"),
+        parser_version=await _read_string_tunable(db, "parser_version"),
     )
 
 
@@ -646,17 +672,30 @@ async def update_tunables(
 ) -> TunablesView:
     """Update one or more mutable tunables. Any admin may write."""
     now = datetime.now(UTC)
-    updates: dict[str, int] = {}
+    int_updates: dict[str, int] = {}
     if body.backfill_batch_size is not None:
-        updates["backfill_batch_size"] = body.backfill_batch_size
+        int_updates["backfill_batch_size"] = body.backfill_batch_size
     if body.backfill_interval_seconds is not None:
-        updates["backfill_interval_seconds"] = body.backfill_interval_seconds
+        int_updates["backfill_interval_seconds"] = body.backfill_interval_seconds
     if body.scryfall_sync_interval_days is not None:
-        updates["scryfall_sync_interval_days"] = body.scryfall_sync_interval_days
+        int_updates["scryfall_sync_interval_days"] = body.scryfall_sync_interval_days
     if body.mtgo_scraper_interval_hours is not None:
-        updates["mtgo_scraper_interval_hours"] = body.mtgo_scraper_interval_hours
+        int_updates["mtgo_scraper_interval_hours"] = body.mtgo_scraper_interval_hours
 
-    for key, value in updates.items():
+    string_updates: dict[str, str] = {}
+    for field in ("parser_version", "reparse_min_version", "min_agent_version"):
+        raw = getattr(body, field)
+        if raw is None:
+            continue
+        candidate = raw.strip()
+        if not _VERSION_RE.match(candidate):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "invalid_version", "field": field},
+            )
+        string_updates[field] = candidate
+
+    for key, value in (*int_updates.items(), *string_updates.items()):
         db_key = f"tunable:{key}"
         row = (
             await db.execute(select(ServerSetting).where(ServerSetting.key == db_key))

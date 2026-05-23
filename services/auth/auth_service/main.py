@@ -100,6 +100,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 
+from auth_service import admin  # noqa: E402
 from auth_service.admin import router as _admin_router  # noqa: E402
 
 # TODO(W7): per-admin-IP rate limit on mutation endpoints — deferred to gateway phase.
@@ -879,11 +880,14 @@ async def agent_heartbeat(
     except Exception:
         upload_count = 0
 
-    settings = get_settings()
+    # min_agent_version is admin-editable via /admin/settings/tunables.
+    # Reads from auth.server_settings with a compiled fallback so a fresh
+    # install with an empty settings table still returns a sane value.
+    min_agent_version = await admin.read_min_agent_version(db)
     return AgentHeartbeatResponse(
         status="ok",
         registered_at=row.created_at,
         revoked=row.revoked_at is not None,
         upload_count=upload_count,
-        min_agent_version=settings.MIN_AGENT_VERSION,
+        min_agent_version=min_agent_version,
     )

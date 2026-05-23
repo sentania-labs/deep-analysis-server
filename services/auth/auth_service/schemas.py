@@ -260,6 +260,12 @@ class UpdateTunablesRequest(BaseModel):
     backfill_interval_seconds: int | None = Field(default=None, ge=60, le=3600)
     scryfall_sync_interval_days: int | None = Field(default=None, ge=1, le=30)
     mtgo_scraper_interval_hours: int | None = Field(default=None, ge=1, le=168)
+    # Version-string tunables. Validated against a loose semver regex
+    # in the admin endpoint so we can return a 400 with a field-level
+    # error rather than letting Pydantic 422 the whole request.
+    parser_version: str | None = Field(default=None, max_length=64)
+    reparse_min_version: str | None = Field(default=None, max_length=64)
+    min_agent_version: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _at_least_one(self) -> UpdateTunablesRequest:
@@ -270,6 +276,9 @@ class UpdateTunablesRequest(BaseModel):
                 self.backfill_interval_seconds,
                 self.scryfall_sync_interval_days,
                 self.mtgo_scraper_interval_hours,
+                self.parser_version,
+                self.reparse_min_version,
+                self.min_agent_version,
             )
         ):
             raise ValueError("at_least_one_field_required")

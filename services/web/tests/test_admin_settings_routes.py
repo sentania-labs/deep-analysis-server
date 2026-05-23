@@ -460,3 +460,132 @@ async def test_post_scrape_mtgo_forbidden_for_non_admin(app_client: httpx.AsyncC
     finally:
         _main.app.dependency_overrides.clear()
     assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /admin/settings/tunables — version-string round-trip
+# ---------------------------------------------------------------------------
+
+
+_TUNABLES_FORM = {
+    "backfill_batch_size": "100",
+    "backfill_interval_seconds": "300",
+    "scryfall_sync_interval_days": "7",
+    "mtgo_scraper_interval_hours": "24",
+    "parser_version": "0.10.1",
+    "reparse_min_version": "0.10.0",
+    "min_agent_version": "0.6.0",
+}
+
+
+def _sample_tunables(
+    *,
+    parser_version: str = "0.9.0",
+    reparse_min_version: str = "0.9.0",
+    min_agent_version: str = "0.5.0",
+) -> Any:
+    from web_service import auth_client
+
+    return auth_client.TunablesResult(
+        backfill_batch_size=100,
+        backfill_interval_seconds=300,
+        scryfall_sync_interval_days=7,
+        mtgo_scraper_interval_hours=24,
+        parser_version=parser_version,
+        reparse_min_version=reparse_min_version,
+        min_agent_version=min_agent_version,
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_tunables_forwards_string_fields(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, Any] = {}
+
+    async def fake_update(
+        _url: str, _token: str, updates: dict[str, int | str]
+    ) -> tuple[auth_client.TunablesResult | None, str | None]:
+        captured["updates"] = updates
+        return _sample_tunables(
+            parser_version=str(updates["parser_version"]),
+            reparse_min_version=str(updates["reparse_min_version"]),
+            min_agent_version=str(updates["min_agent_version"]),
+        ), None
+
+    monkeypatch.setattr(auth_client, "admin_update_tunables", fake_update)
+    dep, _ = _override_admin(user_id=1)
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/settings/tunables", data=_TUNABLES_FORM)
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 303
+    assert "tunables_saved=1" in r.headers["location"]
+    assert captured["updates"]["parser_version"] == "0.10.1"
+    assert captured["updates"]["reparse_min_version"] == "0.10.0"
+    assert captured["updates"]["min_agent_version"] == "0.6.0"
+
+
+@pytest.mark.asyncio
+async def test_post_tunables_forbidden_for_non_admin(app_client: httpx.AsyncClient) -> None:
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    dep, _ = _override_non_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.post("/admin/settings/tunables", data=_TUNABLES_FORM)
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_settings_renders_editable_version_fields(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import analytics_client, auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_mode(_url: str, _token: str) -> auth_client.RegistrationMode:
+        return _sample_mode("invite_only")
+
+    async def fake_tunables(_url: str, _token: str) -> auth_client.TunablesResult:
+        return _sample_tunables(min_agent_version="0.6.0")
+
+    async def _empty_cards(*_a: Any, **_kw: Any) -> Any:
+        raise analytics_client.AnalyticsClientError("noop")
+
+    async def _empty_scrapers(*_a: Any, **_kw: Any) -> Any:
+        raise analytics_client.AnalyticsClientError("noop")
+
+    monkeypatch.setattr(auth_client, "admin_get_registration_mode", fake_mode)
+    monkeypatch.setattr(auth_client, "admin_get_tunables", fake_tunables)
+    monkeypatch.setattr(analytics_client, "admin_get_cards_status", _empty_cards)
+    monkeypatch.setattr(analytics_client, "admin_get_all_scraper_health", _empty_scrapers)
+
+    dep, _ = _override_admin(user_id=1)
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        r = await app_client.get("/admin/settings")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    # The version-constants fieldset is no longer disabled and the
+    # fields are part of the tunables form.
+    assert 'name="min_agent_version"' in r.text
+    assert 'name="parser_version"' in r.text
+    assert 'name="reparse_min_version"' in r.text
+    assert "Agents on older versions will be prompted to upgrade" in r.text
+    # The value rendered is what the (faked) auth service returned.
+    assert 'value="0.6.0"' in r.text

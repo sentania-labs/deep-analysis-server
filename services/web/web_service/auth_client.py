@@ -1112,12 +1112,12 @@ async def admin_get_tunables(base_url: str, token: str) -> TunablesResult:
 async def admin_update_tunables(
     base_url: str,
     token: str,
-    updates: dict[str, int],
+    updates: dict[str, int | str],
 ) -> tuple[TunablesResult | None, str | None]:
     """Admin-only: patch mutable tunables. Returns (result, error_code).
 
     - 200 -> (TunablesResult, None)
-    - 422 -> (None, "validation_error")
+    - 400/422 -> (None, "validation_error")
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
