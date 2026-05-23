@@ -17,20 +17,43 @@
         respond "ok" 200
     }
 
+    # Bounded keepalive recycles pooled connections every 30s so a
+    # silently-replaced upstream container can't strand a stale pool
+    # entry between deploys.
     handle /auth/* {
-        reverse_proxy auth:8000
+        reverse_proxy auth:8000 {
+            transport http {
+                keepalive 30s
+                keepalive_idle_conns 10
+            }
+        }
     }
 
     handle /ingest/* {
-        reverse_proxy ingest:8000
+        reverse_proxy ingest:8000 {
+            transport http {
+                keepalive 30s
+                keepalive_idle_conns 10
+            }
+        }
     }
 
     handle /analytics/* {
-        reverse_proxy analytics:8000
+        reverse_proxy analytics:8000 {
+            transport http {
+                keepalive 30s
+                keepalive_idle_conns 10
+            }
+        }
     }
 
     handle {
-        reverse_proxy web:8000
+        reverse_proxy web:8000 {
+            transport http {
+                keepalive 30s
+                keepalive_idle_conns 10
+            }
+        }
     }
 
     # NOTE: Rate limiting on auth endpoints (e.g. /auth/login) is
