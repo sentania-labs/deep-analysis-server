@@ -119,15 +119,6 @@ echo ">> bringing stack up"
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
     "docker compose --project-directory $DEPLOY_PATH up -d"
 
-# Drop the gateway's upstream connection pool after the backend
-# containers are replaced. Without this, a long-lived Caddy can keep a
-# keepalive connection pinned to a now-dead container IP — the cause of
-# the empty-body GET / regression in the v0.9.9 deploy. `set -e` above
-# already makes a failed reload abort the deploy.
-echo ">> reloading gateway to refresh upstream pool"
-ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
-    "docker exec deep-analysis-gateway-1 caddy reload --config /etc/caddy/Caddyfile"
-
 echo ">> verifying stack"
 ssh "${SSH_OPTS[@]}" "$DEPLOY_HOST" \
     "docker compose --project-directory $DEPLOY_PATH ps"

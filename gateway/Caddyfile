@@ -19,8 +19,7 @@
 
     # Bounded keepalive recycles pooled connections every 30s so a
     # silently-replaced upstream container can't strand a stale pool
-    # entry between deploys. Belt to the post-deploy `caddy reload`
-    # suspenders in deploy/deploy.sh.
+    # entry between deploys.
     handle /auth/* {
         reverse_proxy auth:8000 {
             transport http {
