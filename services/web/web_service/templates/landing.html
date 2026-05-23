@@ -1,60 +1,457 @@
 {% extends "base.html" %}
 
-{% block title %}Deep Analysis — MTGO Match Analytics{% endblock %}
+{% block title %}Deep Analysis — MTGO match analytics, automatically{% endblock %}
+
+{% block extra_head %}
+    <meta name="description" content="Self-hosted match analytics for Magic: The Gathering Online. A Windows agent ships your game logs to your server; you get a dashboard of every match — win rate, format breakdowns, opponent history, play/draw splits, sideboard performance — with zero manual entry.">
+    <meta name="robots" content="index,follow">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Deep Analysis — MTGO match analytics, automatically">
+    <meta property="og:description" content="Self-hosted match analytics for Magic: The Gathering Online. Install the agent, play Magic, see every match — no manual entry, no third-party server holding your data.">
+    <meta property="og:site_name" content="Deep Analysis">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Deep Analysis — MTGO match analytics, automatically">
+    <meta name="twitter:description" content="Self-hosted match analytics for MTGO. Install the agent, play Magic, see every match.">
+{% endblock %}
 
 {% block body_layout %}
 <main class="flex-1 pt-12">
-    <div class="max-w-3xl mx-auto px-4 sm:px-6 py-16 text-center">
-        <section class="mb-12">
-            <h1 class="text-4xl sm:text-5xl font-bold dark:text-txt-primary text-txt-primary-light mb-4 tracking-tight">
-                Deep Analysis
+    {# ── Hero ── #}
+    <section class="relative overflow-hidden border-b dark:border-border border-border-light">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-24 sm:pt-28 sm:pb-32">
+            <div class="flex items-center gap-2 mb-6">
+                <span class="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light border dark:border-border border-border-light rounded-full px-2.5 py-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+                    Self-hosted &middot; AGPL-3.0
+                </span>
+            </div>
+            <h1 class="text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight dark:text-txt-primary text-txt-primary-light leading-[1.05]">
+                Every match you play on
+                <span class="font-mono text-accent">MTGO</span>,
+                <br class="hidden sm:block">
+                analyzed automatically.
             </h1>
-            <p class="text-lg dark:text-txt-secondary text-txt-secondary-light">
-                Self-hosted match analytics for Magic: The Gathering Online
+            <p class="mt-6 max-w-2xl text-lg sm:text-xl dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                Install a small Windows agent. Play Magic the way you always have.
+                Open the dashboard and see your win rate, format splits, play/draw,
+                sideboard performance, and per-opponent history — built from your
+                game logs with zero manual entry.
             </p>
-        </section>
-
-        <section class="grid sm:grid-cols-2 gap-4 mb-12 text-left">
-            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
-                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Match tracking</h3>
-                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
-                    Automatically capture every match from your MTGO game logs
-                </p>
-            </div>
-            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
-                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Performance analytics</h3>
-                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
-                    Win rates, format breakdowns, and opponent history at a glance
-                </p>
-            </div>
-            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
-                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Format detection</h3>
-                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
-                    Standard, Modern, Legacy, Vintage, Pauper, and more identified automatically
-                </p>
-            </div>
-            <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
-                <h3 class="text-sm font-semibold dark:text-accent text-accent mb-1.5">Play/draw and sideboard stats</h3>
-                <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
-                    See how your decisions before and after boarding affect your results
-                </p>
-            </div>
-        </section>
-
-        <section class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 inline-block">
-            <div class="flex gap-3 justify-center">
+            <div class="mt-10 flex flex-wrap gap-3">
                 <a href="/login"
-                   class="bg-accent text-white hover:bg-accent-hover rounded-md px-6 py-2.5 text-sm font-medium no-underline transition-colors">
+                   class="inline-flex items-center gap-2 bg-accent text-white hover:bg-accent-hover rounded-md px-5 py-3 text-sm font-medium no-underline transition-colors">
+                    Sign in
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </a>
+                {% if registration_open %}
+                <a href="/register"
+                   class="inline-flex items-center gap-2 border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-5 py-3 text-sm font-medium no-underline transition-colors">
+                    Create an account
+                </a>
+                {% endif %}
+                <a href="#get-started"
+                   class="inline-flex items-center gap-2 dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light rounded-md px-5 py-3 text-sm font-medium no-underline transition-colors">
+                    How it works
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                </a>
+            </div>
+
+            {# A small visual cue: a stylized result strip. Pure SVG, decorative. #}
+            <div aria-hidden="true" class="mt-16 max-w-3xl">
+                <div class="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider dark:text-txt-tertiary text-txt-secondary-light mb-2">
+                    <span>Recent matches</span>
+                    <span class="flex-1 border-t dark:border-border-subtle border-border-light"></span>
+                    <span>win rate 62.4%</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    {% set _seq = ['w','w','l','w','d','w','w','l','w','w','w','l','w','w','l','w','w','w','w','l','w','w','w','l','w','w','l','w','w','w'] %}
+                    {% for r in _seq %}
+                    <span class="flex-1 h-2 rounded-sm
+                        {% if r == 'w' %}bg-success
+                        {% elif r == 'l' %}bg-danger
+                        {% else %}bg-warning
+                        {% endif %}"></span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    {# ── What this is ── #}
+    <section class="border-b dark:border-border border-border-light dark:bg-surface bg-surface-light">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-20 grid lg:grid-cols-12 gap-10">
+            <div class="lg:col-span-4">
+                <p class="font-mono text-[11px] uppercase tracking-wider text-accent mb-3">// what this is</p>
+                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
+                    A scoreboard you don't have to keep.
+                </h2>
+            </div>
+            <div class="lg:col-span-8 space-y-5 text-[15px] leading-relaxed dark:text-txt-secondary text-txt-secondary-light">
+                <p>
+                    Deep Analysis is for MTGO grinders, league regulars, and anyone
+                    who wants to know <span class="dark:text-txt-primary text-txt-primary-light">why</span>
+                    they're winning or losing. It reads the game logs MTGO already writes,
+                    parses every match, and surfaces the patterns — win rate by format, on
+                    the play vs. on the draw, before and after sideboarding, your hardest
+                    opponents, and which cards actually win you games.
+                </p>
+                <p>
+                    The difference from a notebook or a spreadsheet is the friction. You
+                    don't open a tab. You don't type a result. You just play Magic, and
+                    the dashboard fills in. The Windows agent watches your MTGO log
+                    directory, ships each completed match to your server, and the parser
+                    takes it from there.
+                </p>
+                <p>
+                    It's self-hosted on purpose. The
+                    <a href="https://github.com/sentania-labs/deep-analysis-server" class="text-accent hover:text-accent-hover">server</a>
+                    is open source (AGPL-3.0). The
+                    <a href="https://github.com/sentania-labs/deep-analysis-agent" class="text-accent hover:text-accent-hover">agent</a>
+                    is open source (MIT). An optional closed-source AI add-on layers
+                    coaching insights on top. Your play data lives on the server you
+                    chose — not on someone else's.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    {# ── Get started ── #}
+    <section id="get-started" class="border-b dark:border-border border-border-light">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+            <div class="mb-12 max-w-2xl">
+                <p class="font-mono text-[11px] uppercase tracking-wider text-accent mb-3">// get started</p>
+                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
+                    Six steps. About five minutes.
+                </h2>
+                <p class="mt-3 text-[15px] dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    Registration on this instance is invite-only — the operator
+                    chooses who joins. Once you have a code, the rest is one
+                    install and a paste.
+                </p>
+            </div>
+
+            <ol class="relative space-y-8 sm:space-y-10 sm:pl-20">
+                {# Vertical guide line on sm+ #}
+                <div aria-hidden="true" class="hidden sm:block absolute left-[18px] top-2 bottom-2 w-px dark:bg-border bg-border-light"></div>
+
+                {% set steps = [
+                    {
+                        'n': '01',
+                        'title': 'Get an invite code',
+                        'body': 'Registration is invite-only on this Deep Analysis instance. Ask the operator (the person who shared this link) for one.',
+                        'mono': None,
+                    },
+                    {
+                        'n': '02',
+                        'title': 'Create your account',
+                        'body': 'Use the invite link to register. You\'ll set an email and a password — that\'s it.',
+                        'mono': None,
+                    },
+                    {
+                        'n': '03',
+                        'title': 'Download the Windows agent',
+                        'body': 'Grab the latest release from GitHub. It\'s a single Squirrel installer — per-user install, auto-update, no UAC prompts.',
+                        'mono': 'github.com/sentania-labs/deep-analysis-agent/releases/latest',
+                    },
+                    {
+                        'n': '04',
+                        'title': 'Install with one click',
+                        'body': 'Run the installer. The agent lives as a tray icon and starts on login. No service, no admin rights needed.',
+                        'mono': None,
+                    },
+                    {
+                        'n': '05',
+                        'title': 'Paste your registration code',
+                        'body': 'On first run the agent asks for the code from your profile. Paste it in. The agent starts watching your MTGO log directory immediately.',
+                        'mono': 'Match_GameLog_*.dat',
+                    },
+                    {
+                        'n': '06',
+                        'title': 'Play a match',
+                        'body': 'When the match ends, MTGO writes the log, the agent ships it, the server parses it, and your dashboard updates. No refresh, no copy-paste.',
+                        'mono': None,
+                    },
+                ] %}
+
+                {% for step in steps %}
+                <li class="relative">
+                    <div class="sm:absolute sm:-left-20 sm:top-0 flex items-center gap-3 mb-3 sm:mb-0">
+                        <span class="relative z-10 w-9 h-9 rounded-full dark:bg-surface bg-surface-light border-2 dark:border-border border-border-light flex items-center justify-center font-mono text-[11px] font-semibold dark:text-accent text-accent">
+                            {{ step.n }}
+                        </span>
+                    </div>
+                    <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-5">
+                        <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-1.5">{{ step.title }}</h3>
+                        <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">{{ step.body }}</p>
+                        {% if step.mono %}
+                        <div class="mt-3 inline-flex items-center gap-2 font-mono text-xs dark:text-txt-primary text-txt-primary-light dark:bg-surface-3 bg-surface-light-3 border dark:border-border-subtle border-border-light rounded px-2.5 py-1.5">
+                            <span class="dark:text-txt-tertiary text-txt-secondary-light">$</span>
+                            <span class="break-all">{{ step.mono }}</span>
+                        </div>
+                        {% endif %}
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+
+            <div class="mt-12 flex flex-wrap items-center gap-3 text-sm">
+                <a href="https://github.com/sentania-labs/deep-analysis-agent/releases/latest"
+                   class="inline-flex items-center gap-2 bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 font-medium no-underline transition-colors">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Download the Windows agent
+                </a>
+                {% if registration_open %}
+                <a href="/register"
+                   class="inline-flex items-center gap-2 border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 font-medium no-underline transition-colors">
+                    Create an account
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    {# ── What you get (varied bento layout) ── #}
+    <section class="border-b dark:border-border border-border-light dark:bg-surface bg-surface-light">
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+            <div class="mb-12 max-w-2xl">
+                <p class="font-mono text-[11px] uppercase tracking-wider text-accent mb-3">// what you get</p>
+                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
+                    The dashboard, in detail.
+                </h2>
+                <p class="mt-3 text-[15px] dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                    Every panel below is shipped today, populated from your own
+                    matches.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-6 gap-4">
+                {# Feature 1 — wide hero card: automatic capture #}
+                <div class="sm:col-span-6 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-6 sm:p-8">
+                    <div class="grid sm:grid-cols-12 gap-6 items-center">
+                        <div class="sm:col-span-7">
+                            <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                automatic capture
+                            </div>
+                            <h3 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light mb-2">No manual entry, ever.</h3>
+                            <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                                The agent watches MTGO's log directory for completed-match
+                                files and ships each one to your server within seconds.
+                                Duplicates are deduplicated by content hash. You play; the
+                                data shows up.
+                            </p>
+                        </div>
+                        <div class="sm:col-span-5">
+                            <div class="font-mono text-[11px] dark:text-txt-secondary text-txt-secondary-light dark:bg-surface bg-surface-light border dark:border-border-subtle border-border-light rounded p-3 leading-relaxed">
+                                <div class="flex items-start gap-2">
+                                    <span class="text-success">↑</span>
+                                    <span><span class="dark:text-txt-primary text-txt-primary-light">Match_GameLog_…</span> ingested</span>
+                                </div>
+                                <div class="flex items-start gap-2 mt-1">
+                                    <span class="dark:text-txt-tertiary text-txt-secondary-light">·</span>
+                                    <span>parsed: 3 games, format Modern</span>
+                                </div>
+                                <div class="flex items-start gap-2 mt-1">
+                                    <span class="dark:text-txt-tertiary text-txt-secondary-light">·</span>
+                                    <span>result: 2-1, on the draw G1</span>
+                                </div>
+                                <div class="flex items-start gap-2 mt-1">
+                                    <span class="text-accent">→</span>
+                                    <span>dashboard updated</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {# Row of three smaller features #}
+                {% set tile_features = [
+                    {
+                        'label': 'win rate',
+                        'title': 'By format',
+                        'body': 'Modern, Legacy, Vintage, Pioneer, Pauper, Standard — auto-detected from each match. Click a format to filter every other panel.',
+                        'icon': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>',
+                    },
+                    {
+                        'label': 'play / draw',
+                        'title': 'On the play vs. on the draw',
+                        'body': 'See how much being on the play actually matters for you — overall and per format. The numbers usually surprise.',
+                        'icon': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16l-4-4m0 0l4-4m-4 4h18M17 8l4 4m0 0l-4 4"/>',
+                    },
+                    {
+                        'label': 'sideboarding',
+                        'title': 'Pre-board vs. post-board',
+                        'body': 'Game-one win rate vs. the rest. A persistent gap is a signal that your sideboard plan needs work.',
+                        'icon': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>',
+                    },
+                ] %}
+                {% for f in tile_features %}
+                <div class="sm:col-span-2 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">{{ f.icon|safe }}</svg>
+                        {{ f.label }}
+                    </div>
+                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">{{ f.title }}</h3>
+                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">{{ f.body }}</p>
+                </div>
+                {% endfor %}
+
+                {# Wide feature: opponent history #}
+                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                        by opponent
+                    </div>
+                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Who beats you, and how often.</h3>
+                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                        Per-opponent win rate across every match you've played. Filter
+                        history by opponent name to study a specific matchup or a
+                        familiar rival.
+                    </p>
+                </div>
+
+                {# Wide feature: card performance #}
+                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+                        card-level stats
+                    </div>
+                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Which cards win you games.</h3>
+                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                        Per-card win rate and average turn cast, drawn from the games
+                        each card actually showed up in. Useful for tuning slots and
+                        catching cards that pull weight you didn't expect.
+                    </p>
+                </div>
+
+                {# Mulligans + self-hosted (two more) #}
+                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>
+                        mulligans
+                    </div>
+                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Hand-size win rates.</h3>
+                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                        Win rate broken out by starting hand size. See the real cost of
+                        a mulligan in your matchups — and the deck-specific mulligan
+                        thresholds that actually hold up.
+                    </p>
+                </div>
+
+                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                        self-hosted
+                    </div>
+                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Your data, your server.</h3>
+                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                        The agent uploads only to the server you configure. There is no
+                        Deep Analysis cloud and no telemetry shipped elsewhere. If you
+                        run the server, you run the storage.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    {# ── FAQ ── #}
+    <section class="border-b dark:border-border border-border-light">
+        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
+            <div class="mb-10">
+                <p class="font-mono text-[11px] uppercase tracking-wider text-accent mb-3">// faq</p>
+                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
+                    Questions worth asking.
+                </h2>
+            </div>
+
+            {% set faqs = [
+                {
+                    'q': 'Is my play data private?',
+                    'a': 'Yes. Deep Analysis is self-hosted — the agent uploads only to the server you configure, and that server is operated by whoever runs this instance. There is no shared cloud, no third-party analytics, and no telemetry. If you run your own instance, you control the storage entirely.',
+                },
+                {
+                    'q': 'Does it work with paper Magic?',
+                    'a': 'No. The data comes from MTGO\'s game logs, which only exist for matches you play on MTGO. Paper, Arena, and other clients aren\'t supported.',
+                },
+                {
+                    'q': 'Do I need to run my own server?',
+                    'a': 'For full data sovereignty, yes — that\'s the design. If you\'re using this instance, you\'re trusting whoever operates it. Both options are real: spin up your own Docker Compose stack from the open-source server repo, or get an invite to an existing instance you trust.',
+                },
+                {
+                    'q': 'Is it free?',
+                    'a': 'The server and agent are open source — AGPL-3.0 for the server, MIT for the agent. Anyone can run them at no cost. The operator of an instance chooses whether to charge for access; that\'s their call, not the project\'s.',
+                },
+                {
+                    'q': 'Why invite-only?',
+                    'a': 'This particular instance is configured invite-only by its operator — usually to keep things focused on a known community of players. Other instances may set registration open. If you don\'t have an invite, you\'re welcome to host your own and invite whomever you like.',
+                },
+                {
+                    'q': 'What about cheating or fairness?',
+                    'a': 'Deep Analysis is a reporting tool: it reads logs MTGO has already written and summarizes what happened. It doesn\'t alter game state, see hidden information, or interact with MTGO at all. Stats describe; they don\'t change the game.',
+                },
+                {
+                    'q': 'What about an AI coach?',
+                    'a': 'A separate, closed-source AI add-on subscribes to match events on the server and produces coaching insights. It\'s optional, runs as its own container, and is disabled by default. The open-source server stays clean of any AI logic.',
+                },
+            ] %}
+
+            <ul class="divide-y dark:divide-border divide-border-light border-y dark:border-border border-border-light"
+                role="list">
+                {% for item in faqs %}
+                <li x-data="{ open: false }" class="py-1">
+                    <button @click="open = !open"
+                            class="w-full flex items-center justify-between gap-4 py-4 text-left bg-transparent border-0 cursor-pointer font-[inherit] dark:text-txt-primary text-txt-primary-light"
+                            :aria-expanded="open ? 'true' : 'false'">
+                        <span class="text-base font-medium">{{ item.q }}</span>
+                        <svg class="w-5 h-5 flex-shrink-0 transition-transform dark:text-txt-secondary text-txt-secondary-light"
+                             :class="open ? 'rotate-180' : ''"
+                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
+                    <div x-show="open"
+                         x-transition.opacity.duration.150ms
+                         x-cloak
+                         class="pb-5 pr-9 text-sm leading-relaxed dark:text-txt-secondary text-txt-secondary-light">
+                        {{ item.a }}
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+
+    {# ── Final CTA ── #}
+    <section class="dark:bg-surface bg-surface-light">
+        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
+            <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
+                Ready to see your matches?
+            </h2>
+            <p class="mt-3 text-[15px] dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
+                Sign in with an existing account{% if registration_open %}, register with an invite, {% endif %} or read the
+                code on GitHub.
+            </p>
+            <div class="mt-8 flex flex-wrap gap-3 justify-center">
+                <a href="/login"
+                   class="inline-flex items-center gap-2 bg-accent text-white hover:bg-accent-hover rounded-md px-5 py-3 text-sm font-medium no-underline transition-colors">
                     Sign in
                 </a>
                 {% if registration_open %}
                 <a href="/register"
-                   class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-6 py-2.5 text-sm no-underline transition-colors">
-                    Register
+                   class="inline-flex items-center gap-2 border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-5 py-3 text-sm font-medium no-underline transition-colors">
+                    Create an account
                 </a>
                 {% endif %}
             </div>
-        </section>
-    </div>
+            <div class="mt-10 flex flex-wrap gap-x-6 gap-y-2 justify-center text-xs font-mono dark:text-txt-secondary text-txt-secondary-light">
+                <a href="https://github.com/sentania-labs/deep-analysis-server" class="hover:dark:text-txt-primary hover:text-txt-primary-light">
+                    sentania-labs/deep-analysis-server
+                </a>
+                <a href="https://github.com/sentania-labs/deep-analysis-agent" class="hover:dark:text-txt-primary hover:text-txt-primary-light">
+                    sentania-labs/deep-analysis-agent
+                </a>
+            </div>
+        </div>
+    </section>
 </main>
 {% endblock %}
