@@ -2472,6 +2472,9 @@ async def admin_settings_tunables(
     backfill_interval_seconds: Annotated[int, Form()],
     scryfall_sync_interval_days: Annotated[int, Form()],
     mtgo_scraper_interval_hours: Annotated[int, Form()],
+    parser_version: Annotated[str, Form()],
+    reparse_min_version: Annotated[str, Form()],
+    min_agent_version: Annotated[str, Form()],
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
@@ -2479,11 +2482,14 @@ async def admin_settings_tunables(
     if blocked is not None:
         return blocked
 
-    updates = {
+    updates: dict[str, int | str] = {
         "backfill_batch_size": backfill_batch_size,
         "backfill_interval_seconds": backfill_interval_seconds,
         "scryfall_sync_interval_days": scryfall_sync_interval_days,
         "mtgo_scraper_interval_hours": mtgo_scraper_interval_hours,
+        "parser_version": parser_version,
+        "reparse_min_version": reparse_min_version,
+        "min_agent_version": min_agent_version,
     }
 
     try:

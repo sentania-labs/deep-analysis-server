@@ -86,22 +86,25 @@
                 </div>
             </fieldset>
             <fieldset class="border dark:border-border border-border-light rounded-md p-4">
-                <legend class="text-xs font-semibold uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light px-2">Version constants (read-only)</legend>
+                <legend class="text-xs font-semibold uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light px-2">Version constants</legend>
                 <div class="flex flex-wrap gap-4 mt-2">
                     <label class="flex flex-col gap-1">
                         <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Parser version</span>
-                        <input type="text" value="{{ tunables.parser_version }}" disabled
-                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-secondary text-txt-secondary-light outline-none w-40 opacity-60">
+                        <input type="text" name="parser_version" value="{{ tunables.parser_version }}" required pattern="v?\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?"
+                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none w-40">
+                        <small class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Reported parser build (e.g. 0.9.0)</small>
                     </label>
                     <label class="flex flex-col gap-1">
                         <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Reparse min version</span>
-                        <input type="text" value="{{ tunables.reparse_min_version }}" disabled
-                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-secondary text-txt-secondary-light outline-none w-40 opacity-60">
+                        <input type="text" name="reparse_min_version" value="{{ tunables.reparse_min_version }}" required pattern="v?\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?"
+                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none w-40">
+                        <small class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Triggers reparse-on-upgrade below this version</small>
                     </label>
                     <label class="flex flex-col gap-1">
                         <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Minimum agent version</span>
-                        <input type="text" value="{{ tunables.min_agent_version }}" disabled
-                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-secondary text-txt-secondary-light outline-none w-40 opacity-60">
+                        <input type="text" name="min_agent_version" value="{{ tunables.min_agent_version }}" required pattern="v?\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?"
+                               class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-1.5 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none w-40">
+                        <small class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Agents on older versions will be prompted to upgrade</small>
                     </label>
                 </div>
             </fieldset>
