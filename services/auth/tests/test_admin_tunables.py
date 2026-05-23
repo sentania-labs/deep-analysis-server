@@ -79,9 +79,7 @@ async def test_read_min_agent_version_falls_back(db_session: AsyncSession) -> No
 
 
 @pytest.mark.asyncio
-async def test_patch_string_tunables_round_trip(
-    client: Any, db_session: AsyncSession
-) -> None:
+async def test_patch_string_tunables_round_trip(client: Any, db_session: AsyncSession) -> None:
     _admin_id, token = await _seed_admin(client, db_session)
 
     r = await client.patch(
@@ -168,9 +166,7 @@ async def test_patch_rejects_invalid_version_string(
 
 
 @pytest.mark.asyncio
-async def test_patch_string_tunable_requires_admin(
-    client: Any, db_session: AsyncSession
-) -> None:
+async def test_patch_string_tunable_requires_admin(client: Any, db_session: AsyncSession) -> None:
     _user_id, token = await _seed_user(client, db_session)
     r = await client.patch(
         "/admin/settings/tunables",
@@ -186,9 +182,7 @@ async def test_patch_string_tunable_requires_admin(
 
 
 @pytest.mark.asyncio
-async def test_get_tunables_surfaces_defaults(
-    client: Any, db_session: AsyncSession
-) -> None:
+async def test_get_tunables_surfaces_defaults(client: Any, db_session: AsyncSession) -> None:
     _admin_id, token = await _seed_admin(client, db_session)
     r = await client.get("/admin/settings/tunables", headers=_h(token))
     assert r.status_code == 200
@@ -203,9 +197,7 @@ async def test_get_tunables_surfaces_defaults(
 # ---------------------------------------------------------------------------
 
 
-async def _register_agent(
-    client: Any, email: str, password: str
-) -> dict[str, Any]:
+async def _register_agent(client: Any, email: str, password: str) -> dict[str, Any]:
     access = await _login(client, email, password)
     r = await client.post(
         "/auth/agent/registration-code",
@@ -260,9 +252,7 @@ async def test_heartbeat_min_agent_version_reads_db_override(
 
 
 @pytest.mark.asyncio
-async def test_patch_no_op_payload_rejected(
-    client: Any, db_session: AsyncSession
-) -> None:
+async def test_patch_no_op_payload_rejected(client: Any, db_session: AsyncSession) -> None:
     _admin_id, token = await _seed_admin(client, db_session)
     r = await client.patch("/admin/settings/tunables", json={}, headers=_h(token))
     assert r.status_code == 422
