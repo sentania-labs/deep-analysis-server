@@ -1,4 +1,17 @@
-{# HTMX partial: Card performance table filtered by format, paginated #}
+{# HTMX partial: Card performance table filtered by format, paginated, sortable.
+
+   `current_sort` / `current_dir` default here so the partial renders
+   correctly when first {% include %}d from dashboard.html (no route
+   handler has bound those names yet). The handler always overrides
+   them via the TemplateResponse context. #}
+{% set current_sort = current_sort|default('games') %}
+{% set current_dir = current_dir|default('desc') %}
+{% set columns = [
+    {'key': 'card_name',     'label': 'Card',          'natural': 'asc',  'align': 'left'},
+    {'key': 'games',         'label': 'Games',         'natural': 'desc', 'align': 'right'},
+    {'key': 'win_rate',      'label': 'Win Rate',      'natural': 'desc', 'align': 'right'},
+    {'key': 'avg_cast_turn', 'label': 'Avg Cast Turn', 'natural': 'desc', 'align': 'right'},
+] %}
 {% if card_stats and card_stats.cards %}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
@@ -8,10 +21,23 @@
         <table class="w-full">
             <thead>
                 <tr class="border-b dark:border-border border-border-light">
-                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Card</th>
-                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Games</th>
-                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Win Rate</th>
-                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Avg Cast Turn</th>
+                    {% for col in columns %}
+                    {% set is_active = (col.key == current_sort) %}
+                    {% set next_dir = ('asc' if current_dir == 'desc' else 'desc') if is_active else col.natural %}
+                    {% set aria_sort = ('ascending' if current_dir == 'asc' else 'descending') if is_active else 'none' %}
+                    {# Toggling sort always returns the user to page 1 — the row that was on page 3 under the
+                       previous sort almost never maps to the same page under the new sort. #}
+                    {% set href = "/dashboard/partials/card-performance?format=" + (format_filter|urlencode) + "&page=1&sort=" + col.key + "&dir=" + next_dir %}
+                    <th aria-sort="{{ aria_sort }}"
+                        class="text-xs uppercase tracking-wider font-medium text-{{ col.align }} px-0 py-0 dark:text-txt-secondary text-txt-secondary-light">
+                        <button hx-get="{{ href }}"
+                                hx-target="#card-performance-panel"
+                                hx-swap="innerHTML"
+                                class="w-full text-{{ col.align }} px-4 py-2.5 cursor-pointer bg-transparent border-0 uppercase tracking-wider text-xs font-medium {% if is_active %}dark:text-txt-primary text-txt-primary-light{% else %}dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light{% endif %} transition-colors">
+                            {{ col.label }}{% if is_active %}<span aria-hidden="true" class="ml-1">{% if current_dir == 'asc' %}&uarr;{% else %}&darr;{% endif %}</span>{% endif %}
+                        </button>
+                    </th>
+                    {% endfor %}
                 </tr>
             </thead>
             <tbody>
@@ -27,11 +53,14 @@
         </table>
     </div>
 
-    {# Pagination #}
+    {# Pagination — preserves the active sort + direction. #}
     {% set first_idx = (card_stats.page - 1) * card_stats.per_page + 1 %}
     {% set last_idx = first_idx + card_stats.cards|length - 1 %}
     {% set has_prev = card_stats.page > 1 %}
     {% set has_next = last_idx < card_stats.total %}
+    {% set base_qs = "format=" + (format_filter|urlencode) + "&sort=" + current_sort + "&dir=" + current_dir %}
+    {% set prev_url = "/dashboard/partials/card-performance?" + base_qs + "&page=" + (card_stats.page - 1)|string %}
+    {% set next_url = "/dashboard/partials/card-performance?" + base_qs + "&page=" + (card_stats.page + 1)|string %}
     <div class="px-4 py-3 border-t dark:border-border border-border-light">
         <nav class="flex items-center justify-between" aria-label="Card stats pagination">
             <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
@@ -41,14 +70,14 @@
             {% if has_prev or has_next %}
             <div class="flex items-center gap-2 text-sm">
                 {% if has_prev %}
-                <button hx-get="/dashboard/partials/card-performance?format={{ format_filter|urlencode }}&page={{ card_stats.page - 1 }}"
+                <button hx-get="{{ prev_url }}"
                         hx-target="#card-performance-panel"
                         hx-swap="innerHTML"
                         class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors cursor-pointer bg-transparent">&larr; Prev</button>
                 {% endif %}
                 <span class="font-mono text-xs dark:text-txt-secondary text-txt-secondary-light">{{ card_stats.page }}</span>
                 {% if has_next %}
-                <button hx-get="/dashboard/partials/card-performance?format={{ format_filter|urlencode }}&page={{ card_stats.page + 1 }}"
+                <button hx-get="{{ next_url }}"
                         hx-target="#card-performance-panel"
                         hx-swap="innerHTML"
                         class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors cursor-pointer bg-transparent">Next &rarr;</button>

@@ -1153,12 +1153,15 @@ async def get_card_stats(
     page: int = 1,
     per_page: int = 20,
     sort_by: str = "games",
+    sort_dir: str | None = None,
     format_filter: str | None = None,
     opponent: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> CardStatsResponse:
     params: dict[str, Any] = {"page": page, "per_page": per_page, "sort_by": sort_by}
+    if sort_dir:
+        params["sort_dir"] = sort_dir
     if format_filter:
         params["format"] = format_filter
     if opponent:

@@ -470,6 +470,14 @@ async def dashboard_partial_mulligans(
 
 _CARD_PERF_PER_PAGE = 10
 
+# Mirrors the analytics-side allowlist; kept here so we can validate
+# user-supplied query params before passing them to analytics, and fall
+# back to defaults rather than 400ing the dashboard.
+_CARD_SORT_COLUMNS = frozenset({"card_name", "games", "win_rate", "avg_cast_turn"})
+_CARD_SORT_DIRS = frozenset({"asc", "desc"})
+_CARD_SORT_DEFAULT = "games"
+_CARD_DIR_DEFAULT = "desc"
+
 
 @app.get("/dashboard/partials/card-performance", response_class=HTMLResponse)
 async def dashboard_partial_card_performance(
@@ -478,8 +486,21 @@ async def dashboard_partial_card_performance(
     settings: WebSettings = Depends(get_settings),
     format: Annotated[str, Query(alias="format")] = "",
     page: Annotated[int, Query(ge=1)] = 1,
+    sort: Annotated[str, Query()] = _CARD_SORT_DEFAULT,
+    dir: Annotated[str, Query()] = _CARD_DIR_DEFAULT,
 ) -> Response:
-    """HTMX partial: card performance filtered by format, paginated."""
+    """HTMX partial: card performance filtered by format, paginated.
+
+    ``sort`` + ``dir`` come from header clicks in the partial. Invalid
+    values fall back to the defaults (``games`` desc) rather than 400 —
+    the user clicked something we don't recognize, not a hand-crafted
+    payload.
+    """
+    if sort not in _CARD_SORT_COLUMNS:
+        sort = _CARD_SORT_DEFAULT
+    if dir not in _CARD_SORT_DIRS:
+        dir = _CARD_DIR_DEFAULT
+
     card_stats: Any = None
     try:
         card_stats = await analytics_client.get_card_stats(
@@ -487,7 +508,8 @@ async def dashboard_partial_card_performance(
             user.token,
             page=page,
             per_page=_CARD_PERF_PER_PAGE,
-            sort_by="games",
+            sort_by=sort,
+            sort_dir=dir,
             format_filter=format or None,
         )
     except analytics_client.AnalyticsForbidden:
@@ -497,7 +519,12 @@ async def dashboard_partial_card_performance(
     return templates.TemplateResponse(
         request,
         "_partials_card_performance.html",
-        {"card_stats": card_stats, "format_filter": format},
+        {
+            "card_stats": card_stats,
+            "format_filter": format,
+            "current_sort": sort,
+            "current_dir": dir,
+        },
     )
 
 
