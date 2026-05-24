@@ -10,7 +10,6 @@ Routes:
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -33,10 +32,6 @@ router = APIRouter()
 # operators want to tune it.
 _USER_REPARSE_COOLDOWN_SECONDS = 3600
 
-# Key prefix in auth.server_settings for per-user reparse timestamps.
-# value is a JSON string holding the ISO timestamp of the last reparse.
-_USER_REPARSE_LAST_KEY_PREFIX = "user_reparse_last:"
-
 
 def _now() -> datetime:
     """Indirection so tests can mock the clock."""
@@ -47,46 +42,62 @@ class DeletedCountResponse(BaseModel):
     deleted_count: int
 
 
-async def _get_last_reparse(db: AsyncSession, user_id: int) -> datetime | None:
-    """Read the timestamp of this user's last self-service reparse, if any.
-
-    Stored in ``auth.server_settings`` as ``user_reparse_last:{user_id}``
-    -> JSONB string of an ISO-8601 datetime.
+# Atomic check-and-set: INSERT a fresh row, or on conflict, UPDATE
+# only if the existing row has aged past the cooldown. This single
+# statement is the atomicity boundary — concurrent callers serialize
+# on the row lock. ``RETURNING`` yields a row only when the INSERT
+# applied or the UPDATE's WHERE passed; an empty result means the
+# gate was held by a still-fresh existing row.
+_USER_REPARSE_CAS_SQL = text(
     """
-    row = await db.execute(
-        text("SELECT value FROM auth.server_settings WHERE key = :k"),
-        {"k": f"{_USER_REPARSE_LAST_KEY_PREFIX}{user_id}"},
-    )
-    raw = row.scalar_one_or_none()
-    if raw is None:
-        return None
-    # value comes back as a Python str (JSONB string). Parse it.
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-
-
-async def _set_last_reparse(db: AsyncSession, user_id: int, when: datetime) -> None:
-    """UPSERT the last-reparse timestamp for *user_id*.
-
-    Stored as a JSONB string (json.dumps wraps the ISO string in
-    double-quotes so Postgres parses it as a JSON scalar string, not
-    invalid JSON).
+    INSERT INTO parser.user_reparse_cooldown (user_id, last_reparse_at)
+    VALUES (:user_id, :now)
+    ON CONFLICT (user_id) DO UPDATE
+        SET last_reparse_at = :now
+        WHERE parser.user_reparse_cooldown.last_reparse_at < :cutoff
+    RETURNING last_reparse_at
     """
-    await db.execute(
-        text(
-            "INSERT INTO auth.server_settings (key, value, updated_at)"
-            " VALUES (:k, CAST(:v AS jsonb), :u)"
-            " ON CONFLICT (key) DO UPDATE"
-            " SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at"
-        ),
-        {
-            "k": f"{_USER_REPARSE_LAST_KEY_PREFIX}{user_id}",
-            "v": json.dumps(when.isoformat()),
-            "u": when,
-        },
+)
+
+# Follow-up read used only on the rate-limited path to surface the
+# existing stamp for the retry-at message. Runs as a separate
+# statement so it sees the committed state of the row (a same-statement
+# SELECT in a CTE shares the INSERT's snapshot and can't see the row
+# under concurrent contention — that read would correctly return
+# empty for caller 2 even though the row clearly exists).
+_USER_REPARSE_EXISTING_SQL = text(
+    "SELECT last_reparse_at FROM parser.user_reparse_cooldown WHERE user_id = :user_id"
+)
+
+
+async def _try_acquire_reparse_slot(
+    db: AsyncSession,
+    user_id: int,
+    now: datetime,
+    cooldown_seconds: int,
+) -> tuple[bool, datetime]:
+    """Atomically try to acquire the per-user reparse slot.
+
+    Returns ``(acquired, last_reparse_at)``. When ``acquired`` is
+    ``True`` the caller may proceed and ``last_reparse_at`` equals
+    ``now``. When ``False`` the caller is rate-limited and
+    ``last_reparse_at`` is the existing stamp that blocked them.
+    """
+    cutoff = now - timedelta(seconds=cooldown_seconds)
+    result = await db.execute(
+        _USER_REPARSE_CAS_SQL,
+        {"user_id": user_id, "now": now, "cutoff": cutoff},
     )
+    row = result.first()
+    if row is not None:
+        return True, row.last_reparse_at
+    # CAS failed — gate is held. Read back the existing stamp so the
+    # caller can build a retry-at message. Cannot return None here:
+    # a failed UPDATE implies a row exists (otherwise the INSERT
+    # branch would have applied and RETURNING would be non-empty).
+    existing = await db.execute(_USER_REPARSE_EXISTING_SQL, {"user_id": user_id})
+    last = existing.scalar_one()
+    return False, last
 
 
 def _parse_iso_dt(raw: str | None) -> datetime | None:
@@ -110,33 +121,30 @@ async def self_service_reparse(
     payload the web layer renders as a friendly retry-at message.
     """
     now = _now()
-    last = await _get_last_reparse(db, user.user_id)
-    if last is not None:
+    acquired, last = await _try_acquire_reparse_slot(
+        db, user.user_id, now, _USER_REPARSE_COOLDOWN_SECONDS
+    )
+    if not acquired:
         elapsed = (now - last).total_seconds()
-        if elapsed < _USER_REPARSE_COOLDOWN_SECONDS:
-            remaining = int(_USER_REPARSE_COOLDOWN_SECONDS - elapsed)
-            retry_at_dt = last + timedelta(seconds=_USER_REPARSE_COOLDOWN_SECONDS)
-            _log.info(
-                "parser.reparse.user_rate_limited",
-                extra={
-                    "user_id": user.user_id,
-                    "retry_after_seconds": remaining,
-                },
-            )
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "error": "rate_limited",
-                    "retry_after_seconds": remaining,
-                    "retry_at": retry_at_dt.isoformat(),
-                },
-            )
+        remaining = max(int(_USER_REPARSE_COOLDOWN_SECONDS - elapsed), 0)
+        retry_at_dt = last + timedelta(seconds=_USER_REPARSE_COOLDOWN_SECONDS)
+        _log.info(
+            "parser.reparse.user_rate_limited",
+            extra={
+                "user_id": user.user_id,
+                "retry_after_seconds": remaining,
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "retry_after_seconds": remaining,
+                "retry_at": retry_at_dt.isoformat(),
+            },
+        )
 
     count = await _delete_matches_for_user(db, user.user_id, None, None, agent_id=None)
-    # Stamp the cooldown *after* the delete commits so a partial
-    # failure leaves the user able to retry without waiting an hour.
-    await _set_last_reparse(db, user.user_id, now)
-    await db.commit()
     _log.info(
         "parser.reparse.user_self_service",
         extra={"user_id": user.user_id, "deleted_count": count},
