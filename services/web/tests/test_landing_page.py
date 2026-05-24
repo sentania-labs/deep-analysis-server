@@ -59,9 +59,12 @@ async def test_landing_renders_core_sections(
     assert "get started" in body
     # Feature section
     assert "what you get" in body
-    # FAQ
-    assert "faq" in body
-    assert "Is my play data private?" in body
+    # FAQ was removed in favor of accurate community-instance framing
+    assert "// faq" not in body
+    assert "Is my play data private?" not in body
+    # No self-hosted-as-user-benefit framing on a community instance
+    assert "self-hosted" not in body.lower()
+    assert "your data, your server" not in body.lower()
     # Final CTA buttons
     assert 'href="/login"' in body
 

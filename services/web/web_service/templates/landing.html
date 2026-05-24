@@ -3,15 +3,15 @@
 {% block title %}Deep Analysis — MTGO match analytics, automatically{% endblock %}
 
 {% block extra_head %}
-    <meta name="description" content="Self-hosted match analytics for Magic: The Gathering Online. A Windows agent ships your game logs to your server; you get a dashboard of every match — win rate, format breakdowns, opponent history, play/draw splits, sideboard performance — with zero manual entry.">
+    <meta name="description" content="Match analytics for Magic: The Gathering Online. A Windows agent ships your game logs to the server; you get a dashboard of every match — win rate, format breakdowns, opponent history, play/draw splits, sideboard performance — with zero manual entry.">
     <meta name="robots" content="index,follow">
     <meta property="og:type" content="website">
     <meta property="og:title" content="Deep Analysis — MTGO match analytics, automatically">
-    <meta property="og:description" content="Self-hosted match analytics for Magic: The Gathering Online. Install the agent, play Magic, see every match — no manual entry, no third-party server holding your data.">
+    <meta property="og:description" content="Match analytics for Magic: The Gathering Online. Install the agent, play Magic, see every match — with zero manual entry.">
     <meta property="og:site_name" content="Deep Analysis">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Deep Analysis — MTGO match analytics, automatically">
-    <meta name="twitter:description" content="Self-hosted match analytics for MTGO. Install the agent, play Magic, see every match.">
+    <meta name="twitter:description" content="Match analytics for MTGO. Install the agent, play Magic, see every match.">
 {% endblock %}
 
 {% block body_layout %}
@@ -22,7 +22,7 @@
             <div class="flex items-center gap-2 mb-6">
                 <span class="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light border dark:border-border border-border-light rounded-full px-2.5 py-1">
                     <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
-                    Self-hosted &middot; AGPL-3.0
+                    Invite-only &middot; Community instance
                 </span>
             </div>
             <h1 class="text-4xl sm:text-6xl lg:text-7xl font-bold tracking-tight dark:text-txt-primary text-txt-primary-light leading-[1.05]">
@@ -99,17 +99,16 @@
                     The difference from a notebook or a spreadsheet is the friction. You
                     don't open a tab. You don't type a result. You just play Magic, and
                     the dashboard fills in. The Windows agent watches your MTGO log
-                    directory, ships each completed match to your server, and the parser
+                    directory, ships each completed match to the server, and the parser
                     takes it from there.
                 </p>
                 <p>
-                    It's self-hosted on purpose. The
+                    Both halves of the stack are open source — the
                     <a href="https://github.com/sentania-labs/deep-analysis-server" class="text-accent hover:text-accent-hover">server</a>
-                    is open source (AGPL-3.0). The
+                    under AGPL-3.0, the
                     <a href="https://github.com/sentania-labs/deep-analysis-agent" class="text-accent hover:text-accent-hover">agent</a>
-                    is open source (MIT). An optional closed-source AI add-on layers
-                    coaching insights on top. Your play data lives on the server you
-                    chose — not on someone else's.
+                    under MIT. An optional closed-source AI add-on layers coaching
+                    insights on top.
                 </p>
             </div>
         </div>
@@ -236,7 +235,7 @@
                             <h3 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light mb-2">No manual entry, ever.</h3>
                             <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
                                 The agent watches MTGO's log directory for completed-match
-                                files and ships each one to your server within seconds.
+                                files and ships each one to the server within seconds.
                                 Duplicates are deduplicated by content hash. You play; the
                                 data shows up.
                             </p>
@@ -324,8 +323,8 @@
                     </p>
                 </div>
 
-                {# Mulligans + self-hosted (two more) #}
-                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
+                {# Mulligans #}
+                <div class="sm:col-span-6 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
                     <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>
                         mulligans
@@ -337,87 +336,7 @@
                         thresholds that actually hold up.
                     </p>
                 </div>
-
-                <div class="sm:col-span-3 dark:bg-base bg-base-light border dark:border-border border-border-light rounded-md p-5 flex flex-col">
-                    <div class="inline-flex items-center gap-2 mb-3 font-mono text-[10px] uppercase tracking-wider text-accent">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                        self-hosted
-                    </div>
-                    <h3 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Your data, your server.</h3>
-                    <p class="text-sm dark:text-txt-secondary text-txt-secondary-light leading-relaxed">
-                        The agent uploads only to the server you configure. There is no
-                        Deep Analysis cloud and no telemetry shipped elsewhere. If you
-                        run the server, you run the storage.
-                    </p>
-                </div>
             </div>
-        </div>
-    </section>
-
-    {# ── FAQ ── #}
-    <section class="border-b dark:border-border border-border-light">
-        <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
-            <div class="mb-10">
-                <p class="font-mono text-[11px] uppercase tracking-wider text-accent mb-3">// faq</p>
-                <h2 class="text-2xl sm:text-3xl font-semibold tracking-tight dark:text-txt-primary text-txt-primary-light">
-                    Questions worth asking.
-                </h2>
-            </div>
-
-            {% set faqs = [
-                {
-                    'q': 'Is my play data private?',
-                    'a': 'Yes. Deep Analysis is self-hosted — the agent uploads only to the server you configure, and that server is operated by whoever runs this instance. There is no shared cloud, no third-party analytics, and no telemetry. If you run your own instance, you control the storage entirely.',
-                },
-                {
-                    'q': 'Does it work with paper Magic?',
-                    'a': 'No. The data comes from MTGO\'s game logs, which only exist for matches you play on MTGO. Paper, Arena, and other clients aren\'t supported.',
-                },
-                {
-                    'q': 'Do I need to run my own server?',
-                    'a': 'For full data sovereignty, yes — that\'s the design. If you\'re using this instance, you\'re trusting whoever operates it. Both options are real: spin up your own Docker Compose stack from the open-source server repo, or get an invite to an existing instance you trust.',
-                },
-                {
-                    'q': 'Is it free?',
-                    'a': 'The server and agent are open source — AGPL-3.0 for the server, MIT for the agent. Anyone can run them at no cost. The operator of an instance chooses whether to charge for access; that\'s their call, not the project\'s.',
-                },
-                {
-                    'q': 'Why invite-only?',
-                    'a': 'This particular instance is configured invite-only by its operator — usually to keep things focused on a known community of players. Other instances may set registration open. If you don\'t have an invite, you\'re welcome to host your own and invite whomever you like.',
-                },
-                {
-                    'q': 'What about cheating or fairness?',
-                    'a': 'Deep Analysis is a reporting tool: it reads logs MTGO has already written and summarizes what happened. It doesn\'t alter game state, see hidden information, or interact with MTGO at all. Stats describe; they don\'t change the game.',
-                },
-                {
-                    'q': 'What about an AI coach?',
-                    'a': 'A separate, closed-source AI add-on subscribes to match events on the server and produces coaching insights. It\'s optional, runs as its own container, and is disabled by default. The open-source server stays clean of any AI logic.',
-                },
-            ] %}
-
-            <ul class="divide-y dark:divide-border divide-border-light border-y dark:border-border border-border-light"
-                role="list">
-                {% for item in faqs %}
-                <li x-data="{ open: false }" class="py-1">
-                    <button @click="open = !open"
-                            class="w-full flex items-center justify-between gap-4 py-4 text-left bg-transparent border-0 cursor-pointer font-[inherit] dark:text-txt-primary text-txt-primary-light"
-                            :aria-expanded="open ? 'true' : 'false'">
-                        <span class="text-base font-medium">{{ item.q }}</span>
-                        <svg class="w-5 h-5 flex-shrink-0 transition-transform dark:text-txt-secondary text-txt-secondary-light"
-                             :class="open ? 'rotate-180' : ''"
-                             fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                        </svg>
-                    </button>
-                    <div x-show="open"
-                         x-transition.opacity.duration.150ms
-                         x-cloak
-                         class="pb-5 pr-9 text-sm leading-relaxed dark:text-txt-secondary text-txt-secondary-light">
-                        {{ item.a }}
-                    </div>
-                </li>
-                {% endfor %}
-            </ul>
         </div>
     </section>
 
