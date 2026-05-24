@@ -114,9 +114,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 
-from parser_service.reingest import router as _reingest_router  # noqa: E402
+from parser_service.reparse import router as _reparse_router  # noqa: E402
 
-app.include_router(_reingest_router)
+app.include_router(_reparse_router)
 
 
 @app.get("/healthz")

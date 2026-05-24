@@ -1,8 +1,9 @@
-"""Force-reingest endpoints — delete parsed matches so the parser
+"""Force-reparse endpoints — delete parsed matches so the parser
 re-processes them from raw files on the next backfill cycle.
 
 Routes:
-- DELETE /parser/matches — caller's own matches
+- DELETE /parser/matches — caller's own matches (per-agent scope)
+- POST /parser/me/reparse — caller's whole account, rate-limited
 - DELETE /parser/admin/matches/{user_id} — admin deletes for a user
 - DELETE /parser/admin/matches — admin nuclear: all matches
 """
@@ -11,24 +12,92 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from parser_service.db import get_session
 from parser_service.deps import AuthenticatedUser, require_admin, require_user
 from parser_service.models import Game, GamePlayer, GameState, Match
 
-_log = logging.getLogger("parser.reingest")
+_log = logging.getLogger("parser.reparse")
 
 router = APIRouter()
+
+# Self-service cooldown: a user can only reparse their full account
+# once per hour. Hardcoded — promote to a tunable in a follow-up if
+# operators want to tune it.
+_USER_REPARSE_COOLDOWN_SECONDS = 3600
+
+
+def _now() -> datetime:
+    """Indirection so tests can mock the clock."""
+    return datetime.now(UTC)
 
 
 class DeletedCountResponse(BaseModel):
     deleted_count: int
+
+
+# Atomic check-and-set: INSERT a fresh row, or on conflict, UPDATE
+# only if the existing row has aged past the cooldown. This single
+# statement is the atomicity boundary — concurrent callers serialize
+# on the row lock. ``RETURNING`` yields a row only when the INSERT
+# applied or the UPDATE's WHERE passed; an empty result means the
+# gate was held by a still-fresh existing row.
+_USER_REPARSE_CAS_SQL = text(
+    """
+    INSERT INTO parser.user_reparse_cooldown (user_id, last_reparse_at)
+    VALUES (:user_id, :now)
+    ON CONFLICT (user_id) DO UPDATE
+        SET last_reparse_at = :now
+        WHERE parser.user_reparse_cooldown.last_reparse_at < :cutoff
+    RETURNING last_reparse_at
+    """
+)
+
+# Follow-up read used only on the rate-limited path to surface the
+# existing stamp for the retry-at message. Runs as a separate
+# statement so it sees the committed state of the row (a same-statement
+# SELECT in a CTE shares the INSERT's snapshot and can't see the row
+# under concurrent contention — that read would correctly return
+# empty for caller 2 even though the row clearly exists).
+_USER_REPARSE_EXISTING_SQL = text(
+    "SELECT last_reparse_at FROM parser.user_reparse_cooldown WHERE user_id = :user_id"
+)
+
+
+async def _try_acquire_reparse_slot(
+    db: AsyncSession,
+    user_id: int,
+    now: datetime,
+    cooldown_seconds: int,
+) -> tuple[bool, datetime]:
+    """Atomically try to acquire the per-user reparse slot.
+
+    Returns ``(acquired, last_reparse_at)``. When ``acquired`` is
+    ``True`` the caller may proceed and ``last_reparse_at`` equals
+    ``now``. When ``False`` the caller is rate-limited and
+    ``last_reparse_at`` is the existing stamp that blocked them.
+    """
+    cutoff = now - timedelta(seconds=cooldown_seconds)
+    result = await db.execute(
+        _USER_REPARSE_CAS_SQL,
+        {"user_id": user_id, "now": now, "cutoff": cutoff},
+    )
+    row = result.first()
+    if row is not None:
+        return True, row.last_reparse_at
+    # CAS failed — gate is held. Read back the existing stamp so the
+    # caller can build a retry-at message. Cannot return None here:
+    # a failed UPDATE implies a row exists (otherwise the INSERT
+    # branch would have applied and RETURNING would be non-empty).
+    existing = await db.execute(_USER_REPARSE_EXISTING_SQL, {"user_id": user_id})
+    last = existing.scalar_one()
+    return False, last
 
 
 def _parse_iso_dt(raw: str | None) -> datetime | None:
@@ -38,6 +107,49 @@ def _parse_iso_dt(raw: str | None) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+@router.post("/parser/me/reparse", response_model=DeletedCountResponse)
+async def self_service_reparse(
+    user: AuthenticatedUser = Depends(require_user),
+    db: AsyncSession = Depends(get_session),
+) -> DeletedCountResponse:
+    """User self-service: reparse all of the caller's matches.
+
+    Rate-limited to one call per ``_USER_REPARSE_COOLDOWN_SECONDS`` per
+    user. On rate-limit hit, returns 429 with a structured detail
+    payload the web layer renders as a friendly retry-at message.
+    """
+    now = _now()
+    acquired, last = await _try_acquire_reparse_slot(
+        db, user.user_id, now, _USER_REPARSE_COOLDOWN_SECONDS
+    )
+    if not acquired:
+        elapsed = (now - last).total_seconds()
+        remaining = max(int(_USER_REPARSE_COOLDOWN_SECONDS - elapsed), 0)
+        retry_at_dt = last + timedelta(seconds=_USER_REPARSE_COOLDOWN_SECONDS)
+        _log.info(
+            "parser.reparse.user_rate_limited",
+            extra={
+                "user_id": user.user_id,
+                "retry_after_seconds": remaining,
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "retry_after_seconds": remaining,
+                "retry_at": retry_at_dt.isoformat(),
+            },
+        )
+
+    count = await _delete_matches_for_user(db, user.user_id, None, None, agent_id=None)
+    _log.info(
+        "parser.reparse.user_self_service",
+        extra={"user_id": user.user_id, "deleted_count": count},
+    )
+    return DeletedCountResponse(deleted_count=count)
 
 
 @router.delete("/parser/matches", response_model=DeletedCountResponse)
@@ -60,7 +172,7 @@ async def delete_my_matches(
     """
     count = await _delete_matches_for_user(db, user.user_id, after, before, agent_id=agent_id)
     _log.info(
-        "parser.reingest.user",
+        "parser.reparse.user",
         extra={"user_id": user.user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
@@ -85,7 +197,7 @@ async def admin_delete_user_matches(
     """
     count = await _delete_matches_for_user(db, user_id, after, before, agent_id=agent_id)
     _log.info(
-        "parser.reingest.admin_user",
+        "parser.reparse.admin_user",
         extra={"target_user_id": user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
@@ -101,7 +213,7 @@ async def admin_delete_all_matches(
     """Admin nuclear: delete ALL parsed matches across all users."""
     count = await _delete_all_matches(db, after, before)
     _log.info(
-        "parser.reingest.admin_all",
+        "parser.reparse.admin_all",
         extra={"deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)

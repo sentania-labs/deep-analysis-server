@@ -19,6 +19,19 @@ class ParserForbidden(Exception):
     """Parser rejected the request as 401/403."""
 
 
+class ParserRateLimited(Exception):
+    """Parser rejected a self-service reparse as rate-limited (429).
+
+    Carries the structured detail payload so the web layer can render a
+    friendly "try again at HH:MM" message instead of a generic 503.
+    """
+
+    def __init__(self, retry_after_seconds: int, retry_at: str) -> None:
+        super().__init__(f"rate_limited; retry_at={retry_at}")
+        self.retry_after_seconds = retry_after_seconds
+        self.retry_at = retry_at
+
+
 @dataclass
 class DeletedCountResult:
     deleted_count: int
@@ -116,6 +129,44 @@ async def admin_delete_user_matches(
         raise ParserClientError(
             f"parser DELETE /parser/admin/matches/{user_id}"
             f" returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+
+
+async def user_self_service_reparse(
+    base_url: str,
+    token: str,
+) -> DeletedCountResult:
+    """POST /parser/me/reparse — reparse all of the caller's matches.
+
+    Raises :class:`ParserRateLimited` on 429 with retry-after metadata
+    so the web layer can render a "try again at HH:MM" message.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base_url}/parser/me/reparse",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise ParserClientError(f"parser POST /parser/me/reparse transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise ParserForbidden(f"parser POST /parser/me/reparse returned {resp.status_code}")
+    if resp.status_code == 429:
+        try:
+            detail = resp.json().get("detail") or {}
+        except ValueError:
+            detail = {}
+        if not isinstance(detail, dict):
+            detail = {}
+        raise ParserRateLimited(
+            retry_after_seconds=int(detail.get("retry_after_seconds", 0)),
+            retry_at=str(detail.get("retry_at", "")),
+        )
+    if resp.status_code >= 400:
+        raise ParserClientError(
+            f"parser POST /parser/me/reparse returned {resp.status_code}: {resp.text}"
         )
     data = resp.json()
     return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))

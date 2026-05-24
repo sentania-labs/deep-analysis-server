@@ -6,7 +6,7 @@ Create Date: 2026-05-12
 
 Stores the number of match log files the agent has discovered locally.
 Used by the dashboard to compare local vs parsed counts and surface
-a "force reingest" action when a mismatch is detected.
+a "force reparse" action when a mismatch is detected.
 """
 
 import sqlalchemy as sa

@@ -326,6 +326,26 @@ class DeckCompositionItem(Base):
     )
 
 
+class UserReparseCooldown(Base):
+    """Per-user cooldown timestamp for self-service reparse.
+
+    Single-row-per-user state backing ``POST /parser/me/reparse``. The
+    handler updates this table with an atomic
+    ``INSERT ... ON CONFLICT (user_id) DO UPDATE ... WHERE`` so the
+    rate-limit check and the timestamp bump happen in one statement —
+    preventing two concurrent requests from both passing the gate.
+    """
+
+    __tablename__ = "user_reparse_cooldown"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_reparse_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class DeckVersionLink(Base):
     """Version chain entry linking sequential uploads of the same deck.
 
