@@ -285,6 +285,70 @@ class TestCardGameStatsAggregation:
         assert (2 > 1) is True
         assert (3 > 1) is True
 
+    def test_first_cast_turn_minimum_across_casts(self) -> None:
+        """first_cast_turn is the minimum turn_number across cast events.
+
+        Mirrors the per-(card, player) reduction in
+        _materialize_card_game_stats: only ``cast`` events contribute; the
+        running min is updated whenever a lower turn appears (the parser
+        does not guarantee event ordering by turn).
+        """
+        events = [
+            GameEvent(turn_number=5, verb="cast", card_name="Bolt", player="alice"),
+            GameEvent(turn_number=3, verb="cast", card_name="Bolt", player="alice"),
+            GameEvent(turn_number=4, verb="cast", card_name="Bolt", player="alice"),
+            # Non-cast events on earlier turns must not pull the min down.
+            GameEvent(turn_number=1, verb="draw", card_name="Bolt", player="alice"),
+            GameEvent(turn_number=2, verb="play", card_name="Mountain", player="alice"),
+        ]
+        first_cast: dict[tuple[str, str], int] = {}
+        for evt in events:
+            if evt.card_name is None or evt.verb != "cast":
+                continue
+            key = (evt.card_name, evt.player)
+            existing = first_cast.get(key)
+            if existing is None or evt.turn_number < existing:
+                first_cast[key] = evt.turn_number
+
+        assert first_cast[("Bolt", "alice")] == 3
+        assert ("Mountain", "alice") not in first_cast  # land played, not cast
+
+    def test_first_cast_turn_none_when_never_cast(self) -> None:
+        """A card that is only seen (drawn, played) never gets a cast turn."""
+        events = [
+            GameEvent(turn_number=1, verb="draw", card_name="Mountain", player="alice"),
+            GameEvent(turn_number=2, verb="play", card_name="Mountain", player="alice"),
+        ]
+        first_cast: dict[tuple[str, str], int] = {}
+        for evt in events:
+            if evt.card_name is None or evt.verb != "cast":
+                continue
+            key = (evt.card_name, evt.player)
+            existing = first_cast.get(key)
+            if existing is None or evt.turn_number < existing:
+                first_cast[key] = evt.turn_number
+
+        # Lookup yields None when the card was never cast.
+        assert first_cast.get(("Mountain", "alice")) is None
+
+    def test_first_cast_turn_per_player(self) -> None:
+        """Casts by different players don't collapse onto the same key."""
+        events = [
+            GameEvent(turn_number=2, verb="cast", card_name="Bolt", player="alice"),
+            GameEvent(turn_number=4, verb="cast", card_name="Bolt", player="bob"),
+        ]
+        first_cast: dict[tuple[str, str], int] = {}
+        for evt in events:
+            if evt.card_name is None or evt.verb != "cast":
+                continue
+            key = (evt.card_name, evt.player)
+            existing = first_cast.get(key)
+            if existing is None or evt.turn_number < existing:
+                first_cast[key] = evt.turn_number
+
+        assert first_cast[("Bolt", "alice")] == 2
+        assert first_cast[("Bolt", "bob")] == 4
+
     def test_won_determination(self) -> None:
         """won = (player_won == is_local).
 

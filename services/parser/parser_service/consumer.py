@@ -598,6 +598,9 @@ async def _materialize_card_game_stats(
 
         # Aggregate events by (card_name, player)
         card_player_agg: dict[tuple[str, str], dict[str, int]] = {}
+        # First-cast turn per (card_name, player): min turn_number of any
+        # cast event. None if the card was seen but never cast.
+        card_player_first_cast: dict[tuple[str, str], int] = {}
         for evt in parsed_game.events:
             if evt.card_name is None:
                 continue
@@ -606,6 +609,9 @@ async def _materialize_card_game_stats(
             agg["seen"] += 1
             if evt.verb == "cast":
                 agg["cast"] += 1
+                existing = card_player_first_cast.get(key)
+                if existing is None or evt.turn_number < existing:
+                    card_player_first_cast[key] = evt.turn_number
             elif evt.verb == "play":
                 agg["played"] += 1
 
@@ -651,23 +657,32 @@ async def _materialize_card_game_stats(
                     "won": won,
                     "quantity": counts["seen"],
                     "game_number": parsed_game.game_number,
+                    "first_cast_turn": card_player_first_cast.get((card_name, player)),
                 }
             )
 
     if insert_values:
         # Batch insert using raw SQL for cross-schema write.
         for row in insert_values:
+            # ``cast`` is a SQL reserved word — quoting is required in
+            # column lists and SET-clause LHS (qualified ``EXCLUDED.cast``
+            # parses fine unquoted). Before this fix the INSERT raised
+            # syntax-error every call and the best-effort try/except in
+            # the caller swallowed it, so no rows ever landed.
             await session.execute(
                 sa_text(
                     "INSERT INTO analytics.card_game_stats "
                     "(match_id, game_id, oracle_id, card_name, is_local, "
-                    " seen, cast, played, is_postboard, won, quantity, game_number) "
+                    ' seen, "cast", played, is_postboard, won, quantity, game_number, '
+                    " first_cast_turn) "
                     "VALUES (:match_id, :game_id, :oracle_id::uuid, :card_name, :is_local, "
-                    " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number) "
+                    " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number, "
+                    " :first_cast_turn) "
                     "ON CONFLICT (game_id, card_name, is_local) DO UPDATE SET "
-                    " seen = EXCLUDED.seen, cast = EXCLUDED.cast, played = EXCLUDED.played, "
+                    ' seen = EXCLUDED.seen, "cast" = EXCLUDED.cast, played = EXCLUDED.played, '
                     " won = EXCLUDED.won, quantity = EXCLUDED.quantity, "
-                    " oracle_id = EXCLUDED.oracle_id"
+                    " oracle_id = EXCLUDED.oracle_id, "
+                    " first_cast_turn = EXCLUDED.first_cast_turn"
                 ),
                 row,
             )
