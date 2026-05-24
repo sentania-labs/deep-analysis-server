@@ -63,10 +63,11 @@ def test_first_cast_turn_accepts_int_and_null(pg_conn: object) -> None:
     game_id_a = uuid.uuid4()
     game_id_b = uuid.uuid4()
     with pg_conn.cursor() as cur:  # type: ignore[attr-defined]
+        # ``cast`` is a SQL reserved word, so quote it in the column list.
         cur.execute(
             """
             INSERT INTO analytics.card_game_stats
-                (match_id, game_id, card_name, is_local, seen, cast, played,
+                (match_id, game_id, card_name, is_local, seen, "cast", played,
                  is_postboard, won, quantity, game_number, first_cast_turn)
             VALUES
                 (%s, %s, %s, true, 1, 1, 0, false, true, 1, 1, %s),

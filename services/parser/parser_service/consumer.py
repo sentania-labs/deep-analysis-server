@@ -664,17 +664,22 @@ async def _materialize_card_game_stats(
     if insert_values:
         # Batch insert using raw SQL for cross-schema write.
         for row in insert_values:
+            # ``cast`` is a SQL reserved word — quoting is required in
+            # column lists and SET-clause LHS (qualified ``EXCLUDED.cast``
+            # parses fine unquoted). Before this fix the INSERT raised
+            # syntax-error every call and the best-effort try/except in
+            # the caller swallowed it, so no rows ever landed.
             await session.execute(
                 sa_text(
                     "INSERT INTO analytics.card_game_stats "
                     "(match_id, game_id, oracle_id, card_name, is_local, "
-                    " seen, cast, played, is_postboard, won, quantity, game_number, "
+                    ' seen, "cast", played, is_postboard, won, quantity, game_number, '
                     " first_cast_turn) "
                     "VALUES (:match_id, :game_id, :oracle_id::uuid, :card_name, :is_local, "
                     " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number, "
                     " :first_cast_turn) "
                     "ON CONFLICT (game_id, card_name, is_local) DO UPDATE SET "
-                    " seen = EXCLUDED.seen, cast = EXCLUDED.cast, played = EXCLUDED.played, "
+                    ' seen = EXCLUDED.seen, "cast" = EXCLUDED.cast, played = EXCLUDED.played, '
                     " won = EXCLUDED.won, quantity = EXCLUDED.quantity, "
                     " oracle_id = EXCLUDED.oracle_id, "
                     " first_cast_turn = EXCLUDED.first_cast_turn"
