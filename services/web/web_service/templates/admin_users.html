@@ -22,6 +22,8 @@
 {% if result %}
     {% if result.revoke_sessions is defined and result.revoke_sessions %}
     <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Revoked {{ result.revoked_count }} session{{ "" if result.revoked_count == 1 else "s" }} for user #{{ result.user_id }}.</div>
+    {% elif result.reparse is defined and result.reparse %}
+    <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Reparse complete for user #{{ result.user_id }}: {{ result.deleted_count }} match{{ "" if result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them shortly.</div>
     {% elif result.temporary_password is defined %}
     <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
         <p>Temporary password for user #{{ result.user_id }} (give this to them out-of-band; they will be required to change it on next login):</p>
@@ -109,6 +111,7 @@
                         <div class="flex gap-1 justify-end flex-wrap">
                             <form method="post" action="/admin/users/{{ u.id }}/reset-password?page={{ page }}&per_page={{ per_page }}" class="inline"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reset pw</button></form>
                             <form method="post" action="/admin/users/{{ u.id }}/revoke-sessions?page={{ page }}&per_page={{ per_page }}" class="inline" onsubmit="return confirm('Revoke all sessions for {{ u.email }}? They will be logged out immediately.');"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Revoke sessions</button></form>
+                            <form method="post" action="/admin/users/{{ u.id }}/reparse?page={{ page }}&per_page={{ per_page }}" class="inline" onsubmit="return confirm('Reparse all data for {{ u.email }}? This deletes all of their parsed matches; the backfill scanner will re-parse them from the archived files.');"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse all data</button></form>
                             <form method="post" action="/admin/users/{{ u.id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline" onsubmit="return confirm('Delete user {{ u.email }}? Their agents and sessions will be removed. This cannot be undone.');"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button></form>
                         </div>
                         {% else %}<span class="text-xs dark:text-txt-tertiary text-txt-secondary-light">(you)</span>{% endif %}

@@ -12,6 +12,7 @@ import contextlib
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlencode
@@ -847,6 +848,76 @@ async def profile_agents_generate_code(
             "per_page": per_page,
             "registration_code": result.code,
             "registration_code_expires_at": result.expires_at,
+        },
+    )
+
+
+@app.post("/profile/reparse")
+async def profile_reparse(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """User self-service: reparse all of the caller's matches.
+
+    On rate-limit hit (429 from parser), render the profile page with a
+    friendly error banner instead of bouncing to a 503 page — the user
+    just learned they have to wait, that's a soft outcome.
+    """
+    bounce = _bounce_admin_to_panel(user)
+    if bounce is not None:
+        return bounce
+
+    try:
+        result = await parser_client.user_self_service_reparse(
+            settings.parser_service_url, user.token
+        )
+    except parser_client.ParserRateLimited as exc:
+        # Format the retry-at timestamp as HH:MM UTC for the banner.
+        try:
+            retry_dt = datetime.fromisoformat(exc.retry_at.replace("Z", "+00:00"))
+            retry_label = retry_dt.strftime("%H:%M UTC")
+        except (TypeError, ValueError):
+            retry_label = "shortly"
+        _log.info(
+            "profile.reparse.rate_limited",
+            extra={"user_id": user.user_id, "retry_at": exc.retry_at},
+        )
+        me = None
+        with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+            me = await auth_client.get_me(settings.auth_service_url, user.token)
+        return templates.TemplateResponse(
+            request,
+            "profile.html",
+            {
+                "user": user,
+                "me": me,
+                "reparse_error": (
+                    f"Already reparsed within the last hour. Try again at {retry_label}."
+                ),
+            },
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    except parser_client.ParserForbidden:
+        _log.info("profile.reparse.forbidden", extra={"user_id": user.user_id})
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except parser_client.ParserClientError:
+        _log.exception("parser POST /parser/me/reparse call failed")
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    me = None
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        me = await auth_client.get_me(settings.auth_service_url, user.token)
+    return templates.TemplateResponse(
+        request,
+        "profile.html",
+        {
+            "user": user,
+            "me": me,
+            "reparse_result": result,
         },
     )
 
@@ -1835,6 +1906,56 @@ async def admin_user_revoke_sessions(
         error=msg,
         result=None,
         status_code=sc,
+    )
+
+
+@app.post("/admin/users/{user_id}/reparse")
+async def admin_user_reparse(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: reparse all of a specific user's matches.
+
+    Equivalent to looping over every agent the user owns and calling
+    per-agent reparse, but done as a single delete in parser.matches
+    filtered by user_id. The parser's backfill scanner re-processes
+    from ingest.game_log_files on the next cycle.
+    """
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result = await parser_client.admin_delete_user_matches(
+            settings.parser_service_url, user.token, user_id
+        )
+    except parser_client.ParserForbidden:
+        _log.info("admin.users.reparse.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except parser_client.ParserClientError:
+        _log.exception("parser DELETE /parser/admin/matches/%s call failed", user_id)
+        return Response(
+            content="Parser service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    return _render_admin_users_sync(
+        request,
+        user,
+        users,
+        total,
+        page=page,
+        per_page=per_page,
+        error=None,
+        result={"reparse": True, "user_id": user_id, "deleted_count": result.deleted_count},
+        status_code=200,
     )
 
 
