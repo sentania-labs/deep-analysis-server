@@ -875,6 +875,148 @@ async def test_standout_cards_unauth_returns_401(app_client: httpx.AsyncClient) 
 
 
 @pytest.mark.asyncio
+async def test_card_stats_materialized_returns_avg_cast_turn(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Materialized path surfaces avg_cast_turn from the SQL AVG()."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, True)
+
+    # _card_stats_from_materialized row shape:
+    # (card_name, total_games, wins, total_cast, total_seen, total_played,
+    #  avg_cast_turn)
+    session = _FakeSession(
+        queue=[
+            [
+                ("Lightning Bolt", 4, 2, 6, 8, 0, 3.0),
+                ("Counterspell", 2, 1, 2, 3, 0, 4.5),
+            ],
+            # catalog.cards lookup
+            [],
+        ]
+    )
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/cards")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    by_name = {c["name"]: c for c in r.json()["cards"]}
+    assert by_name["Lightning Bolt"]["avg_cast_turn"] == 3.0
+    assert by_name["Counterspell"]["avg_cast_turn"] == 4.5
+
+
+@pytest.mark.asyncio
+async def test_card_stats_materialized_null_avg_cast_turn(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When AVG() returns NULL (all rows lack first_cast_turn), the response
+    surfaces None — matching pre-backfill rows."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, True)
+
+    session = _FakeSession(
+        queue=[
+            # avg_cast_turn = None (NULL aggregate)
+            [("Lightning Bolt", 4, 2, 0, 8, 0, None)],
+            [],  # catalog.cards
+        ]
+    )
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/cards")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert r.json()["cards"][0]["avg_cast_turn"] is None
+
+
+@pytest.mark.asyncio
+async def test_avg_cast_turn_converges_across_paths(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The materialized SQL AVG and the JSONB fallback's Python mean must
+    agree on a shared dataset.
+
+    The non-materialized path computes ``mean(first_turn)`` in Python; the
+    materialized path computes ``AVG(first_cast_turn)`` in SQL. For the
+    same per-game cast turns (3, 5), both must report 4.0.
+    """
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    cast_turns = [3, 5]
+    expected = sum(cast_turns) / len(cast_turns)
+
+    # --- Materialized path: rows pre-aggregated by SQL AVG() ---
+    _patch_has_card_game_stats(monkeypatch, True)
+    session_mat = _FakeSession(
+        queue=[
+            # (card_name, total_games, wins, total_cast, total_seen,
+            #  total_played, avg_cast_turn) — pretend SQL AVG produced expected
+            [("Lightning Bolt", 2, 1, 2, 2, 0, expected)],
+            [],  # catalog.cards
+        ]
+    )
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session_mat)
+    r_mat = await app_client.get("/analytics/stats/cards")
+    _main.app.dependency_overrides.clear()
+    assert r_mat.status_code == 200
+    mat_value = r_mat.json()["cards"][0]["avg_cast_turn"]
+
+    # --- Non-materialized path: per-appearance first_turn ---
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
+    g1, g2 = uuid.uuid4(), uuid.uuid4()
+    appearances = [
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Lightning Bolt",
+            "first_turn": cast_turns[0],
+            "hero": "alice",
+        },
+        {
+            "game_id": g2,
+            "winner": "bob",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Lightning Bolt",
+            "first_turn": cast_turns[1],
+            "hero": "alice",
+        },
+    ]
+    _patch_card_loader(monkeypatch, appearances)
+
+    session_legacy = _FakeSession(queue=[[]])  # catalog.cards
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session_legacy)
+    r_leg = await app_client.get("/analytics/stats/cards")
+    _main.app.dependency_overrides.clear()
+    assert r_leg.status_code == 200
+    leg_value = r_leg.json()["cards"][0]["avg_cast_turn"]
+
+    assert mat_value == leg_value == expected
+
+
+@pytest.mark.asyncio
 async def test_card_detail_by_game_number(
     app_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -893,9 +1035,9 @@ async def test_card_detail_by_game_number(
     # 3. game number breakdown
     session = _FakeSession(
         queue=[
-            # _card_stats_from_materialized:
-            # (card_name, total_games, wins, total_cast, total_seen, total_played)
-            [("Lightning Bolt", 30, 18, 45, 60, 0)],
+            # _card_stats_from_materialized: (card_name, total_games, wins,
+            # total_cast, total_seen, total_played, avg_cast_turn)
+            [("Lightning Bolt", 30, 18, 45, 60, 0, 2.4)],
             # format breakdown: (format, total, wins)
             [("Modern", 25, 15), ("Legacy", 5, 3)],
             # game number breakdown: (game_number, total_games, wins, total_cast)
@@ -915,6 +1057,7 @@ async def test_card_detail_by_game_number(
     assert body["total_games"] == 30
     assert body["wins"] == 18
     assert body["win_rate"] == 60.0
+    assert body["avg_cast_turn"] == 2.4
     assert len(body["by_format"]) == 2
     assert body["by_format"][0]["format"] == "Modern"
     assert len(body["by_game_number"]) == 3

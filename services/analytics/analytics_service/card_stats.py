@@ -281,7 +281,10 @@ async def _card_stats_from_materialized(
                SUM(CASE WHEN cgs.won = true THEN 1 ELSE 0 END) AS wins,
                SUM(cgs.cast) AS total_cast,
                SUM(cgs.seen) AS total_seen,
-               SUM(cgs.played) AS total_played
+               SUM(cgs.played) AS total_played,
+               AVG(cgs.first_cast_turn) FILTER (
+                   WHERE cgs.first_cast_turn IS NOT NULL
+               ) AS avg_cast_turn
         FROM analytics.card_game_stats cgs
         JOIN parser.matches m ON m.id = cgs.match_id
         WHERE m.user_id = :user_id
@@ -300,6 +303,7 @@ async def _card_stats_from_materialized(
             "total_cast": int(r[3]),
             "total_seen": int(r[4]),
             "total_played": int(r[5]),
+            "avg_cast_turn": float(r[6]) if r[6] is not None else None,
         }
         for r in rows
     ]
@@ -674,12 +678,13 @@ async def get_card_stats(
         items: list[CardStatItem] = []
         for r in agg_rows:
             meta = card_meta.get(r["card_name"], {})
+            avg_turn = r.get("avg_cast_turn")
             items.append(
                 CardStatItem(
                     name=r["card_name"],
                     cast_count=r["total_cast"],
                     win_rate=_wr(r["wins"], r["total_games"]),
-                    avg_cast_turn=None,  # Not available from materialized table
+                    avg_cast_turn=round(avg_turn, 2) if avg_turn is not None else None,
                     type_line=meta.get("type_line"),
                     mana_cost=meta.get("mana_cost"),
                 )
@@ -856,12 +861,13 @@ async def get_card_detail(
             on_play=on_play,
         )
 
+        avg_turn = r.get("avg_cast_turn")
         return CardDetailResponse(
             name=card_name,
             total_games=r["total_games"],
             wins=r["wins"],
             win_rate=_wr(r["wins"], r["total_games"]),
-            avg_cast_turn=None,
+            avg_cast_turn=round(avg_turn, 2) if avg_turn is not None else None,
             by_format=by_format,
             by_game_number=by_game_number,
         )
