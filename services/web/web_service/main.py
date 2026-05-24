@@ -851,14 +851,14 @@ async def profile_agents_generate_code(
     )
 
 
-@app.post("/profile/agents/{agent_id}/reingest")
-async def profile_agents_reingest(
+@app.post("/profile/agents/{agent_id}/reparse")
+async def profile_agents_reparse(
     agent_id: uuid.UUID,
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
 ) -> Response:
-    """Force reingest: delete parsed matches uploaded by a specific agent."""
+    """Force reparse: delete parsed matches uploaded by a specific agent."""
     bounce = _bounce_admin_to_panel(user)
     if bounce is not None:
         return bounce
@@ -867,7 +867,7 @@ async def profile_agents_reingest(
             settings.parser_service_url, user.token, agent_id=str(agent_id)
         )
     except parser_client.ParserForbidden:
-        _log.info("profile.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        _log.info("profile.agents.reparse.forbidden", extra={"user_id": user.user_id})
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except parser_client.ParserClientError:
         _log.exception("parser DELETE /parser/matches call failed")
@@ -876,7 +876,7 @@ async def profile_agents_reingest(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # Re-render the agents page with the reingest result.
+    # Re-render the agents page with the reparse result.
     offset = 0
     per_page = _PROFILE_AGENTS_DEFAULT_PER_PAGE
     try:
@@ -895,7 +895,7 @@ async def profile_agents_reingest(
             "total": total,
             "page": 1,
             "per_page": per_page,
-            "reingest_result": result,
+            "reparse_result": result,
         },
     )
 
@@ -1946,8 +1946,8 @@ async def admin_agents_list(
     )
 
 
-@app.post("/admin/agents/{agent_id}/reingest")
-async def admin_agent_reingest(
+@app.post("/admin/agents/{agent_id}/reparse")
+async def admin_agent_reparse(
     agent_id: uuid.UUID,
     request: Request,
     user_id: Annotated[int, Query(ge=1)],
@@ -1959,7 +1959,7 @@ async def admin_agent_reingest(
         Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE),
     ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
 ) -> Response:
-    """Admin: force reingest for a specific agent."""
+    """Admin: force reparse for a specific agent."""
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
         return blocked
@@ -1969,7 +1969,7 @@ async def admin_agent_reingest(
             settings.parser_service_url, user.token, user_id, agent_id=str(agent_id)
         )
     except parser_client.ParserForbidden:
-        _log.info("admin.agents.reingest.forbidden", extra={"user_id": user.user_id})
+        _log.info("admin.agents.reparse.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
     except parser_client.ParserClientError:
         _log.exception(
@@ -1993,7 +1993,7 @@ async def admin_agent_reingest(
             "page": page,
             "per_page": per_page,
             "error": None,
-            "reingest_result": result,
+            "reparse_result": result,
         },
     )
 
@@ -2174,8 +2174,8 @@ async def admin_agent_delete(
     )
 
 
-@app.post("/admin/agents/reingest-all")
-async def admin_agents_reingest_all(
+@app.post("/admin/agents/reparse-all")
+async def admin_agents_reparse_all(
     request: Request,
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
@@ -2208,7 +2208,7 @@ async def admin_agents_reingest_all(
             "page": page,
             "per_page": per_page,
             "error": None,
-            "reingest_result": result,
+            "reparse_result": result,
         },
     )
 

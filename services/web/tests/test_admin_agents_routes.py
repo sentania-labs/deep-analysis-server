@@ -671,12 +671,12 @@ async def test_admin_list_revoke_refresh_flow(
 
 
 # ---------------------------------------------------------------------------
-# Admin reingest — POST /admin/agents/{user_id}/reingest
+# Admin reparse — POST /admin/agents/{user_id}/reparse
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_post_reingest_success_renders_result(
+async def test_post_reparse_success_renders_result(
     app_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -700,7 +700,7 @@ async def test_post_reingest_success_renders_result(
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
     agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reparse?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
@@ -709,7 +709,7 @@ async def test_post_reingest_success_renders_result(
 
 
 @pytest.mark.asyncio
-async def test_post_reingest_forbidden_for_non_admin(
+async def test_post_reparse_forbidden_for_non_admin(
     app_client: httpx.AsyncClient,
 ) -> None:
     from web_service import deps as _deps
@@ -719,7 +719,7 @@ async def test_post_reingest_forbidden_for_non_admin(
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
     agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reparse?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
@@ -727,7 +727,7 @@ async def test_post_reingest_forbidden_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_post_reingest_503_when_parser_unreachable(
+async def test_post_reparse_503_when_parser_unreachable(
     app_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -743,7 +743,7 @@ async def test_post_reingest_503_when_parser_unreachable(
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
     agent_id = "00000000-0000-0000-0000-000000000002"
     try:
-        r = await app_client.post(f"/admin/agents/{agent_id}/reingest?user_id=2")
+        r = await app_client.post(f"/admin/agents/{agent_id}/reparse?user_id=2")
     finally:
         _main.app.dependency_overrides.clear()
 
@@ -805,7 +805,7 @@ async def test_get_admin_agents_renders_local_and_parsed_counts(
 
 
 @pytest.mark.asyncio
-async def test_post_reingest_all_success(
+async def test_post_reparse_all_success(
     app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from web_service import auth_client, parser_client
@@ -825,7 +825,7 @@ async def test_post_reingest_all_success(
     dep, _ = _override_admin()
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
     try:
-        r = await app_client.post("/admin/agents/reingest-all")
+        r = await app_client.post("/admin/agents/reparse-all")
     finally:
         _main.app.dependency_overrides.clear()
     assert r.status_code == 200
@@ -833,14 +833,14 @@ async def test_post_reingest_all_success(
 
 
 @pytest.mark.asyncio
-async def test_post_reingest_all_forbidden(app_client: httpx.AsyncClient) -> None:
+async def test_post_reparse_all_forbidden(app_client: httpx.AsyncClient) -> None:
     from web_service import deps as _deps
     from web_service import main as _main
 
     dep, _ = _override_non_admin()
     _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
     try:
-        r = await app_client.post("/admin/agents/reingest-all")
+        r = await app_client.post("/admin/agents/reparse-all")
     finally:
         _main.app.dependency_overrides.clear()
     assert r.status_code == 403

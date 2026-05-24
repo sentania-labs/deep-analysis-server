@@ -19,8 +19,8 @@
 
 {% if error %}<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>{% endif %}
 
-{% if reingest_result is defined and reingest_result %}
-<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them shortly.</div>
+{% if reparse_result is defined and reparse_result %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Reparse complete: {{ reparse_result.deleted_count }} match{{ "" if reparse_result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them shortly.</div>
 {% endif %}
 {% if cleanup_result is defined and cleanup_result %}
 <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Stale agent cleanup complete: {{ cleanup_result.revoked_count }} agent{{ "" if cleanup_result.revoked_count == 1 else "s" }} revoked.</div>
@@ -34,8 +34,8 @@
 
 {# Bulk actions #}
 <div class="flex gap-2 mb-4">
-    <form method="post" action="/admin/agents/reingest-all?page={{ page }}&per_page={{ per_page }}" class="inline reingest-all-form">
-        <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">Reingest all matches</button>
+    <form method="post" action="/admin/agents/reparse-all?page={{ page }}&per_page={{ per_page }}" class="inline reparse-all-form">
+        <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">Reparse all matches</button>
     </form>
     <form method="post" action="/admin/agents/cleanup-stale?page={{ page }}&per_page={{ per_page }}" class="inline cleanup-stale-form">
         <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">Cleanup stale agents</button>
@@ -86,7 +86,7 @@
                         {% if not a.revoked_at %}
                             <form method="post" action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}" class="inline revoke-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button></form>
                             <form method="post" action="/admin/agents/{{ a.agent_id }}/rotate-key?page={{ page }}&per_page={{ per_page }}" class="inline rotate-key-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Rotate Key</button></form>
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline reingest-form" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reparse?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline reparse-form" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button></form>
                         {% endif %}
                             <form method="post" action="/admin/agents/{{ a.agent_id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline delete-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button></form>
                         </div>
@@ -113,8 +113,8 @@
     document.querySelectorAll('.revoke-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Revoke agent '+(form.dataset.machineName||'')+' owned by '+(form.dataset.userEmail||'')+'? The agent will lose access immediately.'))e.preventDefault();});});
     document.querySelectorAll('.rotate-key-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Rotate API key for agent '+(form.dataset.machineName||'')+' owned by '+(form.dataset.userEmail||'')+'? The old key will stop working immediately.'))e.preventDefault();});});
     document.querySelectorAll('.delete-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('PERMANENTLY DELETE agent '+(form.dataset.machineName||'')+' owned by '+(form.dataset.userEmail||'')+'? This also removes associated upload records. This cannot be undone.'))e.preventDefault();});});
-    document.querySelectorAll('.reingest-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Force reingest for '+(form.dataset.userEmail||'')+'? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them.'))e.preventDefault();});});
-    document.querySelectorAll('.reingest-all-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('REINGEST ALL MATCHES? This deletes ALL parsed matches for ALL users. The backfill scanner will re-parse everything from raw files. This is a nuclear option.'))e.preventDefault();});});
+    document.querySelectorAll('.reparse-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Reparse matches for '+(form.dataset.userEmail||'')+'? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them from the archived files.'))e.preventDefault();});});
+    document.querySelectorAll('.reparse-all-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('REPARSE ALL MATCHES? This deletes ALL parsed matches for ALL users. The backfill scanner will re-parse everything from raw files. This is a nuclear option.'))e.preventDefault();});});
     document.querySelectorAll('.cleanup-stale-form').forEach(function(form){form.addEventListener('submit',function(e){if(!window.confirm('Cleanup stale agents? This will revoke all agents that have not been seen in 90+ days.'))e.preventDefault();});});
 </script>
 {% endblock %}

@@ -64,9 +64,9 @@
     {% endif %}
 </div>
 
-{% if reingest_result is defined and reingest_result %}
+{% if reparse_result is defined and reparse_result %}
 <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
-    Force reingest complete: {{ reingest_result.deleted_count }} match{{ "" if reingest_result.deleted_count == 1 else "es" }} deleted.
+    Reparse complete: {{ reparse_result.deleted_count }} match{{ "" if reparse_result.deleted_count == 1 else "es" }} deleted.
     The backfill scanner will re-parse them shortly.
 </div>
 {% endif %}
@@ -114,8 +114,8 @@
                             <form method="post" action="/profile/agents/{{ a.agent_id }}/revoke" class="inline revoke-form">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
                             </form>
-                            <form method="post" action="/profile/agents/{{ a.agent_id }}/reingest" class="inline reingest-form">
-                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button>
+                            <form method="post" action="/profile/agents/{{ a.agent_id }}/reparse" class="inline reparse-form">
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button>
                             </form>
                         </div>
                         {% endif %}
@@ -164,9 +164,9 @@
             }
         });
     });
-    document.querySelectorAll('.reingest-form').forEach(function (form) {
+    document.querySelectorAll('.reparse-form').forEach(function (form) {
         form.addEventListener('submit', function (e) {
-            if (!window.confirm('Force reingest? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them.')) {
+            if (!window.confirm('Reparse this agent\'s matches? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them from the archived files.')) {
                 e.preventDefault();
             }
         });

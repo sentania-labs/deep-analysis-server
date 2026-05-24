@@ -1,4 +1,4 @@
-"""Force-reingest endpoints — delete parsed matches so the parser
+"""Force-reparse endpoints — delete parsed matches so the parser
 re-processes them from raw files on the next backfill cycle.
 
 Routes:
@@ -22,7 +22,7 @@ from parser_service.db import get_session
 from parser_service.deps import AuthenticatedUser, require_admin, require_user
 from parser_service.models import Game, GamePlayer, GameState, Match
 
-_log = logging.getLogger("parser.reingest")
+_log = logging.getLogger("parser.reparse")
 
 router = APIRouter()
 
@@ -60,7 +60,7 @@ async def delete_my_matches(
     """
     count = await _delete_matches_for_user(db, user.user_id, after, before, agent_id=agent_id)
     _log.info(
-        "parser.reingest.user",
+        "parser.reparse.user",
         extra={"user_id": user.user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
@@ -85,7 +85,7 @@ async def admin_delete_user_matches(
     """
     count = await _delete_matches_for_user(db, user_id, after, before, agent_id=agent_id)
     _log.info(
-        "parser.reingest.admin_user",
+        "parser.reparse.admin_user",
         extra={"target_user_id": user_id, "agent_id": agent_id, "deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
@@ -101,7 +101,7 @@ async def admin_delete_all_matches(
     """Admin nuclear: delete ALL parsed matches across all users."""
     count = await _delete_all_matches(db, after, before)
     _log.info(
-        "parser.reingest.admin_all",
+        "parser.reparse.admin_all",
         extra={"deleted_count": count},
     )
     return DeletedCountResponse(deleted_count=count)
