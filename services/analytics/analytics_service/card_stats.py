@@ -37,6 +37,19 @@ _MAX_PER_PAGE = 100
 # Minimum game count for top-performer standout card
 TOP_PERFORMER_MIN_GAMES = 20
 
+# Allowlist for card-stats sort_by — keep in sync with the dashboard
+# Card Performance table headers.
+_CARD_SORT_COLUMNS = frozenset({"card_name", "games", "win_rate", "avg_cast_turn"})
+_CARD_SORT_DIRS = frozenset({"asc", "desc"})
+# Natural direction for each sortable column. card_name is text → A→Z;
+# numeric columns rank "best first" → descending.
+_CARD_SORT_NATURAL_DIR = {
+    "card_name": "asc",
+    "games": "desc",
+    "win_rate": "desc",
+    "avg_cast_turn": "desc",
+}
+
 
 # ---------------------------------------------------------------------------
 # Response models
@@ -593,7 +606,8 @@ async def get_card_stats(
     db: AsyncSession = Depends(get_session),
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=_MAX_PER_PAGE)] = _DEFAULT_PER_PAGE,
-    sort: Annotated[str, Query()] = "cast_count",
+    sort_by: Annotated[str, Query()] = "games",
+    sort_dir: Annotated[str | None, Query()] = None,
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
     date_from: Annotated[str | None, Query()] = None,
@@ -607,7 +621,26 @@ async def get_card_stats(
     Uses the materialized ``card_game_stats`` table when available,
     falling back to the legacy JSONB extraction path for pre-backfill
     data.
+
+    ``sort_by`` accepts one of ``card_name``, ``games``, ``win_rate``,
+    ``avg_cast_turn``. ``sort_dir`` is ``asc`` or ``desc``; if omitted,
+    defaults to ``asc`` for ``card_name`` and ``desc`` for the numeric
+    columns. Cards with ``avg_cast_turn = NULL`` always rank last when
+    sorting by that column, regardless of direction.
     """
+    if sort_by not in _CARD_SORT_COLUMNS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_sort_by", "allowed": sorted(_CARD_SORT_COLUMNS)},
+        )
+    if sort_dir is None:
+        sort_dir = _CARD_SORT_NATURAL_DIR[sort_by]
+    elif sort_dir not in _CARD_SORT_DIRS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_sort_dir", "allowed": sorted(_CARD_SORT_DIRS)},
+        )
+
     use_materialized = await _has_card_game_stats(db, user.user_id)
 
     if use_materialized:
@@ -708,17 +741,46 @@ async def get_card_stats(
                 )
             )
 
-    # Sort
-    if sort == "win_rate":
-        items.sort(key=lambda x: (-x.win_rate, -x.cast_count))
-    else:
-        items.sort(key=lambda x: (-x.cast_count, x.name))
+    _sort_card_items(items, sort_by, sort_dir)
 
     total = len(items)
     offset = (page - 1) * per_page
     page_items = items[offset : offset + per_page]
 
     return CardStatsResponse(cards=page_items, total=total, page=page, per_page=per_page)
+
+
+def _sort_card_items(items: list[CardStatItem], sort_by: str, sort_dir: str) -> None:
+    """Sort ``items`` in place by the chosen column and direction.
+
+    Tie-break order is always ``cast_count`` desc then ``name`` asc, so
+    equally-ranked cards prefer the larger sample size regardless of
+    primary sort direction. ``avg_cast_turn = None`` rows always rank
+    last when sorting by that column.
+    """
+    reverse = sort_dir == "desc"
+
+    # Sort is stable, so apply the tie-breaker first then the primary
+    # key. Items with equal primary values keep tie-breaker order.
+    def tiebreak(x: CardStatItem) -> tuple[int, str]:
+        return (-x.cast_count, x.name.lower())
+
+    if sort_by == "avg_cast_turn":
+        non_null = [x for x in items if x.avg_cast_turn is not None]
+        nulls = [x for x in items if x.avg_cast_turn is None]
+        non_null.sort(key=tiebreak)
+        non_null.sort(key=lambda x: x.avg_cast_turn or 0.0, reverse=reverse)
+        nulls.sort(key=tiebreak)
+        items[:] = non_null + nulls
+        return
+
+    items.sort(key=tiebreak)
+    if sort_by == "card_name":
+        items.sort(key=lambda x: x.name.lower(), reverse=reverse)
+    elif sort_by == "win_rate":
+        items.sort(key=lambda x: x.win_rate, reverse=reverse)
+    else:  # "games"
+        items.sort(key=lambda x: x.cast_count, reverse=reverse)
 
 
 @router.get("/cards/{card_name}", response_model=CardDetailResponse)

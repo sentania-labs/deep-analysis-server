@@ -294,6 +294,232 @@ async def test_card_stats_aggregates(
     assert mountain["win_rate"] == 100.0
 
 
+def _three_card_fixture() -> list[dict[str, Any]]:
+    """Three cards with distinct values on every sortable column.
+
+    Win-rate when cast: Counterspell 100%, Brainstorm 50%, Ancestral 0%.
+    Cast count:         Brainstorm 2,    Counterspell 1, Ancestral 1.
+    avg_cast_turn:      Brainstorm 4,    Counterspell 2, Ancestral 1.
+    Card name asc:      Ancestral Recall, Brainstorm, Counterspell.
+    """
+    g1, g2 = uuid.uuid4(), uuid.uuid4()
+    return [
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Brainstorm",
+            "first_turn": 3,
+            "hero": "alice",
+        },
+        {
+            "game_id": g2,
+            "winner": "bob",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Brainstorm",
+            "first_turn": 5,
+            "hero": "alice",
+        },
+        {
+            "game_id": g1,
+            "winner": "alice",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Counterspell",
+            "first_turn": 2,
+            "hero": "alice",
+        },
+        {
+            "game_id": g2,
+            "winner": "bob",
+            "players": ["alice", "bob"],
+            "format": "Modern",
+            "card_name": "Ancestral Recall",
+            "first_turn": 1,
+            "hero": "alice",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sort_by", "expected_first"),
+    [
+        ("card_name", "Ancestral Recall"),
+        ("games", "Brainstorm"),
+        ("win_rate", "Counterspell"),
+        ("avg_cast_turn", "Brainstorm"),
+    ],
+)
+async def test_card_stats_sort_desc(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    sort_by: str,
+    expected_first: str,
+) -> None:
+    """Each allowed sort_by ranks the expected card first under desc/default."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
+    _patch_card_loader(monkeypatch, _three_card_fixture())
+
+    # card_name asc is the natural default for card_name, so use asc there;
+    # desc for the numeric columns.
+    sort_dir = "asc" if sort_by == "card_name" else "desc"
+
+    session = _FakeSession(queue=[[]])  # catalog.cards lookup, empty meta
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get(
+            "/analytics/stats/cards",
+            params={"sort_by": sort_by, "sort_dir": sort_dir},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cards"][0]["name"] == expected_first, (
+        f"sort_by={sort_by} {sort_dir} → got {[c['name'] for c in body['cards']]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_card_stats_sort_direction_flips(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """asc and desc on the same column return reversed orderings."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
+    _patch_card_loader(monkeypatch, _three_card_fixture())
+
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+
+    session_desc = _FakeSession(queue=[[]])
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session_desc)
+    r_desc = await app_client.get(
+        "/analytics/stats/cards",
+        params={"sort_by": "win_rate", "sort_dir": "desc"},
+    )
+
+    session_asc = _FakeSession(queue=[[]])
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session_asc)
+    r_asc = await app_client.get(
+        "/analytics/stats/cards",
+        params={"sort_by": "win_rate", "sort_dir": "asc"},
+    )
+    _main.app.dependency_overrides.clear()
+
+    desc_names = [c["name"] for c in r_desc.json()["cards"]]
+    asc_names = [c["name"] for c in r_asc.json()["cards"]]
+    assert desc_names[0] == "Counterspell"  # 100% wr
+    assert asc_names[0] == "Ancestral Recall"  # 0% wr
+    assert desc_names == list(reversed(asc_names))
+
+
+@pytest.mark.asyncio
+async def test_card_stats_sort_avg_cast_turn_nulls_last(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cards with no avg_cast_turn rank last under both asc and desc."""
+    from analytics_service import card_stats as _cs
+
+    items = [
+        _cs.CardStatItem(name="HasTurn", cast_count=5, win_rate=50.0, avg_cast_turn=3.0),
+        _cs.CardStatItem(name="NullTurn", cast_count=10, win_rate=90.0, avg_cast_turn=None),
+    ]
+    _cs._sort_card_items(items, "avg_cast_turn", "desc")
+    assert [x.name for x in items] == ["HasTurn", "NullTurn"]
+
+    items = [
+        _cs.CardStatItem(name="HasTurn", cast_count=5, win_rate=50.0, avg_cast_turn=3.0),
+        _cs.CardStatItem(name="NullTurn", cast_count=10, win_rate=90.0, avg_cast_turn=None),
+    ]
+    _cs._sort_card_items(items, "avg_cast_turn", "asc")
+    assert [x.name for x in items] == ["HasTurn", "NullTurn"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected_error"),
+    [
+        ({"sort_by": "DROP TABLE users"}, "invalid_sort_by"),
+        ({"sort_by": "wins"}, "invalid_sort_by"),  # not in allowlist
+        ({"sort_by": "games", "sort_dir": "sideways"}, "invalid_sort_dir"),
+    ],
+)
+async def test_card_stats_rejects_invalid_sort(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    params: dict[str, str],
+    expected_error: str,
+) -> None:
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
+    _patch_card_loader(monkeypatch, [])
+
+    session = _FakeSession(queue=[])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    _main.app.dependency_overrides[_db.get_session] = _override_session(session)
+    try:
+        r = await app_client.get("/analytics/stats/cards", params=params)
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_card_stats_sort_dir_defaults_per_column(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting sort_dir → asc for card_name, desc for numeric columns."""
+    from analytics_service import db as _db
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _patch_has_card_game_stats(monkeypatch, False)
+    _patch_hero_name(monkeypatch, "alice")
+    _patch_card_loader(monkeypatch, _three_card_fixture())
+
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        _main.app.dependency_overrides[_db.get_session] = _override_session(
+            _FakeSession(queue=[[]])
+        )
+        r_name = await app_client.get("/analytics/stats/cards", params={"sort_by": "card_name"})
+
+        _main.app.dependency_overrides[_db.get_session] = _override_session(
+            _FakeSession(queue=[[]])
+        )
+        r_games = await app_client.get("/analytics/stats/cards", params={"sort_by": "games"})
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    # card_name default is asc → "Ancestral Recall" comes first.
+    assert r_name.json()["cards"][0]["name"] == "Ancestral Recall"
+    # games default is desc → "Brainstorm" (2 casts) comes first.
+    assert r_games.json()["cards"][0]["name"] == "Brainstorm"
+
+
 @pytest.mark.asyncio
 async def test_card_stats_pagination(
     app_client: httpx.AsyncClient,
