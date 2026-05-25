@@ -296,11 +296,23 @@ def _to_opponent_stat(payload: dict[str, Any]) -> OpponentStatItem:
     )
 
 
-async def get_stats_summary(base_url: str, token: str) -> StatsSummary:
+async def get_stats_summary(
+    base_url: str,
+    token: str,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> StatsSummary:
+    params: dict[str, str] = {}
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/summary",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:
@@ -314,11 +326,23 @@ async def get_stats_summary(base_url: str, token: str) -> StatsSummary:
     return _to_summary(resp.json())
 
 
-async def get_stats_by_format(base_url: str, token: str) -> list[FormatStatItem]:
+async def get_stats_by_format(
+    base_url: str,
+    token: str,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[FormatStatItem]:
+    params: dict[str, str] = {}
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{base_url}/analytics/stats/by-format",
+                params=params,
                 headers={"Authorization": f"Bearer {token}"},
             )
     except httpx.HTTPError as exc:

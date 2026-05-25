@@ -225,11 +225,15 @@ async def dashboard(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     format: Annotated[str, Query(alias="format")] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
 
     format_filter = format or None
+    df = date_from or None
+    dt = date_to or None
 
     stats_summary: Any = None
     format_stats: list[Any] = []
@@ -240,10 +244,10 @@ async def dashboard(
     card_stats: Any = None
     try:
         stats_summary = await analytics_client.get_stats_summary(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, date_from=df, date_to=dt
         )
         format_stats = await analytics_client.get_stats_by_format(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url, user.token, date_from=df, date_to=dt
         )
     except analytics_client.AnalyticsForbidden:
         # Treat as logged-out: bounce to /login so the user can re-auth.
@@ -254,21 +258,33 @@ async def dashboard(
 
     try:
         play_draw_stats = await analytics_client.get_play_draw_stats(
-            settings.analytics_service_url, user.token, format_filter=format_filter
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format_filter,
+            date_from=df,
+            date_to=dt,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("play/draw stats unavailable")
 
     try:
         preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
-            settings.analytics_service_url, user.token, format_filter=format_filter
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format_filter,
+            date_from=df,
+            date_to=dt,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("preboard/postboard stats unavailable")
 
     try:
         mulligan_stats = await analytics_client.get_mulligan_stats(
-            settings.analytics_service_url, user.token, format_filter=format_filter
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format_filter,
+            date_from=df,
+            date_to=dt,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("mulligan stats unavailable")
@@ -281,6 +297,8 @@ async def dashboard(
             user.token,
             per_page=_CARD_PERF_PER_PAGE,
             format_filter=format_filter,
+            date_from=df,
+            date_to=dt,
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("card stats unavailable")
@@ -309,6 +327,8 @@ async def dashboard(
             "card_stats": card_stats,
             "format_filter": format,
             "filtered_summary": filtered_summary,
+            "date_from": date_from,
+            "date_to": date_to,
         },
     )
 
@@ -402,12 +422,18 @@ async def dashboard_partial_play_draw(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     format: Annotated[str, Query(alias="format")] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
-    """HTMX partial: play/draw stats filtered by format."""
+    """HTMX partial: play/draw stats filtered by format and date range."""
     play_draw_stats: Any = None
     try:
         play_draw_stats = await analytics_client.get_play_draw_stats(
-            settings.analytics_service_url, user.token, format_filter=format or None
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
         )
     except analytics_client.AnalyticsForbidden:
         return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
@@ -426,12 +452,18 @@ async def dashboard_partial_preboard_postboard(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     format: Annotated[str, Query(alias="format")] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
-    """HTMX partial: pre-board vs post-board stats filtered by format."""
+    """HTMX partial: pre-board vs post-board stats filtered by format and date range."""
     preboard_postboard_stats: Any = None
     try:
         preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
-            settings.analytics_service_url, user.token, format_filter=format or None
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
         )
     except analytics_client.AnalyticsForbidden:
         return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
@@ -450,12 +482,18 @@ async def dashboard_partial_mulligans(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     format: Annotated[str, Query(alias="format")] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
-    """HTMX partial: mulligan analysis filtered by format."""
+    """HTMX partial: mulligan analysis filtered by format and date range."""
     mulligan_stats: Any = None
     try:
         mulligan_stats = await analytics_client.get_mulligan_stats(
-            settings.analytics_service_url, user.token, format_filter=format or None
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
         )
     except analytics_client.AnalyticsForbidden:
         return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
@@ -488,8 +526,10 @@ async def dashboard_partial_card_performance(
     page: Annotated[int, Query(ge=1)] = 1,
     sort: Annotated[str, Query()] = _CARD_SORT_DEFAULT,
     dir: Annotated[str, Query()] = _CARD_DIR_DEFAULT,
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
 ) -> Response:
-    """HTMX partial: card performance filtered by format, paginated.
+    """HTMX partial: card performance filtered by format and date range, paginated.
 
     ``sort`` + ``dir`` come from header clicks in the partial. Invalid
     values fall back to the defaults (``games`` desc) rather than 400 —
@@ -511,6 +551,8 @@ async def dashboard_partial_card_performance(
             sort_by=sort,
             sort_dir=dir,
             format_filter=format or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
         )
     except analytics_client.AnalyticsForbidden:
         return HTMLResponse("<p>Session expired. Please reload the page.</p>", status_code=401)
@@ -524,6 +566,8 @@ async def dashboard_partial_card_performance(
             "format_filter": format,
             "current_sort": sort,
             "current_dir": dir,
+            "date_from": date_from,
+            "date_to": date_to,
         },
     )
 

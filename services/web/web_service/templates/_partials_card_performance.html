@@ -27,7 +27,7 @@
                     {% set aria_sort = ('ascending' if current_dir == 'asc' else 'descending') if is_active else 'none' %}
                     {# Toggling sort always returns the user to page 1 — the row that was on page 3 under the
                        previous sort almost never maps to the same page under the new sort. #}
-                    {% set href = "/dashboard/partials/card-performance?format=" + (format_filter|urlencode) + "&page=1&sort=" + col.key + "&dir=" + next_dir %}
+                    {% set href = "/dashboard/partials/card-performance?format=" + (format_filter|urlencode) + "&date_from=" + (date_from|default('')|urlencode) + "&date_to=" + (date_to|default('')|urlencode) + "&page=1&sort=" + col.key + "&dir=" + next_dir %}
                     <th aria-sort="{{ aria_sort }}"
                         class="text-xs uppercase tracking-wider font-medium text-{{ col.align }} px-0 py-0 dark:text-txt-secondary text-txt-secondary-light">
                         <button hx-get="{{ href }}"
@@ -58,7 +58,7 @@
     {% set last_idx = first_idx + card_stats.cards|length - 1 %}
     {% set has_prev = card_stats.page > 1 %}
     {% set has_next = last_idx < card_stats.total %}
-    {% set base_qs = "format=" + (format_filter|urlencode) + "&sort=" + current_sort + "&dir=" + current_dir %}
+    {% set base_qs = "format=" + (format_filter|urlencode) + "&date_from=" + (date_from|default('')|urlencode) + "&date_to=" + (date_to|default('')|urlencode) + "&sort=" + current_sort + "&dir=" + current_dir %}
     {% set prev_url = "/dashboard/partials/card-performance?" + base_qs + "&page=" + (card_stats.page - 1)|string %}
     {% set next_url = "/dashboard/partials/card-performance?" + base_qs + "&page=" + (card_stats.page + 1)|string %}
     <div class="px-4 py-3 border-t dark:border-border border-border-light">
