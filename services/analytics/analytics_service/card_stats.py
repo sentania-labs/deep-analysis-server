@@ -185,10 +185,10 @@ def _build_match_where(
         clauses.append("m.players::text ILIKE :opp_pattern ESCAPE '\\'")
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        clauses.append("COALESCE(m.played_at, m.parsed_at)::date >= :date_from")
+        clauses.append("COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date")
         params["date_from"] = date_from
     if date_to:
-        clauses.append("COALESCE(m.played_at, m.parsed_at)::date <= :date_to")
+        clauses.append("COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date")
         params["date_to"] = date_to
     if opponent_archetype_id:
         clauses.append(
@@ -380,10 +380,10 @@ async def _load_card_appearances(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
         params["date_from"] = date_from
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
         params["date_to"] = date_to
 
     if not hero_name:
@@ -458,10 +458,10 @@ async def _load_card_appearances_fallback(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
         params["date_from"] = date_from
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
         params["date_to"] = date_to
 
     rows = (
