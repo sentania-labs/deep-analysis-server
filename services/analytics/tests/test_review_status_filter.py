@@ -127,7 +127,13 @@ async def test_summary_loader_filtering_contract(
         }
     ]
 
-    async def fake_loader(_db: Any, _user_id: int) -> list[dict[str, Any]]:
+    async def fake_loader(
+        _db: Any,
+        _user_id: int,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
         return matches
 
     monkeypatch.setattr(_stats, "_load_user_matches", fake_loader)

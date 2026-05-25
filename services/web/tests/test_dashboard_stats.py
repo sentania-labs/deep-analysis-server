@@ -123,10 +123,10 @@ async def test_dashboard_renders_with_stats(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_summary(_url: str, _token: str) -> Any:
+    async def fake_summary(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_summary(total=7)
 
-    async def fake_format(_url: str, _token: str) -> Any:
+    async def fake_format(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_format_stats()
 
     async def fake_opponent(_url: str, _token: str) -> Any:
@@ -235,10 +235,10 @@ async def test_dashboard_empty_state_no_matches(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_summary(_url: str, _token: str) -> Any:
+    async def fake_summary(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_summary(total=0)
 
-    async def fake_format(_url: str, _token: str) -> Any:
+    async def fake_format(_url: str, _token: str, **_kw: Any) -> Any:
         return []
 
     async def fake_opponent(_url: str, _token: str) -> Any:
@@ -360,10 +360,10 @@ async def test_dashboard_format_filter_threads_through(
 
     captured: dict[str, Any] = {}
 
-    async def fake_summary(_url: str, _token: str) -> Any:
+    async def fake_summary(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_summary(total=7)
 
-    async def fake_format(_url: str, _token: str) -> Any:
+    async def fake_format(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_format_stats()
 
     async def fake_play_draw(_url: str, _token: str, **kw: Any) -> Any:
@@ -430,11 +430,11 @@ async def test_dashboard_format_filter_overrides_headline_numbers(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_summary(_url: str, _token: str) -> Any:
+    async def fake_summary(_url: str, _token: str, **_kw: Any) -> Any:
         # Overall: 7 matches, 4-2-1, win rate 66.7%.
         return _sample_summary(total=7)
 
-    async def fake_format(_url: str, _token: str) -> Any:
+    async def fake_format(_url: str, _token: str, **_kw: Any) -> Any:
         return [
             analytics_client.FormatStatItem(
                 format_="Modern",
@@ -497,10 +497,10 @@ async def test_dashboard_unfiltered_has_no_clear_link(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_summary(_url: str, _token: str) -> Any:
+    async def fake_summary(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_summary(total=7)
 
-    async def fake_format(_url: str, _token: str) -> Any:
+    async def fake_format(_url: str, _token: str, **_kw: Any) -> Any:
         return _sample_format_stats()
 
     async def fake_play_draw(_url: str, _token: str, **_kw: Any) -> Any:

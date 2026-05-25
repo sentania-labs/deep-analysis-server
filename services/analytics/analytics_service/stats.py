@@ -123,7 +123,13 @@ def _classify_match(
     return "D", opponent, user_wins, opp_wins
 
 
-async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
+async def _load_user_matches(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[dict[str, Any]]:
     """Fetch a user's matches plus per-match game-winner counts.
 
     Kept for callers that need the full match list with game-win
@@ -132,21 +138,32 @@ async def _load_user_matches(db: AsyncSession, user_id: int) -> list[dict[str, A
 
     v0.9.6: Now also returns ``hero_player_name`` from the match row,
     eliminating the need for a separate ``auth.users`` lookup.
+
+    v0.9.8: Optional ``date_from`` / ``date_to`` params push date
+    filtering to SQL (same pattern as ``game_stats._load_games_with_context``).
     """
+    where = "WHERE user_id = :user_id AND review_status IS NULL"
+    params: dict[str, Any] = {"user_id": user_id}
+    if date_from:
+        where += " AND COALESCE(played_at, parsed_at)::date >= :date_from"
+        params["date_from"] = date_from
+    if date_to:
+        where += " AND COALESCE(played_at, parsed_at)::date <= :date_to"
+        params["date_to"] = date_to
+
     rows = (
         await db.execute(
             text(
-                """
+                f"""
                 SELECT id, format, players,
                        COALESCE(played_at, parsed_at) AS played_at,
                        hero_player_name
                 FROM parser.matches
-                WHERE user_id = :user_id
-                  AND review_status IS NULL
+                {where}
                 ORDER BY COALESCE(played_at, parsed_at) DESC
                 """
             ),
-            {"user_id": user_id},
+            params,
         )
     ).all()
     if not rows:
@@ -231,14 +248,16 @@ def _summarize(
 async def get_summary(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> StatsSummary:
     redis_client = await _get_redis_or_none()
-    ck = cache_key(user.user_id, "summary")
+    ck = cache_key(user.user_id, "summary", date_from=date_from, date_to=date_to)
     if redis_client:
         cached = await get_cached(redis_client, ck, endpoint="summary")
         if isinstance(cached, dict):
             return StatsSummary(**cached)
-    matches = await _load_user_matches(db, user.user_id)
+    matches = await _load_user_matches(db, user.user_id, date_from=date_from, date_to=date_to)
     result = _summarize(matches)
     if redis_client:
         await set_cached(redis_client, ck, result.model_dump(mode="json", by_alias=True))
@@ -249,14 +268,16 @@ async def get_summary(
 async def get_by_format(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
+    date_from: Annotated[str | None, Query()] = None,
+    date_to: Annotated[str | None, Query()] = None,
 ) -> list[FormatStat]:
     redis_client = await _get_redis_or_none()
-    ck = cache_key(user.user_id, "by-format")
+    ck = cache_key(user.user_id, "by-format", date_from=date_from, date_to=date_to)
     if redis_client:
         cached = await get_cached(redis_client, ck, endpoint="by-format")
         if isinstance(cached, list):
             return [FormatStat(**item) for item in cached]
-    matches = await _load_user_matches(db, user.user_id)
+    matches = await _load_user_matches(db, user.user_id, date_from=date_from, date_to=date_to)
     if not matches:
         return []
     buckets: dict[str, dict[str, int]] = {}

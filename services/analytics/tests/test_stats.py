@@ -63,7 +63,13 @@ def _override_user(user_id: int = 7) -> Any:
 def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]) -> None:
     from analytics_service import stats as _stats
 
-    async def fake_loader(_db: Any, _user_id: int) -> list[dict[str, Any]]:
+    async def fake_loader(
+        _db: Any,
+        _user_id: int,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
         return matches
 
     monkeypatch.setattr(_stats, "_load_user_matches", fake_loader)
@@ -73,6 +79,37 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
         return None
 
     monkeypatch.setattr(_stats, "_get_redis_or_none", _no_redis)
+
+
+def _patch_loader_date_aware(
+    monkeypatch: pytest.MonkeyPatch,
+    matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Like _patch_loader but records date_from/date_to calls.
+
+    Returns a mutable list that the fake appends call records to.
+    """
+    from analytics_service import stats as _stats
+
+    calls: list[dict[str, Any]] = []
+
+    async def fake_loader(
+        _db: Any,
+        _user_id: int,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        calls.append({"date_from": date_from, "date_to": date_to})
+        return matches
+
+    monkeypatch.setattr(_stats, "_load_user_matches", fake_loader)
+
+    async def _no_redis() -> None:
+        return None
+
+    monkeypatch.setattr(_stats, "_get_redis_or_none", _no_redis)
+    return calls
 
 
 def _match_dict(
@@ -328,3 +365,100 @@ async def test_by_opponent_buckets_by_opponent(
     assert by_opp["carol"]["matches"] == 1
     assert by_opp["carol"]["wins"] == 1
     assert by_opp["carol"]["win_rate"] == 100.0
+
+
+# ---------------------------------------------------------------------------
+# /summary and /by-format with date_from / date_to
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_summary_threads_date_params(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """date_from and date_to query params are forwarded to _load_user_matches."""
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    calls = _patch_loader_date_aware(monkeypatch, [])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get(
+            "/analytics/stats/summary",
+            params={"date_from": "2026-05-01", "date_to": "2026-05-10"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["date_from"] == "2026-05-01"
+    assert calls[0]["date_to"] == "2026-05-10"
+
+
+@pytest.mark.asyncio
+async def test_summary_no_date_params_passes_none(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without date params, _load_user_matches receives None."""
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    calls = _patch_loader_date_aware(monkeypatch, [])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get("/analytics/stats/summary")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["date_from"] is None
+    assert calls[0]["date_to"] is None
+
+
+@pytest.mark.asyncio
+async def test_by_format_threads_date_params(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """date_from and date_to query params are forwarded through by-format."""
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    calls = _patch_loader_date_aware(monkeypatch, [])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get(
+            "/analytics/stats/by-format",
+            params={"date_from": "2026-05-01", "date_to": "2026-05-15"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["date_from"] == "2026-05-01"
+    assert calls[0]["date_to"] == "2026-05-15"
+
+
+# ---------------------------------------------------------------------------
+# Cache key differentiation with date params
+# ---------------------------------------------------------------------------
+
+
+def test_cache_key_differs_with_date_params() -> None:
+    """Cache keys for date-filtered vs unfiltered requests must differ."""
+    from common.cache import cache_key as ck
+
+    key_no_date = ck(7, "summary")
+    key_with_date = ck(7, "summary", date_from="2026-05-01", date_to="2026-05-10")
+    key_different_date = ck(7, "summary", date_from="2026-04-01", date_to="2026-04-30")
+
+    assert key_no_date != key_with_date
+    assert key_with_date != key_different_date
+    # None values should not affect the key (stripped by cache_key)
+    key_none = ck(7, "summary", date_from=None, date_to=None)
+    assert key_none == key_no_date
