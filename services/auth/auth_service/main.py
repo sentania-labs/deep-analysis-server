@@ -53,6 +53,7 @@ from auth_service.schemas import (
     RefreshRequest,
     RegisterRequest,
     RegisterResponse,
+    ReingestResponse,
     TokenResponse,
     UpdateMeRequest,
     UpdateMeResponse,
@@ -447,6 +448,7 @@ async def list_my_agents(
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,
+            reingest_requested_at=a.reingest_requested_at,
         )
         for a in rows
     ]
@@ -899,4 +901,56 @@ async def agent_heartbeat(
         revoked=row.revoked_at is not None,
         upload_count=upload_count,
         min_agent_version=min_agent_version,
+        reingest_requested_at=row.reingest_requested_at,
     )
+
+
+# Self-service reingest cooldown: 1 per hour per agent.
+_AGENT_REINGEST_COOLDOWN_SECONDS = 3600
+
+
+@app.post("/auth/agent/reingest", response_model=ReingestResponse)
+async def agent_self_reingest(
+    agent: AuthenticatedAgent = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_session),
+) -> ReingestResponse:
+    """Agent self-service: request its own reingest.
+
+    Rate-limited to one call per ``_AGENT_REINGEST_COOLDOWN_SECONDS`` per
+    agent. Uses the existing ``reingest_requested_at`` column as the
+    cooldown marker — if the current stamp is less than 1 hour old, the
+    request is rejected with 429.
+
+    This endpoint is for future user-facing UI; not wired into templates yet.
+    """
+    row = (
+        await db.execute(
+            select(AgentRegistration)
+            .where(AgentRegistration.id == agent.agent_id)
+            .with_for_update()
+        )
+    ).scalar_one()
+    if row.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "agent_revoked"},
+        )
+    now = datetime.now(UTC)
+    if row.reingest_requested_at is not None:
+        elapsed = (now - row.reingest_requested_at).total_seconds()
+        if elapsed < _AGENT_REINGEST_COOLDOWN_SECONDS:
+            remaining = max(int(_AGENT_REINGEST_COOLDOWN_SECONDS - elapsed), 0)
+            retry_at = row.reingest_requested_at + timedelta(
+                seconds=_AGENT_REINGEST_COOLDOWN_SECONDS
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "rate_limited",
+                    "retry_after_seconds": remaining,
+                    "retry_at": retry_at.isoformat(),
+                },
+            )
+    row.reingest_requested_at = now
+    await db.commit()
+    return ReingestResponse(affected_count=1)

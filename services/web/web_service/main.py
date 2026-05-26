@@ -2542,6 +2542,183 @@ async def admin_agents_cleanup_stale(
 
 
 # ---------------------------------------------------------------------------
+# Admin reingest — agent file re-upload via heartbeat signal
+# ---------------------------------------------------------------------------
+
+
+@app.post("/admin/agents/{agent_id}/reingest")
+async def admin_agent_reingest(
+    agent_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE)
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: request reingest for a specific agent."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        count, err = await auth_client.admin_reingest_agent(
+            settings.auth_service_url, user.token, str(agent_id)
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth POST reingest-agent call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if err is None:
+        return templates.TemplateResponse(
+            request,
+            "admin_agents.html",
+            {
+                "user": user,
+                "agents": agents,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "error": None,
+                "reingest_result": {"affected_count": count},
+            },
+        )
+    if err == "agent_not_found":
+        message = "That agent no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not request reingest."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        status_code=code,
+    )
+
+
+@app.post("/admin/users/{user_id}/reingest")
+async def admin_user_reingest(
+    user_id: int,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_USERS_MAX_PER_PAGE)
+    ] = _ADMIN_USERS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: request reingest for all of a user's agents."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        count, err = await auth_client.admin_reingest_user_agents(
+            settings.auth_service_url, user.token, user_id
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth POST reingest-user call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    users_list, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
+    if err is None:
+        return _render_admin_users_sync(
+            request,
+            user,
+            users_list,
+            total,
+            page=page,
+            per_page=per_page,
+            error=None,
+            result={"reingest": True, "user_id": user_id, "affected_count": count},
+            status_code=200,
+        )
+    if err == "user_not_found":
+        message = "That user no longer exists."
+        code = status.HTTP_404_NOT_FOUND
+    else:
+        message = "Could not request reingest."
+        code = status.HTTP_400_BAD_REQUEST
+    return _render_admin_users_sync(
+        request,
+        user,
+        users_list,
+        total,
+        page=page,
+        per_page=per_page,
+        error=message,
+        result=None,
+        status_code=code,
+    )
+
+
+@app.post("/admin/agents/reingest-all")
+async def admin_agents_reingest_all(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    page: Annotated[int, Query(ge=1)] = 1,
+    per_page: Annotated[
+        int, Query(ge=1, le=_ADMIN_AGENTS_MAX_PER_PAGE)
+    ] = _ADMIN_AGENTS_DEFAULT_PER_PAGE,
+) -> Response:
+    """Admin: request reingest for all active agents globally."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        count, err = await auth_client.admin_reingest_all_agents(
+            settings.auth_service_url, user.token
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth POST reingest-all call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    agents, total = await _refetch_admin_agents(settings, user, page=page, per_page=per_page)
+    if err is None:
+        return templates.TemplateResponse(
+            request,
+            "admin_agents.html",
+            {
+                "user": user,
+                "agents": agents,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+                "error": None,
+                "reingest_result": {"affected_count": count},
+            },
+        )
+    return _render_admin_agents_sync(
+        request,
+        user,
+        agents,
+        total,
+        page=page,
+        per_page=per_page,
+        error="Could not request reingest for all agents.",
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Admin settings — W3.6.3 (registration mode toggle, UID=1 only)
 # ---------------------------------------------------------------------------
 

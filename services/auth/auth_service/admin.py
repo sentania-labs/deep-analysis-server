@@ -37,6 +37,7 @@ from auth_service.schemas import (
     InviteView,
     MotdView,
     RegistrationModeView,
+    ReingestResponse,
     ResetPasswordResponse,
     RevokeSessionsResponse,
     RotateKeyResponse,
@@ -278,6 +279,7 @@ async def list_agents(
             created_at=a.created_at,
             last_seen_at=a.last_seen_at,
             revoked_at=a.revoked_at,
+            reingest_requested_at=a.reingest_requested_at,
         )
         for a, email in rows
     ]
@@ -583,6 +585,82 @@ async def cleanup_stale_agents(
         r.revoked_at = now
     await db.commit()
     return StaleCleanupResponse(revoked_count=len(rows), cutoff_date=cutoff.isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Reingest — admin-initiated agent file re-upload via heartbeat signal
+# ---------------------------------------------------------------------------
+
+
+@router.post("/agents/{agent_id}/reingest", response_model=ReingestResponse)
+async def reingest_agent(
+    agent_id: uuid.UUID,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> ReingestResponse:
+    """Stamp ``reingest_requested_at = now()`` on a single agent.
+
+    The agent's next heartbeat response will carry the timestamp, causing
+    it to clear its local upload history and re-send all files. Revoked
+    agents are skipped — they can't heartbeat anyway.
+    """
+    agent = (
+        await db.execute(select(AgentRegistration).where(AgentRegistration.id == agent_id))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise _error(status.HTTP_404_NOT_FOUND, "agent_not_found")
+    if agent.revoked_at is not None:
+        return ReingestResponse(affected_count=0)
+    agent.reingest_requested_at = datetime.now(UTC)
+    await db.commit()
+    return ReingestResponse(affected_count=1)
+
+
+@router.post("/users/{user_id}/reingest", response_model=ReingestResponse)
+async def reingest_user_agents(
+    user_id: int,
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> ReingestResponse:
+    """Stamp ``reingest_requested_at = now()`` on all active agents for a user."""
+    target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if target is None:
+        raise _error(status.HTTP_404_NOT_FOUND, "user_not_found")
+    rows = (
+        (
+            await db.execute(
+                select(AgentRegistration).where(
+                    AgentRegistration.user_id == user_id,
+                    AgentRegistration.revoked_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    for r in rows:
+        r.reingest_requested_at = now
+    await db.commit()
+    return ReingestResponse(affected_count=len(rows))
+
+
+@router.post("/agents/reingest-all", response_model=ReingestResponse)
+async def reingest_all_agents(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> ReingestResponse:
+    """Stamp ``reingest_requested_at = now()`` on all active agents globally."""
+    rows = (
+        (await db.execute(select(AgentRegistration).where(AgentRegistration.revoked_at.is_(None))))
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    for r in rows:
+        r.reingest_requested_at = now
+    await db.commit()
+    return ReingestResponse(affected_count=len(rows))
 
 
 # ---------------------------------------------------------------------------
