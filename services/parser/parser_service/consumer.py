@@ -332,8 +332,12 @@ class ParserConsumer:
             except Exception:  # noqa: BLE001
                 _log.debug("deck-to-match link failed sha=%s", sha256)
 
+            # Capture ORM attributes before leaving the session scope —
+            # accessing them after close raises DetachedInstanceError.
+            match_id_str = str(match.id)
+
         out: MatchParsedPayload = {
-            "match_id": str(match.id),
+            "match_id": match_id_str,
             "user_id": str(user_id),
             "game_count": parsed.game_count,
             "parsed_at": datetime.now(UTC).isoformat(),
@@ -341,11 +345,11 @@ class ParserConsumer:
         try:
             await self._publisher.publish(MATCH_PARSED, dict(out))
         except Exception:  # noqa: BLE001 — best-effort
-            _log.exception("match.parsed publish failed match_id=%s", match.id)
+            _log.exception("match.parsed publish failed match_id=%s", match_id_str)
 
         _log.info(
             "match parsed match_id=%s sha=%s user_id=%s games=%s",
-            match.id,
+            match_id_str,
             sha256,
             user_id,
             parsed.game_count,
