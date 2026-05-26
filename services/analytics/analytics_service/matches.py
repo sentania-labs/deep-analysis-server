@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from analytics_service.db import get_session
-from analytics_service.deps import AuthenticatedUser, require_user
+from analytics_service.deps import AuthenticatedUser, require_admin, require_user
 
 router = APIRouter(prefix="/analytics/matches", tags=["matches"])
 
@@ -56,6 +56,7 @@ class MatchDetail(BaseModel):
     hero_player_name: str | None = None
     played_at: datetime | None = None
     games: list[GameDetail] = Field(default_factory=list)
+    review_status: str | None = None
 
 
 class FormatUpdate(BaseModel):
@@ -74,7 +75,7 @@ async def get_match(
                 """
                 SELECT id, format, format_source, players,
                        COALESCE(played_at, parsed_at) AS played_at,
-                       hero_player_name
+                       hero_player_name, review_status
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
                   AND review_status IS NULL
@@ -88,7 +89,7 @@ async def get_match(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "match_not_found"},
         )
-    row_id, fmt, fmt_source, players, played_at, hero_name = match_row
+    row_id, fmt, fmt_source, players, played_at, hero_name, review_st = match_row
     game_rows = (
         await db.execute(
             text(
@@ -122,6 +123,71 @@ async def get_match(
         hero_player_name=hero_name,
         played_at=played_at,
         games=games,
+        review_status=review_st,
+    )
+
+
+@router.get("/admin/{match_id}", response_model=MatchDetail)
+async def get_match_admin(
+    match_id: uuid.UUID,
+    user: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetail:
+    """Admin match detail — no user_id or review_status filter."""
+    match_row = (
+        await db.execute(
+            text(
+                """
+                SELECT id, format, format_source, players,
+                       COALESCE(played_at, parsed_at) AS played_at,
+                       hero_player_name, review_status
+                FROM parser.matches
+                WHERE id = :match_id
+                """
+            ),
+            {"match_id": match_id},
+        )
+    ).one_or_none()
+    if match_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "match_not_found"},
+        )
+    row_id, fmt, fmt_source, players, played_at, hero_name, review_st = match_row
+    game_rows = (
+        await db.execute(
+            text(
+                """
+                SELECT g.id, g.game_number, g.winner,
+                       (SELECT MAX(s.turn_number)
+                          FROM parser.game_states s
+                         WHERE s.game_id = g.id) AS turns
+                FROM parser.games g
+                WHERE g.match_id = :match_id
+                ORDER BY g.game_number
+                """
+            ),
+            {"match_id": row_id},
+        )
+    ).all()
+    games = [
+        GameDetail(
+            game_number=int(game_number),
+            winner=winner,
+            turns=int(turns) if turns is not None else None,
+        )
+        for (_game_id, game_number, winner, turns) in game_rows
+    ]
+    raw_players: list[Any] = list(players or [])
+    return MatchDetail(
+        match_id=str(row_id),
+        format=fmt,
+        format_source=fmt_source,
+        players=[str(p) for p in raw_players],
+        hero_player_name=hero_name,
+        played_at=played_at,
+        games=games,
+        review_status=review_st,
     )
 
 

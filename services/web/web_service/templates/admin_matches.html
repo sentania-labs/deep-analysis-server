@@ -133,7 +133,7 @@
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ m.game_count }}</td>
                     <td class="px-4 py-2.5 text-sm">
                         {% if m.played_at %}
-                            <a href="/matches/{{ m.match_id }}" class="text-accent hover:text-accent-hover font-mono text-xs">{{ m.played_at.strftime("%Y-%m-%d %H:%M") }}</a>
+                            <a href="/admin/matches/{{ m.match_id }}" class="text-accent hover:text-accent-hover font-mono text-xs">{{ m.played_at.strftime("%Y-%m-%d %H:%M") }}</a>
                         {% else %}
                             —
                         {% endif %}
