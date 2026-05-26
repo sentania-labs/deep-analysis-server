@@ -90,6 +90,18 @@ for name, svc in compose.get("services", {}).items():
         del svc["build"]
         svc["image"] = f"{IMAGES[name]}:{tag}"
 
+# Inject DEPLOY_TAG into the gateway service's environment so that
+# `compose up -d` sees a config change and recreates the container,
+# picking up the updated Caddyfile volume mount. Without this, the
+# gateway image (caddy:2-alpine) never changes and Compose skips it.
+gw = compose.get("services", {}).get("gateway")
+if gw is not None:
+    env = gw.setdefault("environment", {})
+    if isinstance(env, list):
+        env.append(f"DEPLOY_TAG={tag}")
+    else:
+        env["DEPLOY_TAG"] = tag
+
 with open(dst, "w") as f:
     yaml.safe_dump(compose, f, sort_keys=False)
 PY
