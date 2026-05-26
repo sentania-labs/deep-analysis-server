@@ -300,3 +300,44 @@ class WikiImportResult(BaseModel):
     imported: int = 0
     skipped: int = 0
     errors: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Admin match schemas
+# ---------------------------------------------------------------------------
+
+_ADMIN_MATCHES_DEFAULT_PER_PAGE = 20
+
+
+class AdminMatchItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    match_id: str
+    user_id: int
+    user_email: str | None = None
+    format_: str | None = Field(default=None, alias="format")
+    players: list[str] = Field(default_factory=list)
+    match_result: str | None = None
+    winner: str | None = None
+    game_count: int = 0
+    played_at: datetime | None = None
+    # True only when both players have equal nonzero game-win counts —
+    # mirrors analytics.list_matches / _classify_match. A null winner
+    # with no resolved game winners is "incomplete", not a draw.
+    is_draw: bool = False
+    # Holding-pen state — see alembic 025. ``None`` is normal /
+    # user-visible, ``'pending_review'`` is awaiting an admin verdict,
+    # ``'rejected'`` is admin-discarded. Admin endpoints surface all
+    # three; user-facing endpoints only return None rows.
+    review_status: str | None = None
+
+
+class AdminMatchListResponse(BaseModel):
+    matches: list[AdminMatchItem] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    per_page: int = _ADMIN_MATCHES_DEFAULT_PER_PAGE
+
+
+class MatchReviewRequest(BaseModel):
+    review_status: str | None = None

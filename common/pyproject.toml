@@ -33,3 +33,4 @@ bypass-selection = true
 "format_inference.py" = "common/format_inference.py"
 "cache.py" = "common/cache.py"
 "health.py" = "common/health.py"
+"background_loop.py" = "common/background_loop.py"
