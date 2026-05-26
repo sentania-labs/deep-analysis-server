@@ -2,12 +2,12 @@
 
 When ``session.commit()`` fails after writing MatchArchetype rows, the
 consumer must call ``session.rollback()`` so the session is not left in
-a dirty/poisoned state.  Without the rollback, the subsequent
-``_materialize_card_game_stats`` call inherits the broken transaction
-and cascades the failure.
+a dirty/poisoned state.  Without the rollback, subsequent operations
+(deck linking, etc.) inherit the broken transaction and cascade the
+failure.
 
 This is a unit test — no database needed.  The session is fully mocked
-to verify the rollback→materialize sequence.
+to verify the rollback sequence.
 """
 
 from __future__ import annotations
@@ -48,8 +48,7 @@ def _write_raw(raw_root: Path, sha: str) -> None:
 
 
 def _make_parsed() -> ParsedMatch:
-    """A minimal conclusive parse with game events (needed for
-    card_game_stats materialization to have something to work with)."""
+    """A minimal conclusive parse with game events."""
     return ParsedMatch(
         raw_match_id="rollback-test-uuid",
         players=["hero", "villain"],
@@ -92,7 +91,7 @@ def _make_parsed() -> ParsedMatch:
 @pytest.mark.asyncio
 async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> None:
     """When session.commit() fails during archetype classification, the
-    consumer must rollback before proceeding to card_game_stats."""
+    consumer must rollback before proceeding to deck linking."""
 
     sha = "ab" * 32
     _write_raw(tmp_path, sha)
@@ -110,7 +109,7 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
     mock_session = AsyncMock()
 
     # commit() should fail on the first call (archetype block) but
-    # succeed on subsequent calls (card_game_stats and later).
+    # succeed on subsequent calls (deck linking and later).
     commit_call_count = 0
 
     async def _commit_side_effect() -> None:
@@ -171,13 +170,9 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
             ),
         ),
         patch(
-            "parser_service.consumer._materialize_card_game_stats",
-            new_callable=AsyncMock,
-        ) as mock_materialize,
-        patch(
             "parser_service.consumer.link_deck_to_match",
             new_callable=AsyncMock,
-        ),
+        ) as mock_link_deck,
     ):
         result = await consumer.handle_event(sha, user_id=1)
 
@@ -185,9 +180,9 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
     assert result is not None
 
     # The archetype commit failed, so rollback MUST have been called
-    # before _materialize_card_game_stats runs.
+    # before deck linking runs.
     mock_session.rollback.assert_awaited_once()
 
-    # card_game_stats materialization must still have been attempted
+    # Deck linking must still have been attempted
     # (the session was recovered via rollback).
-    mock_materialize.assert_awaited_once()
+    mock_link_deck.assert_awaited_once()

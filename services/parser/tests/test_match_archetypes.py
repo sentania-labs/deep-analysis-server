@@ -1,8 +1,9 @@
-"""Tests for match_archetypes and card_game_stats logic (F5/F6).
+"""Tests for match_archetypes and card game stats aggregation logic (F5/F6).
 
 Tests the helper functions used by the consumer to classify both
-sides and materialize card game stats. These are unit tests that
-exercise pure functions and logic without a live database.
+sides. Card game stats materialization has moved to the analytics
+service (analytics_service.card_materializer). The aggregation logic
+unit tests remain here since the algorithm is the same.
 """
 
 from __future__ import annotations
@@ -226,8 +227,9 @@ class TestGetOpponentName:
 
 class TestCardGameStatsAggregation:
     """Test the per-game per-card event aggregation logic used in
-    _materialize_card_game_stats. Since the actual function requires
-    a DB session, we test the core aggregation algorithm here."""
+    card_game_stats materialization. The actual function now lives in
+    the analytics service (card_materializer.py); we test the core
+    aggregation algorithm here since the logic is the same."""
 
     def test_seen_cast_played_counts(self) -> None:
         """Counts of seen/cast/played are correct from events."""
@@ -288,10 +290,10 @@ class TestCardGameStatsAggregation:
     def test_first_cast_turn_minimum_across_casts(self) -> None:
         """first_cast_turn is the minimum turn_number across cast events.
 
-        Mirrors the per-(card, player) reduction in
-        _materialize_card_game_stats: only ``cast`` events contribute; the
-        running min is updated whenever a lower turn appears (the parser
-        does not guarantee event ordering by turn).
+        Mirrors the per-(card, player) reduction in the card_game_stats
+        materializer: only ``cast`` events contribute; the running min
+        is updated whenever a lower turn appears (the parser does not
+        guarantee event ordering by turn).
         """
         events = [
             GameEvent(turn_number=5, verb="cast", card_name="Bolt", player="alice"),
