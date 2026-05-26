@@ -102,6 +102,7 @@ class ParsedMatch(BaseModel):
     players: list[str] = Field(default_factory=list)
     match_result: str | None = None  # "2-0", "2-1", etc.
     winner: str | None = None
+    match_tied: bool = False
     games: list[ParsedGame] = Field(default_factory=list)
     played_at: datetime | None = None
 

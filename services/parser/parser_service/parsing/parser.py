@@ -254,6 +254,7 @@ class MTGODatStrategy(LogFormatStrategy):
 
         match_winner, match_score, match_tied = self._extract_match_result(text, seen_order)
         match.match_result = match_score
+        match.match_tied = match_tied
         match.winner = None if match_tied else match_winner
 
         match.games = self._parse_games(text, seen_order)

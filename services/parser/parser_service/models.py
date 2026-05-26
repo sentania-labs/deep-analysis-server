@@ -77,6 +77,10 @@ class Match(Base):
     parsed_with_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     archetype_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     hero_player_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True when MTGO reports "Match Tied" — an intentional draw.
+    # Distinguishes real draws from partial parses where no game
+    # winners have been resolved yet (both show 0-0 game wins).
+    match_tied: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # Holding-pen state for inconclusive parses. NULL = normal,
     # user-visible. ``'pending_review'`` = parse came in without a
     # match winner or any per-game winner; hidden from users and
