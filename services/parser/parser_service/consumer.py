@@ -194,6 +194,7 @@ class ParserConsumer:
             return parsed
 
         review_status: str | None = None
+        review_reason: str | None = None
         if _is_partial_parse(parsed):
             # Games observed but no resolved winners anywhere — could
             # be an in-progress MTGO snapshot the agent caught during
@@ -210,6 +211,7 @@ class ParserConsumer:
                 parsed.winner,
             )
             review_status = "pending_review"
+            review_reason = _build_review_reason(parsed)
 
         # Resolve the hero player name from auth.users.mtgo_usernames.
         hero_player_name = await self._resolve_hero(user_id, parsed.players)
@@ -223,6 +225,7 @@ class ParserConsumer:
                     user_id,
                     hero_player_name=hero_player_name,
                     review_status=review_status,
+                    review_reason=review_reason,
                 )
             except Exception:
                 _log.exception("persist failed sha=%s user_id=%s", sha256, user_id)
@@ -469,6 +472,27 @@ def _is_partial_parse(parsed: ParsedMatch) -> bool:
     if parsed.winner:
         return False
     return not any(g.winner for g in parsed.games)
+
+
+def _build_review_reason(parsed: ParsedMatch) -> str:
+    """Build a concise, human-readable reason for why a parse is partial.
+
+    Called only when ``_is_partial_parse(parsed)`` is True -- i.e., games
+    exist but no match-level or per-game winner was resolved.
+    """
+    game_count = len(parsed.games)
+    games_with_winners = sum(1 for g in parsed.games if g.winner)
+    plural = "s" if game_count != 1 else ""
+
+    if games_with_winners == 0:
+        return f"No game winners resolved ({game_count} game{plural} observed)"
+
+    # Safety net -- theoretically unreachable when _is_partial_parse is
+    # True (it requires *no* game winners).
+    return (
+        f"Partial: {games_with_winners} of {game_count} "
+        f"game{plural} have winners"
+    )
 
 
 def _collect_cards_by_side(

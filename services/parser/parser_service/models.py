@@ -84,6 +84,7 @@ class Match(Base):
     # ``'rejected'`` = admin discarded; permanently hidden. The DB
     # CHECK constraint (alembic 025) enforces the allowed values.
     review_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     deck_composition_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("parser.deck_compositions.id", ondelete="SET NULL"),

@@ -129,6 +129,7 @@ async def _insert_new_match(
     raw_match_id: str | None,
     hero_player_name: str | None,
     review_status: str | None,
+    review_reason: str | None,
     now: datetime,
 ) -> uuid.UUID:
     """Insert a fresh ``matches`` row and return its id."""
@@ -148,6 +149,7 @@ async def _insert_new_match(
         parsed_with_version=PARSER_VERSION,
         hero_player_name=hero_player_name,
         review_status=review_status,
+        review_reason=review_reason,
     )
     session.add(match)
     # Flush surfaces unique-violation collisions to the caller without
@@ -165,6 +167,7 @@ async def _update_match_row(
     parsed: ParsedMatch,
     hero_player_name: str | None,
     review_status: str | None,
+    review_reason: str | None,
     existing_review_status: str | None,
     now: datetime,
     preserve_manual_format: bool,
@@ -202,8 +205,10 @@ async def _update_match_row(
     if existing_review_status == "rejected":
         # Preserve admin's rejection — a later snapshot must not undo it.
         values["review_status"] = "rejected"
+        # Keep the original review_reason on rejected rows.
     else:
         values["review_status"] = review_status
+        values["review_reason"] = review_reason
     if not preserve_manual_format:
         values["format"] = parsed.format
         values["format_source"] = None
@@ -217,6 +222,7 @@ async def persist_match(
     user_id: int,
     hero_player_name: str | None = None,
     review_status: str | None = None,
+    review_reason: str | None = None,
 ) -> Match:
     """Insert or update a parsed match (plus games and per-turn states).
 
@@ -307,6 +313,7 @@ async def persist_match(
             parsed=parsed,
             hero_player_name=hero_player_name,
             review_status=review_status,
+            review_reason=review_reason,
             existing_review_status=existing.review_status,
             now=now,
             preserve_manual_format=existing.format_source == "manual",
@@ -321,6 +328,7 @@ async def persist_match(
                 raw_match_id=raw_match_id,
                 hero_player_name=hero_player_name,
                 review_status=review_status,
+                review_reason=review_reason,
                 now=now,
             )
         except IntegrityError:
@@ -341,6 +349,7 @@ async def persist_match(
                 parsed=parsed,
                 hero_player_name=hero_player_name,
                 review_status=review_status,
+                review_reason=review_reason,
                 existing_review_status=existing.review_status,
                 now=now,
                 preserve_manual_format=existing.format_source == "manual",
