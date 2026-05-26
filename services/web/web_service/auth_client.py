@@ -1148,3 +1148,142 @@ async def admin_update_tunables(
     raise AuthClientError(
         f"auth PATCH /admin/settings/tunables returned {resp.status_code}: {resp.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MOTD (Message of the Day) — site-wide banner
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MotdResult:
+    """MOTD state returned by the auth service."""
+
+    active: bool
+    message: str | None = None
+    severity: str | None = None
+    expires_at: datetime | None = None
+    updated_at: datetime | None = None
+    updated_by_user_id: int | None = None
+
+
+async def public_get_motd(base_url: str) -> MotdResult:
+    """Public read of the active MOTD."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/auth/motd")
+    except httpx.HTTPError:
+        return MotdResult(active=False)
+    if resp.status_code != 200:
+        return MotdResult(active=False)
+    try:
+        data = resp.json()
+    except ValueError:
+        return MotdResult(active=False)
+    if not data.get("active"):
+        return MotdResult(active=False)
+    return MotdResult(
+        active=True,
+        message=data.get("message"),
+        severity=data.get("severity", "info"),
+        expires_at=_parse_dt(data.get("expires_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        updated_by_user_id=(
+            int(data["updated_by_user_id"]) if data.get("updated_by_user_id") is not None else None
+        ),
+    )
+
+
+async def admin_get_motd(base_url: str, token: str) -> MotdResult:
+    """Admin-only: read the current MOTD via the admin endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/admin/settings/motd",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth GET /admin/settings/motd transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth GET /admin/settings/motd returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AuthClientError(
+            f"auth GET /admin/settings/motd returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return MotdResult(
+        active=bool(data.get("active")),
+        message=data.get("message"),
+        severity=data.get("severity"),
+        expires_at=_parse_dt(data.get("expires_at")),
+        updated_at=_parse_dt(data.get("updated_at")),
+        updated_by_user_id=(
+            int(data["updated_by_user_id"]) if data.get("updated_by_user_id") is not None else None
+        ),
+    )
+
+
+async def admin_set_motd(
+    base_url: str,
+    token: str,
+    *,
+    message: str,
+    severity: str,
+    expires_at: str,
+) -> tuple[MotdResult | None, str | None]:
+    """Admin-only: set or replace the active MOTD."""
+    body_payload: dict[str, str] = {
+        "message": message,
+        "severity": severity,
+        "expires_at": expires_at,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{base_url}/admin/settings/motd",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body_payload,
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth PUT /admin/settings/motd transport error: {exc}") from exc
+    if resp.status_code == 200:
+        data = resp.json()
+        return MotdResult(
+            active=bool(data.get("active")),
+            message=data.get("message"),
+            severity=data.get("severity"),
+            expires_at=_parse_dt(data.get("expires_at")),
+            updated_at=_parse_dt(data.get("updated_at")),
+            updated_by_user_id=(
+                int(data["updated_by_user_id"])
+                if data.get("updated_by_user_id") is not None
+                else None
+            ),
+        ), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth PUT /admin/settings/motd returned {resp.status_code}")
+    if resp.status_code in (400, 422):
+        return None, "validation_error"
+    raise AuthClientError(f"auth PUT /admin/settings/motd returned {resp.status_code}: {resp.text}")
+
+
+async def admin_clear_motd(
+    base_url: str,
+    token: str,
+) -> tuple[bool, str | None]:
+    """Admin-only: clear the active MOTD."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/admin/settings/motd",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth DELETE /admin/settings/motd transport error: {exc}") from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth DELETE /admin/settings/motd returned {resp.status_code}")
+    raise AuthClientError(
+        f"auth DELETE /admin/settings/motd returned {resp.status_code}: {resp.text}"
+    )

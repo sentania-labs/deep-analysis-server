@@ -283,3 +283,27 @@ class UpdateTunablesRequest(BaseModel):
         ):
             raise ValueError("at_least_one_field_required")
         return self
+
+
+# ---------------------------------------------------------------------------
+# MOTD (Message of the Day) — site-wide banner
+# ---------------------------------------------------------------------------
+
+
+class MotdView(BaseModel):
+    """Current state of the MOTD banner."""
+
+    active: bool
+    message: str | None = None
+    severity: str | None = None
+    expires_at: datetime | None = None
+    updated_at: datetime | None = None
+    updated_by_user_id: int | None = None
+
+
+class SetMotdRequest(BaseModel):
+    """Admin request to set or replace the active MOTD."""
+
+    message: str = Field(min_length=1, max_length=1000)
+    severity: Literal["info", "warning"] = "info"
+    expires_at: str = Field(min_length=1, max_length=64)

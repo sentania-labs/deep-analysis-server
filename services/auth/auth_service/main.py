@@ -729,6 +729,15 @@ async def public_registration_mode(
     return {"mode": await _read_registration_mode(db)}
 
 
+@app.get("/auth/motd")
+async def public_motd(
+    db: AsyncSession = Depends(get_session),
+) -> dict[str, object]:
+    """Public read of the active MOTD."""
+    motd = await admin.read_motd_public(db)
+    return motd.model_dump()
+
+
 @app.post(
     "/auth/register",
     response_model=RegisterResponse,

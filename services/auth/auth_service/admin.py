@@ -35,10 +35,12 @@ from auth_service.schemas import (
     CreateUserRequest,
     InviteListView,
     InviteView,
+    MotdView,
     RegistrationModeView,
     ResetPasswordResponse,
     RevokeSessionsResponse,
     RotateKeyResponse,
+    SetMotdRequest,
     SetRegistrationModeRequest,
     StaleCleanupResponse,
     TunablesView,
@@ -715,3 +717,131 @@ async def update_tunables(
 
     await db.commit()
     return await _read_all_tunables(db)
+
+
+# ---------------------------------------------------------------------------
+# MOTD (Message of the Day) — admin-configurable site banner
+# ---------------------------------------------------------------------------
+
+_MOTD_MESSAGE_KEY = "motd:message"
+_MOTD_SEVERITY_KEY = "motd:severity"
+_MOTD_EXPIRES_AT_KEY = "motd:expires_at"
+
+
+async def _read_motd(db: AsyncSession) -> MotdView:
+    """Read the current MOTD from server_settings."""
+    rows = (
+        (
+            await db.execute(
+                select(ServerSetting).where(
+                    ServerSetting.key.in_(
+                        [_MOTD_MESSAGE_KEY, _MOTD_SEVERITY_KEY, _MOTD_EXPIRES_AT_KEY]
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    by_key = {r.key: r for r in rows}
+    msg_row = by_key.get(_MOTD_MESSAGE_KEY)
+    sev_row = by_key.get(_MOTD_SEVERITY_KEY)
+    exp_row = by_key.get(_MOTD_EXPIRES_AT_KEY)
+
+    if msg_row is None or not msg_row.value:
+        return MotdView(active=False)
+
+    message = str(msg_row.value) if isinstance(msg_row.value, str) else None
+    if not message:
+        return MotdView(active=False)
+
+    severity = str(sev_row.value) if sev_row and isinstance(sev_row.value, str) else "info"
+    if severity not in ("info", "warning"):
+        severity = "info"
+
+    expires_at_str = str(exp_row.value) if exp_row and isinstance(exp_row.value, str) else None
+    expires_at: datetime | None = None
+    if expires_at_str:
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+        except ValueError:
+            expires_at = None
+
+    if expires_at is not None and expires_at <= datetime.now(UTC):
+        return MotdView(active=False)
+
+    return MotdView(
+        active=True,
+        message=message,
+        severity=severity,
+        expires_at=expires_at,
+        updated_at=msg_row.updated_at,
+        updated_by_user_id=msg_row.updated_by_user_id,
+    )
+
+
+async def read_motd_public(db: AsyncSession) -> MotdView:
+    """Public accessor for the MOTD."""
+    return await _read_motd(db)
+
+
+@router.get("/settings/motd", response_model=MotdView)
+async def get_motd(
+    _admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> MotdView:
+    """Read the current MOTD. Any admin may read."""
+    return await _read_motd(db)
+
+
+@router.put("/settings/motd", response_model=MotdView)
+async def set_motd(
+    body: SetMotdRequest,
+    admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> MotdView:
+    """Set or replace the active MOTD. Any admin may write."""
+    now = datetime.now(UTC)
+    updates: dict[str, str] = {
+        _MOTD_MESSAGE_KEY: body.message,
+        _MOTD_SEVERITY_KEY: body.severity,
+        _MOTD_EXPIRES_AT_KEY: body.expires_at,
+    }
+    for key, value in updates.items():
+        row = (
+            await db.execute(select(ServerSetting).where(ServerSetting.key == key))
+        ).scalar_one_or_none()
+        if row is None:
+            row = ServerSetting(
+                key=key,
+                value=value,
+                updated_at=now,
+                updated_by_user_id=admin.user_id,
+            )
+            db.add(row)
+        else:
+            row.value = value
+            row.updated_at = now
+            row.updated_by_user_id = admin.user_id
+
+    await db.commit()
+    return await _read_motd(db)
+
+
+@router.delete("/settings/motd", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_motd(
+    admin: AuthenticatedUser = Depends(require_admin),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """Clear the active MOTD. Any admin may clear."""
+    for key in (_MOTD_MESSAGE_KEY, _MOTD_SEVERITY_KEY, _MOTD_EXPIRES_AT_KEY):
+        row = (
+            await db.execute(select(ServerSetting).where(ServerSetting.key == key))
+        ).scalar_one_or_none()
+        if row is not None:
+            await db.delete(row)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
