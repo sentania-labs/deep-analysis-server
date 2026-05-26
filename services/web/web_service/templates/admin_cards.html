@@ -53,6 +53,7 @@
         <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mb-3">Card mirror status unavailable.</p>
     {% endif %}
     <form method="post" action="/admin/cards/sync" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">Sync Now</button>
     </form>
 </div>

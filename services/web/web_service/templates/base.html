@@ -124,6 +124,7 @@
                         <li role="none" class="border-t dark:border-border border-border-light my-1"></li>
                         <li role="none">
                             <form method="post" action="/logout" class="m-0">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" role="menuitem" class="w-full text-left px-3.5 py-2 text-[13px] dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-2 bg-transparent border-none cursor-pointer font-[inherit]">Log out</button>
                             </form>
                         </li>

@@ -152,23 +152,27 @@
                         <div class="flex gap-1 items-center">
                         {% if m.review_status == "pending_review" %}
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
                                 <button type="submit" class="border border-success/40 text-success hover:bg-success/10 rounded px-2 py-0.5 text-xs transition-colors" title="Accept this match — back to user-visible.">Accept</button>
                             </form>
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="rejected">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
                                 <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Discard permanently.">Reject</button>
                             </form>
                         {% elif m.review_status == "rejected" %}
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
                                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Restore — back to user-visible.">Restore</button>
                             </form>
                         {% else %}
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="pending_review">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
                                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Flag this match for review — hidden from users.">Flag</button>

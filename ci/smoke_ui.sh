@@ -73,6 +73,22 @@ jar_has_live_session() {
     ' "$jar" | grep -q live
 }
 
+# Fetch a page and extract the CSRF token + cookie for a subsequent POST.
+# Sets: _CSRF_TOKEN
+get_csrf() {
+    local page_url="$1"
+    local jar="${2:-$COOKIE_JAR}"
+    local body
+    body=$(curl -s -c "$jar" -b "$jar" "$BASE_URL$page_url")
+    _CSRF_TOKEN=$(echo "$body" | grep -o 'name="csrf_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//')
+}
+
+# Extract the CSRF token from a cookie jar file (reads da_csrf cookie value).
+csrf_from_jar() {
+    local jar="$1"
+    awk '$6 == "da_csrf" { print $7 }' "$jar" | tail -1
+}
+
 if [ -z "${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL:-}" ] || \
    [ -z "${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD:-}" ]; then
     echo "FAIL: DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL and DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD must be set" >&2
@@ -105,11 +121,15 @@ check_contains "GET /login contains <form" "<form" "$login_html"
 echo ""
 echo "--- 2. POST /login (valid creds) ---"
 
+get_csrf /login "$COOKIE_JAR"
+
 post_head=$(curl -s -D - -o /dev/null \
+    -b "$COOKIE_JAR" \
     -c "$COOKIE_JAR" \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
-    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}")
+    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
 post_status=$(echo "$post_head" | head -n1 | awk '{print $2}')
 # 303 See Other — spec-preferred for POST→GET redirect after form submit.
 check "POST /login → 303" "303" "$post_status"
@@ -159,13 +179,16 @@ echo "--- 5. POST /settings/password (rotate) ---"
 
 NEW_PASSWORD="ui-smoke-${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
 
+get_csrf /settings/password "$COOKIE_JAR"
+
 pw_head=$(curl -s -D - -o /dev/null \
     -b "$COOKIE_JAR" \
     -c "$PW_COOKIE" \
     -X POST "$BASE_URL/settings/password" \
     --data-urlencode "current_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
     --data-urlencode "new_password=${NEW_PASSWORD}" \
-    --data-urlencode "confirm_password=${NEW_PASSWORD}")
+    --data-urlencode "confirm_password=${NEW_PASSWORD}" \
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
 pw_status=$(echo "$pw_head" | head -n1 | awk '{print $2}')
 check "POST /settings/password → 303" "303" "$pw_status"
 # Location may be absolute (https://host/dashboard) or relative (/dashboard).
@@ -182,13 +205,16 @@ else
 fi
 
 # Restore the bootstrap password for any follow-up smoke runs.
+get_csrf /settings/password "$PW_COOKIE"
+
 restore_status=$(curl -s -o /dev/null -w "%{http_code}" \
     -b "$PW_COOKIE" \
     -c "$PW_COOKIE" \
     -X POST "$BASE_URL/settings/password" \
     --data-urlencode "current_password=${NEW_PASSWORD}" \
     --data-urlencode "new_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
-    --data-urlencode "confirm_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}")
+    --data-urlencode "confirm_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
 check "Restore bootstrap password → 303" "303" "$restore_status"
 
 # --------------------------------------------------------------------------
@@ -199,10 +225,15 @@ echo "--- 6. /profile* admin bounce ---"
 
 # Step 5's password rotation revoked the cookie in $COOKIE_JAR. Log in fresh
 # so the bounce checks are independent of the rotation flow.
-curl -s -o /dev/null -c "$PROFILE_COOKIE" \
+get_csrf /login "$PROFILE_COOKIE"
+
+curl -s -o /dev/null \
+    -b "$PROFILE_COOKIE" \
+    -c "$PROFILE_COOKIE" \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
-    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
+    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}"
 
 # Each /profile* GET as an admin redirects (302) to /admin/users.
 for path in "/profile" "/profile/edit" "/profile/agents"; do
@@ -330,8 +361,10 @@ for u in d.get("users", []):
             | head -n1 \
             | sed -E 's|/admin/agents/([0-9a-f-]+)/revoke|\1|' || true)
         if [ -n "$AGENT_ID" ]; then
+            _CT=$(csrf_from_jar "$PROFILE_COOKIE")
             revoke_head=$(curl -s -D - -o /dev/null -b "$PROFILE_COOKIE" \
-                -X POST "$BASE_URL/admin/agents/${AGENT_ID}/revoke")
+                -X POST "$BASE_URL/admin/agents/${AGENT_ID}/revoke" \
+                --data-urlencode "csrf_token=${_CT}")
             revoke_status=$(echo "$revoke_head" | head -n1 | awk '{print $2}')
             check "POST /admin/agents/{id}/revoke → 303" "303" "$revoke_status"
             check_contains "Revoke redirects back to /admin/agents" \
@@ -371,9 +404,11 @@ for u in d.get("users", []):
         check_contains "/admin/settings redirect targets /login" "/login" "$noauth_settings"
 
         # Toggle to open and back to invite_only — full round-trip.
+        _CT=$(csrf_from_jar "$PROFILE_COOKIE")
         toggle_open_head=$(curl -s -D - -o /dev/null -b "$PROFILE_COOKIE" \
             -X POST "$BASE_URL/admin/settings/registration-mode" \
-            --data-urlencode "mode=open")
+            --data-urlencode "mode=open" \
+            --data-urlencode "csrf_token=${_CT}")
         toggle_open_status=$(echo "$toggle_open_head" | head -n1 | awk '{print $2}')
         check "POST /admin/settings/registration-mode (mode=open) → 303" "303" "$toggle_open_status"
 
@@ -382,7 +417,8 @@ for u in d.get("users", []):
 
         toggle_back_status=$(curl -s -o /dev/null -w "%{http_code}" -b "$PROFILE_COOKIE" \
             -X POST "$BASE_URL/admin/settings/registration-mode" \
-            --data-urlencode "mode=invite_only")
+            --data-urlencode "mode=invite_only" \
+            --data-urlencode "csrf_token=${_CT}")
         check "POST /admin/settings/registration-mode (mode=invite_only) → 303" "303" "$toggle_back_status"
 
         # ------------------------------------------------------------------
@@ -403,9 +439,11 @@ for u in d.get("users", []):
         check_contains "/admin/invites redirect targets /login" "/login" "$noauth_invites"
 
         # Create an invite — response page renders the plaintext token.
+        _CT=$(csrf_from_jar "$PROFILE_COOKIE")
         create_invite_out=$(curl -s -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
             -X POST "$BASE_URL/admin/invites" \
-            --data-urlencode "expires_in_hours=168")
+            --data-urlencode "expires_in_hours=168" \
+            --data-urlencode "csrf_token=${_CT}")
         create_invite_status=$(echo "$create_invite_out" | tail -n1)
         create_invite_html=$(echo "$create_invite_out" | sed '$d')
         check "POST /admin/invites → 200" "200" "$create_invite_status"
@@ -440,8 +478,10 @@ for u in d.get("users", []):
 
         # Reset-password through the web admin UI — temp password is
         # rendered inline in the response HTML.
+        _CT=$(csrf_from_jar "$PROFILE_COOKIE")
         reset_out=$(curl -s -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" \
-            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/reset-password")
+            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/reset-password" \
+            --data-urlencode "csrf_token=${_CT}")
         reset_status=$(echo "$reset_out" | tail -n1)
         reset_html=$(echo "$reset_out" | sed '$d')
         check "POST /admin/users/{id}/reset-password → 200" "200" "$reset_status"
@@ -453,14 +493,18 @@ for u in d.get("users", []):
             "curl -s -H 'Authorization: Bearer ${ADMIN_JWT}' http://localhost:8000/auth/me" \
             | sed -n 's/.*"user_id":\s*\([0-9]\+\).*/\1/p' || true)
         if [ -n "$admin_user_id" ]; then
+            _CT=$(csrf_from_jar "$PROFILE_COOKIE")
             self_del_status=$(curl -s -o /dev/null -w "%{http_code}" -b "$PROFILE_COOKIE" \
-                -X POST "$BASE_URL/admin/users/${admin_user_id}/delete")
+                -X POST "$BASE_URL/admin/users/${admin_user_id}/delete" \
+                --data-urlencode "csrf_token=${_CT}")
             check "POST /admin/users/{self}/delete → 400" "400" "$self_del_status"
         fi
 
         # Delete through the web admin UI — should redirect back to /admin/users.
+        _CT=$(csrf_from_jar "$PROFILE_COOKIE")
         delete_head=$(curl -s -D - -o /dev/null -b "$PROFILE_COOKIE" \
-            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/delete")
+            -X POST "$BASE_URL/admin/users/${TEST_USER_ID}/delete" \
+            --data-urlencode "csrf_token=${_CT}")
         delete_status=$(echo "$delete_head" | head -n1 | awk '{print $2}')
         check "POST /admin/users/{id}/delete → 303" "303" "$delete_status"
         check_contains "Delete redirects to /admin/users" "/admin/users" "$delete_head"
@@ -487,15 +531,22 @@ echo ""
 echo "--- 8. POST /logout ---"
 
 # First log in fresh so we have a live cookie to logout with.
-curl -s -o /dev/null -c "$LOGOUT_COOKIE" \
+get_csrf /login "$LOGOUT_COOKIE"
+
+curl -s -o /dev/null \
+    -b "$LOGOUT_COOKIE" \
+    -c "$LOGOUT_COOKIE" \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
-    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}"
+    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}"
 
+_CT=$(csrf_from_jar "$LOGOUT_COOKIE")
 logout_head=$(curl -s -D - -o /dev/null \
     -b "$LOGOUT_COOKIE" \
     -c "$LOGOUT_COOKIE" \
-    -X POST "$BASE_URL/logout")
+    -X POST "$BASE_URL/logout" \
+    --data-urlencode "csrf_token=${_CT}")
 logout_status=$(echo "$logout_head" | head -n1 | awk '{print $2}')
 check "POST /logout → 303" "303" "$logout_status"
 # Location may be absolute (https://host/login) or relative (/login).

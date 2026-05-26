@@ -39,12 +39,15 @@
 {# Bulk actions #}
 <div class="flex gap-2 mb-4">
     <form method="post" action="/admin/agents/reparse-all?page={{ page }}&per_page={{ per_page }}" class="inline reparse-all-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">Reparse all matches</button>
     </form>
     <form method="post" action="/admin/agents/cleanup-stale?page={{ page }}&per_page={{ per_page }}" class="inline cleanup-stale-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">Cleanup stale agents</button>
     </form>
     <form method="post" action="/admin/agents/reingest-all?page={{ page }}&per_page={{ per_page }}" class="inline reingest-all-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">Reingest all agents</button>
     </form>
 </div>
@@ -94,12 +97,12 @@
                     <td class="px-4 py-2.5 text-right">
                         <div class="flex gap-1 justify-end flex-wrap">
                         {% if not a.revoked_at %}
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}" class="inline revoke-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button></form>
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/rotate-key?page={{ page }}&per_page={{ per_page }}" class="inline rotate-key-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Rotate Key</button></form>
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reparse?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline reparse-form" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button></form>
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}" class="inline reingest-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/revoke?page={{ page }}&per_page={{ per_page }}" class="inline revoke-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/rotate-key?page={{ page }}&per_page={{ per_page }}" class="inline rotate-key-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Rotate Key</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reparse?page={{ page }}&per_page={{ per_page }}&user_id={{ a.user_id }}" class="inline reparse-form" data-user-email="{{ a.user_email }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/reingest?page={{ page }}&per_page={{ per_page }}" class="inline reingest-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reingest</button></form>
                         {% endif %}
-                            <form method="post" action="/admin/agents/{{ a.agent_id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline delete-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button></form>
+                            <form method="post" action="/admin/agents/{{ a.agent_id }}/delete?page={{ page }}&per_page={{ per_page }}" class="inline delete-form" data-machine-name="{{ a.machine_name }}" data-user-email="{{ a.user_email }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button></form>
                         </div>
                     </td>
                 </tr>

@@ -19,6 +19,7 @@
         Generate a one-time code, then enter it in your Deep Analysis agent to link it to your account.
     </p>
     <form method="post" action="/profile/agents/registration-code">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">Generate Registration Code</button>
     </form>
     {% if registration_code %}
@@ -112,9 +113,11 @@
                         {% if not a.revoked_at %}
                         <div class="flex gap-1 justify-end">
                             <form method="post" action="/profile/agents/{{ a.agent_id }}/revoke" class="inline revoke-form">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
                             </form>
                             <form method="post" action="/profile/agents/{{ a.agent_id }}/reparse" class="inline reparse-form">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button>
                             </form>
                         </div>

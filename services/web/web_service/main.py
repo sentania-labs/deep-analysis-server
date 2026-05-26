@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 from common.logging import configure_logging
 from common.metrics import mount_metrics
 from web_service import analytics_client, auth_client, parser_client
+from web_service import csrf as _csrf_mod
 from web_service.deps import (
     BrowserAuthRedirect,
     BrowserUser,
@@ -85,6 +86,16 @@ def _reset_motd_cache() -> None:
 
 
 @app.middleware("http")
+async def csrf_protection_middleware(request: Request, call_next: Any) -> Response:
+    """CSRF double-submit cookie enforcement.
+
+    Registered as a middleware wrapper so it runs for every request.
+    The actual logic lives in :mod:`web_service.csrf`.
+    """
+    return await _csrf_mod.csrf_middleware(request, call_next)
+
+
+@app.middleware("http")
 async def inject_motd_middleware(request: Request, call_next: Any) -> Response:
     """Fetch the MOTD once per request and stash it on request.state."""
     path = request.url.path
@@ -108,7 +119,7 @@ def _patched_template_response(
     context: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> Response:
-    """Wrapper that injects ``motd`` into every template context."""
+    """Wrapper that injects ``motd`` and ``csrf_token`` into every template context."""
     if isinstance(request_or_name, Request):
         req = request_or_name
         tpl_name = name_or_context
@@ -121,6 +132,10 @@ def _patched_template_response(
         ctx.setdefault("motd", req.state.motd)
     else:
         ctx.setdefault("motd", None)
+    if req is not None and hasattr(req, "state") and hasattr(req.state, "csrf_token"):
+        ctx.setdefault("csrf_token", req.state.csrf_token)
+    else:
+        ctx.setdefault("csrf_token", "")
     return _original_template_response(req, tpl_name, ctx, **kwargs)
 
 

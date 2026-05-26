@@ -31,6 +31,7 @@
 <div class="mb-4 flex gap-2">
     <a class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium no-underline transition-colors" href="/admin/bnr-events/new">New event</a>
     <form method="post" action="/admin/bnr-events/import-wiki" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 text-sm font-medium transition-colors cursor-pointer bg-transparent"
                 onclick="this.disabled=true; this.textContent='Importing...'; this.form.submit();">Import from wiki</button>
     </form>
@@ -67,6 +68,7 @@
                                   action="/admin/bnr-events/{{ evt.id }}/delete"
                                   class="inline"
                                   onsubmit="return confirm('Delete this B&R event?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button>
                             </form>
                         </div>

@@ -32,6 +32,7 @@
     <form method="post"
           action="{% if mode == 'create' %}/admin/archetypes/create{% else %}/admin/archetypes/{{ archetype_id }}/edit{% endif %}"
           class="flex flex-col gap-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="flex flex-col gap-1">
             <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Name</span>
             <input type="text" name="name" value="{{ name }}" required maxlength="200"

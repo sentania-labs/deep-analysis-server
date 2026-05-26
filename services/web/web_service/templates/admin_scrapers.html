@@ -93,6 +93,7 @@
             <div class="flex flex-wrap gap-2 pt-2 border-t dark:border-border border-border-light">
                 {# Toggle enabled #}
                 <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/toggle" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">
                         {% if s.enabled %}Disable{% else %}Enable{% endif %}
                     </button>
@@ -101,6 +102,7 @@
                 {# Run now #}
                 <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/trigger" class="inline"
                       onsubmit="return confirm('Trigger {{ s.scraper_name }} scrape now?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
                         Run Now
                     </button>
@@ -110,6 +112,7 @@
                 {% if s.is_broken %}
                 <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/reset" class="inline"
                       onsubmit="return confirm('Reset health counters for {{ s.scraper_name }}?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="bg-warning text-white hover:bg-yellow-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
                         Reset Health
                     </button>
@@ -125,6 +128,7 @@
 
             {# Interval update form #}
             <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/interval" class="flex items-end gap-2 pt-2 border-t dark:border-border border-border-light">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <label class="flex flex-col gap-1">
                     <span class="text-xs dark:text-txt-tertiary text-txt-secondary-light">Interval (hours)</span>
                     <input type="number" name="interval_hours" value="{{ s.interval_hours|default(24) }}" min="1" max="168" required

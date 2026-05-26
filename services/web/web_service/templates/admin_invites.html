@@ -43,6 +43,7 @@
 {# Create invite form #}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
     <form method="post" action="/admin/invites" class="flex flex-wrap items-end gap-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="flex flex-col gap-1">
             <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Expires in (hours)</span>
             <input type="number" name="expires_in_hours" value="{{ default_hours }}" min="1" max="{{ max_hours }}" required
@@ -100,6 +101,7 @@
                               action="/admin/invites/{{ i.id }}/revoke?page={{ page }}&per_page={{ per_page }}"
                               class="inline"
                               onsubmit="return confirm('Revoke this invite? It will be unusable immediately.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
                         </form>
                     </td>

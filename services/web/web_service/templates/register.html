@@ -24,6 +24,7 @@
             {% endif %}
 
             <form method="post" action="/register" class="flex flex-col gap-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {% if token %}
                     <input type="hidden" name="token" value="{{ token }}">
                 {% endif %}
