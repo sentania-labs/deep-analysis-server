@@ -43,6 +43,27 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      DATA_SOURCE_NAME: "postgresql://deep_analysis:${POSTGRES_PASSWORD}@postgres:5432/deep_analysis?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.67.0
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    depends_on:
+      - redis
+
   # One-shot jobs: apply alembic migrations on `compose up` and exit 0. The
   # deploy wrapper on docker.int rejects `compose exec`, so migrations have
   # to run as part of `compose up`. Ordering is enforced by depends_on with

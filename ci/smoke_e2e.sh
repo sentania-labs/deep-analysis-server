@@ -61,6 +61,12 @@ echo "--- Infrastructure probes ---"
 status=$(http_status "$BASE_URL/metrics")
 check "GET /metrics → 200" "200" "$status"
 
+status=$(http_status "$BASE_URL/postgres/metrics")
+check "GET /postgres/metrics → 200" "200" "$status"
+
+status=$(http_status "$BASE_URL/redis/metrics")
+check "GET /redis/metrics → 200" "200" "$status"
+
 # --------------------------------------------------------------------------
 # 1. Auth gate checks (no credentials)
 # --------------------------------------------------------------------------
