@@ -702,7 +702,7 @@ async def _materialize_card_game_stats(
                     "(match_id, game_id, oracle_id, card_name, is_local, "
                     ' seen, "cast", played, is_postboard, won, quantity, game_number, '
                     " first_cast_turn) "
-                    "VALUES (:match_id, :game_id, :oracle_id::uuid, :card_name, :is_local, "
+                    "VALUES (:match_id, :game_id, CAST(:oracle_id AS uuid), :card_name, :is_local, "
                     " :seen, :cast, :played, :is_postboard, :won, :quantity, :game_number, "
                     " :first_cast_turn) "
                     "ON CONFLICT (game_id, card_name, is_local) DO UPDATE SET "
