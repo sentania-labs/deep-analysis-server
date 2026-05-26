@@ -57,6 +57,7 @@ class MatchDetail(BaseModel):
     played_at: datetime | None = None
     games: list[GameDetail] = Field(default_factory=list)
     review_status: str | None = None
+    review_reason: str | None = None
 
 
 class FormatUpdate(BaseModel):
@@ -75,7 +76,7 @@ async def get_match(
                 """
                 SELECT id, format, format_source, players,
                        COALESCE(played_at, parsed_at) AS played_at,
-                       hero_player_name, review_status
+                       hero_player_name, review_status, review_reason
                 FROM parser.matches
                 WHERE id = :match_id AND user_id = :user_id
                   AND review_status IS NULL
@@ -89,7 +90,7 @@ async def get_match(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "match_not_found"},
         )
-    row_id, fmt, fmt_source, players, played_at, hero_name, review_st = match_row
+    row_id, fmt, fmt_source, players, played_at, hero_name, review_st, review_rsn = match_row
     game_rows = (
         await db.execute(
             text(
@@ -124,6 +125,7 @@ async def get_match(
         played_at=played_at,
         games=games,
         review_status=review_st,
+        review_reason=review_rsn,
     )
 
 
@@ -140,7 +142,7 @@ async def get_match_admin(
                 """
                 SELECT id, format, format_source, players,
                        COALESCE(played_at, parsed_at) AS played_at,
-                       hero_player_name, review_status
+                       hero_player_name, review_status, review_reason
                 FROM parser.matches
                 WHERE id = :match_id
                 """
@@ -153,7 +155,7 @@ async def get_match_admin(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": "match_not_found"},
         )
-    row_id, fmt, fmt_source, players, played_at, hero_name, review_st = match_row
+    row_id, fmt, fmt_source, players, played_at, hero_name, review_st, review_rsn = match_row
     game_rows = (
         await db.execute(
             text(
@@ -188,6 +190,7 @@ async def get_match_admin(
         played_at=played_at,
         games=games,
         review_status=review_st,
+        review_reason=review_rsn,
     )
 
 

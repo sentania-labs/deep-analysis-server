@@ -1163,6 +1163,7 @@ async def match_detail_page(
             "match": match,
             "overall_result": overall_result,
             "review_status": match.review_status,
+            "review_reason": match.review_reason,
             "format_options": [
                 "Standard",
                 "Pioneer",
@@ -3487,6 +3488,7 @@ async def admin_match_detail_page(
             "match": match,
             "overall_result": overall_result,
             "review_status": match.review_status,
+            "review_reason": match.review_reason,
             "format_options": _MATCH_FORMAT_OPTIONS,
             "admin_view": True,
         },

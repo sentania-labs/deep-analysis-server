@@ -14,11 +14,17 @@
 {% if review_status %}
 {% if review_status == "rejected" %}
 <div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4">
-    Held for review: {{ review_status | replace('_', ' ') }}
+    <span class="font-medium">Held for review: {{ review_status | replace('_', ' ') }}</span>
+    {% if review_reason %}
+    <span class="dark:text-danger/80 text-danger/80"> &mdash; {{ review_reason }}</span>
+    {% endif %}
 </div>
 {% else %}
 <div class="bg-warning/10 border border-warning/20 text-warning rounded-md p-3 text-sm mb-4">
-    Held for review: {{ review_status | replace('_', ' ') }}
+    <span class="font-medium">Held for review: {{ review_status | replace('_', ' ') }}</span>
+    {% if review_reason %}
+    <span class="dark:text-warning/80 text-warning/80"> &mdash; {{ review_reason }}</span>
+    {% endif %}
 </div>
 {% endif %}
 {% endif %}

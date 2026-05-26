@@ -607,6 +607,7 @@ class MatchDetail:
     hero_player_name: str | None = None
     games: list[GameItem] = field(default_factory=list)
     review_status: str | None = None
+    review_reason: str | None = None
 
 
 def _to_game(payload: dict[str, Any]) -> GameItem:
@@ -631,6 +632,7 @@ def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
         hero_player_name=payload.get("hero_player_name"),
         games=[_to_game(g) for g in (payload.get("games") or [])],
         review_status=payload.get("review_status"),
+        review_reason=payload.get("review_reason"),
     )
 
 
@@ -848,6 +850,7 @@ class AdminMatchItem:
     played_at: datetime | None
     is_draw: bool = False
     review_status: str | None = None
+    review_reason: str | None = None
 
 
 @dataclass
@@ -871,6 +874,7 @@ def _to_admin_match(payload: dict[str, Any]) -> AdminMatchItem:
         played_at=_parse_dt(payload.get("played_at")),
         is_draw=bool(payload.get("is_draw") or False),
         review_status=payload.get("review_status"),
+        review_reason=payload.get("review_reason"),
     )
 
 
