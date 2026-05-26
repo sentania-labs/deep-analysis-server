@@ -209,6 +209,26 @@ async def client(_truncate: None, redis_client: Any) -> AsyncIterator[Any]:
 
     _main.reset_redis()
 
+    from auth_service.rate_limit import (
+        check_agent_register_creds_rate,
+        check_login_rate,
+        check_register_rate,
+        reset_rate_limiter,
+    )
+
+    reset_rate_limiter()
+
+    async def _noop() -> None:
+        pass
+
+    _main.app.dependency_overrides[check_login_rate] = _noop
+    _main.app.dependency_overrides[check_register_rate] = _noop
+    _main.app.dependency_overrides[check_agent_register_creds_rate] = _noop
+
     transport = ASGITransport(app=_main.app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+    _main.app.dependency_overrides.pop(check_login_rate, None)
+    _main.app.dependency_overrides.pop(check_register_rate, None)
+    _main.app.dependency_overrides.pop(check_agent_register_creds_rate, None)
+    reset_rate_limiter()

@@ -9,6 +9,31 @@ from auth_service.models import User
 from auth_service.passwords import hash_password
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
+@pytest.fixture(autouse=True)
+def _enable_rate_limiting() -> Any:
+    """Re-enable rate limiting for this test module.
+
+    The global conftest disables rate-limit dependencies so other tests
+    (e.g., invite tests that make many register calls) aren't affected.
+    This fixture removes those overrides so rate limiting is active.
+    """
+    from auth_service import main as _main
+    from auth_service.rate_limit import (
+        check_agent_register_creds_rate,
+        check_login_rate,
+        check_register_rate,
+        reset_rate_limiter,
+    )
+
+    _main.app.dependency_overrides.pop(check_login_rate, None)
+    _main.app.dependency_overrides.pop(check_register_rate, None)
+    _main.app.dependency_overrides.pop(check_agent_register_creds_rate, None)
+    reset_rate_limiter()
+    yield
+    reset_rate_limiter()
+
+
 # ---------------------------------------------------------------------------
 # /auth/login — 10 per minute per IP
 # ---------------------------------------------------------------------------
