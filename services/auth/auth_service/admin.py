@@ -774,7 +774,7 @@ async def _read_motd(db: AsyncSession) -> MotdView:
     return MotdView(
         active=True,
         message=message,
-        severity=severity,  # type: ignore[arg-type]
+        severity=severity,
         expires_at=expires_at,
         updated_at=msg_row.updated_at,
         updated_by_user_id=msg_row.updated_by_user_id,

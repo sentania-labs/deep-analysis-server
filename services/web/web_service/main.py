@@ -116,7 +116,7 @@ def _patched_template_response(
     else:
         tpl_name = request_or_name
         ctx = name_or_context if isinstance(name_or_context, dict) else (context or {})
-        req = ctx.get("request")
+        req = ctx.get("request")  # type: ignore[assignment]
     if req is not None and hasattr(req, "state") and hasattr(req.state, "motd"):
         ctx.setdefault("motd", req.state.motd)
     else:
