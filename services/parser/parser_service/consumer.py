@@ -489,10 +489,7 @@ def _build_review_reason(parsed: ParsedMatch) -> str:
 
     # Safety net -- theoretically unreachable when _is_partial_parse is
     # True (it requires *no* game winners).
-    return (
-        f"Partial: {games_with_winners} of {game_count} "
-        f"game{plural} have winners"
-    )
+    return f"Partial: {games_with_winners} of {game_count} game{plural} have winners"
 
 
 def _collect_cards_by_side(

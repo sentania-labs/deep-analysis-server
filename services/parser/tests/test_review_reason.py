@@ -161,9 +161,7 @@ async def test_consumer_sets_review_reason_on_partial(parser_session: Any, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_consumer_no_review_reason_on_conclusive(
-    parser_session: Any, tmp_path: Path
-) -> None:
+async def test_consumer_no_review_reason_on_conclusive(parser_session: Any, tmp_path: Path) -> None:
     sha = "c" * 64
     _write_raw(tmp_path, sha)
     conclusive = ParsedMatch(

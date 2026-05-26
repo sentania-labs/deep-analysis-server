@@ -850,6 +850,7 @@ class AdminMatchItem:
     played_at: datetime | None
     is_draw: bool = False
     review_status: str | None = None
+    review_reason: str | None = None
 
 
 @dataclass
