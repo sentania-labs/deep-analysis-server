@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "sqlalchemy>=2.0",
+    "httpx>=0.27",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -31,3 +32,4 @@ bypass-selection = true
 "token_utils.py" = "common/token_utils.py"
 "format_inference.py" = "common/format_inference.py"
 "cache.py" = "common/cache.py"
+"health.py" = "common/health.py"

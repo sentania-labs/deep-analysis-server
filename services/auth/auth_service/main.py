@@ -141,10 +141,12 @@ async def healthz() -> Response:
     from auth_service.db import get_sessionmaker as _get_sm
     from common.health import check_db, check_redis, evaluate
 
-    report = await evaluate([
-        check_db(_get_sm()),
-        check_redis(_get_or_create_redis()),
-    ])
+    report = await evaluate(
+        [
+            check_db(_get_sm()),
+            check_redis(_get_or_create_redis()),
+        ]
+    )
     return JSONResponse(
         content=report.to_dict(SERVICE_NAME),
         status_code=report.http_status,

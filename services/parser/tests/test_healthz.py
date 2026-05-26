@@ -49,24 +49,30 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
 
 
 def _healthy_report() -> HealthReport:
-    return HealthReport(checks=[
-        CheckResult(name="db", ok=True),
-        CheckResult(name="redis", ok=True),
-    ])
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
 
 
 def _db_down_report() -> HealthReport:
-    return HealthReport(checks=[
-        CheckResult(name="db", ok=False, detail="error"),
-        CheckResult(name="redis", ok=True),
-    ])
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=False, detail="error"),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
 
 
 def _redis_down_report() -> HealthReport:
-    return HealthReport(checks=[
-        CheckResult(name="db", ok=True),
-        CheckResult(name="redis", ok=False, detail="error"),
-    ])
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=False, detail="error"),
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -102,9 +108,7 @@ async def test_healthz_db_failure(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_healthz_redis_failure(client: AsyncClient) -> None:
-    with patch(
-        "common.health.evaluate", new_callable=AsyncMock, return_value=_redis_down_report()
-    ):
+    with patch("common.health.evaluate", new_callable=AsyncMock, return_value=_redis_down_report()):
         r = await client.get("/healthz")
     assert r.status_code == 503
     body = r.json()

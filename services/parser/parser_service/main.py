@@ -126,10 +126,12 @@ async def healthz() -> JSONResponse:
     from common.health import check_db, check_redis, evaluate
 
     redis_client = await get_redis(get_settings().redis_url)
-    report = await evaluate([
-        check_db(get_sessionmaker()),
-        check_redis(redis_client),
-    ])
+    report = await evaluate(
+        [
+            check_db(get_sessionmaker()),
+            check_redis(redis_client),
+        ]
+    )
     return JSONResponse(
         content=report.to_dict(SERVICE_NAME),
         status_code=report.http_status,
