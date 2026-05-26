@@ -145,11 +145,11 @@ async def _load_user_matches(
     where = "WHERE user_id = :user_id AND review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
     if date_from:
-        where += " AND COALESCE(played_at, parsed_at)::date >= :date_from::date"
-        params["date_from"] = date_from
+        where += " AND COALESCE(played_at, parsed_at)::date >= :date_from"
+        params["date_from"] = date.fromisoformat(date_from)
     if date_to:
-        where += " AND COALESCE(played_at, parsed_at)::date <= :date_to::date"
-        params["date_to"] = date_to
+        where += " AND COALESCE(played_at, parsed_at)::date <= :date_to"
+        params["date_to"] = date.fromisoformat(date_to)
 
     rows = (
         await db.execute(
