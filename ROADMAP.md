@@ -30,24 +30,35 @@ The next 1–3 outcomes to pick up.
 
 ### 1. Matchup analysis dashboard
 
-The core product value — per-user performance breakdowns beyond the current overview stats.
+The core product value — per-user performance breakdowns that answer "what should I change about my play?"
 
+- **Use cases:**
+  - "I play Modern Burn — what's my win rate against each archetype I've faced?"
+  - "Am I losing Game 1 or post-board against Tron?" → pre-board vs post-board win rate per matchup
+  - "Which cards are actually winning me games against Tron?" → key card performance by matchup
+  - "What are my best sideboard cards?" → cards appearing in G2-3 but not G1, with win rate delta
 - **Acceptance criteria:**
-  - Win rate by archetype played, by archetype faced, by opponent
-  - Archetype-vs-archetype matrix (hero archetype × opponent archetype)
-  - Filterable by format and date range (infrastructure already exists)
+  - Archetype-vs-archetype matrix: hero archetype × opponent archetype with win rate, match count, pre-board/post-board split
+  - Key card breakdown per matchup: card name, games cast, win rate, pre-board vs post-board — filterable by format and by archetype matchup
+  - Sideboard effectiveness: surface cards with significant G2-3 vs G1 win rate delta
+  - Existing format and date range filters apply to all views
   - Read-only API surface so the AI add-on can query
-- **Dependencies:** Archetype detection (shipped), date filtering (shipped)
+- **Dependencies:** Archetype detection (shipped), date filtering (shipped), card analytics engine (shipped)
 - **Status:** Not started
 
 ### 2. BNR epoch awareness
 
-Date filtering with awareness of Banned & Restricted changes, so users can scope stats to "current meta" without manually picking dates.
+Format-scoped Banned & Restricted epoch tracking, so users can scope stats to a metagame era by selecting a named event rather than guessing dates.
 
+- **Use cases:**
+  - "Show me my stats since Fury was banned in Modern" → select the epoch by name, date fills automatically
+  - "How did my Vintage win rate change after Urza's Saga was restricted?" → compare across epochs
 - **Acceptance criteria:**
-  - Reference data for B&R announcement dates per format (source: mtg.fandom.com/wiki/Banned_and_restricted_cards/Timeline)
-  - Dashboard date filter gains a "Since last B&R" preset per format
-  - Optional: admin UI to manage B&R dates manually
+  - Data model: B&R events with format, date, description (e.g. "Fury banned"), and affected cards
+  - Events keyed by format — the date filter preset list is context-aware: selecting format "Vintage" shows Vintage-specific B&R epochs, not Modern ones
+  - Dashboard date filter gains a "Since [B&R event]" preset dropdown that populates from the epoch list for the active format
+  - Seed data sourced from mtg.fandom.com/wiki/Banned_and_restricted_cards/Timeline
+  - Admin UI to add/edit/delete B&R events manually (corrections, new announcements)
 - **Dependencies:** Date filter (shipped)
 - **Status:** Not started — reference resource identified
 
