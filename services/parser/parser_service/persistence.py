@@ -367,8 +367,13 @@ async def persist_match(
         await session.flush()  # populate game.id
 
         if parsed_game.turns:
-            turn_values = [
-                {
+            # Deduplicate by turn_number — duplicate (game_id, turn_number)
+            # pairs in a single INSERT ... ON CONFLICT DO UPDATE cause
+            # CardinalityViolationError. Keep the last occurrence so later
+            # snapshots of the same turn override earlier ones.
+            seen_turns: dict[int, dict] = {}
+            for turn in parsed_game.turns:
+                seen_turns[turn.turn_number] = {
                     "game_id": game.id,
                     "turn_number": turn.turn_number,
                     "active_player": turn.active_player,
@@ -377,8 +382,7 @@ async def persist_match(
                     },
                     "stack": [entry.model_dump() for entry in turn.stack],
                 }
-                for turn in parsed_game.turns
-            ]
+            turn_values = list(seen_turns.values())
             gs_stmt = pg_insert(GameState).values(turn_values)
             gs_stmt = gs_stmt.on_conflict_do_update(
                 constraint="uq_game_states_game_turn",
