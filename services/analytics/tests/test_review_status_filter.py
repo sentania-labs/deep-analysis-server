@@ -131,8 +131,8 @@ async def test_summary_loader_filtering_contract(
         _db: Any,
         _user_id: int,
         *,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: Any = None,
+        date_to: Any = None,
     ) -> list[dict[str, Any]]:
         return matches
 

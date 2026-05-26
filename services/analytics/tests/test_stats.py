@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +67,8 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
         _db: Any,
         _user_id: int,
         *,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> list[dict[str, Any]]:
         return matches
 
@@ -97,8 +97,8 @@ def _patch_loader_date_aware(
         _db: Any,
         _user_id: int,
         *,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
     ) -> list[dict[str, Any]]:
         calls.append({"date_from": date_from, "date_to": date_to})
         return matches
@@ -393,8 +393,8 @@ async def test_summary_threads_date_params(
 
     assert r.status_code == 200
     assert len(calls) == 1
-    assert calls[0]["date_from"] == "2026-05-01"
-    assert calls[0]["date_to"] == "2026-05-10"
+    assert calls[0]["date_from"] == date(2026, 5, 1)
+    assert calls[0]["date_to"] == date(2026, 5, 10)
 
 
 @pytest.mark.asyncio
@@ -440,8 +440,45 @@ async def test_by_format_threads_date_params(
 
     assert r.status_code == 200
     assert len(calls) == 1
-    assert calls[0]["date_from"] == "2026-05-01"
-    assert calls[0]["date_to"] == "2026-05-15"
+    assert calls[0]["date_from"] == date(2026, 5, 1)
+    assert calls[0]["date_to"] == date(2026, 5, 15)
+
+
+# ---------------------------------------------------------------------------
+# date_from / date_to coercion — regression for asyncpg DataError
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_user_matches_receives_date_objects(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """date_from/date_to must arrive as datetime.date, not str.
+
+    Regression: asyncpg raises DataError when a str is passed where a
+    date is expected ('str' object has no attribute 'toordinal').
+    """
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    calls = _patch_loader_date_aware(monkeypatch, [])
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get(
+            "/analytics/stats/summary",
+            params={"date_from": "2023-12-01", "date_to": "2023-12-26"},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    assert len(calls) == 1
+    # The key assertion: values must be date objects, not strings
+    assert isinstance(calls[0]["date_from"], date)
+    assert isinstance(calls[0]["date_to"], date)
+    assert calls[0]["date_from"] == date(2023, 12, 1)
+    assert calls[0]["date_to"] == date(2023, 12, 26)
 
 
 # ---------------------------------------------------------------------------
