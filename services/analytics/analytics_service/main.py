@@ -11,7 +11,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,6 +34,8 @@ from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
 from analytics_service.mtgtop8_scraper import SCRAPER_NAME as MTGTOP8_SCRAPER_NAME
 from analytics_service.mtgtop8_scraper import run_scrape as run_mtgtop8_scrape
 from analytics_service.schemas import (
+    AdminMatchItem,
+    AdminMatchListResponse,
     ArchetypeLabelMappingCreate,
     ArchetypeLabelMappingListView,
     ArchetypeLabelMappingRecord,
@@ -42,6 +43,7 @@ from analytics_service.schemas import (
     CanonicalArchetypeListView,
     CanonicalArchetypeRecord,
     ClassifierStatus,
+    MatchReviewRequest,
     ScraperConfigListResponse,
     ScraperConfigResponse,
     ScraperConfigUpdate,
@@ -50,6 +52,7 @@ from analytics_service.schemas import (
 from analytics_service.scryfall_sync import run_sync, should_sync
 from analytics_service.settings import get_settings
 from analytics_service.stats import router as stats_router
+from common.background_loop import BackgroundLoop
 from common.cache import invalidate_user
 from common.logging import configure_logging
 from common.metrics import mount_metrics
@@ -64,65 +67,29 @@ _log = logging.getLogger("analytics.main")
 # without interfering with the global event loop.
 _async_sleep = asyncio.sleep
 
-_scheduler_task: asyncio.Task[None] | None = None
-_mtgo_scheduler_task: asyncio.Task[None] | None = None
-_mtgtop8_scheduler_task: asyncio.Task[None] | None = None
 _cache_invalidator_task: asyncio.Task[None] | None = None
 
 
-def reset_scheduler() -> None:
-    """Test hook."""
-    global _scheduler_task, _mtgo_scheduler_task, _mtgtop8_scheduler_task, _cache_invalidator_task
-    _scheduler_task = None
-    _mtgo_scheduler_task = None
-    _mtgtop8_scheduler_task = None
-    _cache_invalidator_task = None
+# ---------------------------------------------------------------------------
+# Scryfall scheduler — BackgroundLoop
+# ---------------------------------------------------------------------------
 
 
-async def _scheduler_loop() -> None:
-    """Sleep-and-check loop driving periodic Scryfall syncs.
-
-    Wakes up on the configured interval and asks ``should_sync`` —
-    runs only when the cadence threshold has elapsed, so a manual
-    admin sync resets the clock and we don't double-sync immediately
-    after.
-    """
-    settings = get_settings()
-    interval_seconds = settings.scryfall_sync_interval_days * 24 * 60 * 60
+async def _scryfall_tick() -> None:
+    """Single iteration: sync if cadence threshold has elapsed."""
     sm = get_sessionmaker()
-    while True:
-        try:
-            async with sm() as session:
-                due = await should_sync(session)
-            if due:
-                await run_sync(sm)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — never let scheduler crash kill the service
-            _log.exception("scryfall scheduler iteration failed")
-        await asyncio.sleep(interval_seconds)
+    async with sm() as session:
+        due = await should_sync(session)
+    if due:
+        await run_sync(sm)
 
 
-async def _start_scheduler() -> None:
-    global _scheduler_task
-    if _scheduler_task is not None:
-        return
-    _scheduler_task = asyncio.create_task(_scheduler_loop(), name="scryfall-scheduler")
-    _log.info("scryfall scheduler task started")
+async def _scryfall_interval() -> float:
+    settings = get_settings()
+    return float(settings.scryfall_sync_interval_days * 24 * 60 * 60)
 
 
-async def _stop_scheduler() -> None:
-    global _scheduler_task
-    if _scheduler_task is None:
-        return
-    _scheduler_task.cancel()
-    try:
-        await _scheduler_task
-    except asyncio.CancelledError:
-        pass
-    except Exception:  # noqa: BLE001 — surface but don't crash shutdown
-        _log.exception("scryfall scheduler raised on shutdown")
-    _scheduler_task = None
+_scryfall_loop = BackgroundLoop("scryfall-scheduler", _scryfall_tick, _scryfall_interval)
 
 
 async def _read_scraper_config(
@@ -156,30 +123,22 @@ async def _read_scraper_config(
     return True, settings.mtgtop8_scrape_interval_hours
 
 
-async def _mtgo_scheduler_loop() -> None:
-    """Sleep-and-check loop for the MTGO results scraper.
+_mtgo_interval_hours: int = 24  # updated each tick from scraper_config
 
-    Reads ``analytics.scraper_config`` on each iteration to honour
-    runtime enable/disable and interval changes. Falls back to
-    env-based settings when the config table doesn't exist yet.
-    """
+
+async def _mtgo_tick() -> None:
+    """Single iteration for the MTGO results scraper."""
+    global _mtgo_interval_hours
     sm = get_sessionmaker()
-    while True:
-        try:
-            enabled, interval_hours = await _read_scraper_config(sm, MTGO_SCRAPER_NAME)
-            if enabled:
-                async with sm() as session:
-                    health = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
-                if _mtgo_scrape_due(health, interval_hours):
-                    await run_mtgo_scrape(sm)
-            else:
-                _log.debug("mtgo scraper disabled via config; skipping cycle")
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — never let scheduler crash kill the service
-            _log.exception("mtgo scheduler iteration failed")
-            interval_hours = get_settings().mtgo_scrape_interval_hours
-        await asyncio.sleep(interval_hours * 60 * 60)
+    enabled, interval_hours = await _read_scraper_config(sm, MTGO_SCRAPER_NAME)
+    _mtgo_interval_hours = interval_hours
+    if enabled:
+        async with sm() as session:
+            health = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
+        if _mtgo_scrape_due(health, interval_hours):
+            await run_mtgo_scrape(sm)
+    else:
+        _log.debug("mtgo scraper disabled via config; skipping cycle")
 
 
 def _mtgo_scrape_due(health: dict[str, Any], interval_hours: int) -> bool:
@@ -192,79 +151,49 @@ def _mtgo_scrape_due(health: dict[str, Any], interval_hours: int) -> bool:
     return (now - last) >= timedelta(hours=interval_hours)
 
 
-async def _start_mtgo_scheduler() -> None:
-    global _mtgo_scheduler_task
-    if _mtgo_scheduler_task is not None:
-        return
-    _mtgo_scheduler_task = asyncio.create_task(_mtgo_scheduler_loop(), name="mtgo-scheduler")
-    _log.info("mtgo scheduler task started")
+async def _mtgo_interval() -> float:
+    return float(_mtgo_interval_hours * 60 * 60)
 
 
-async def _stop_mtgo_scheduler() -> None:
-    global _mtgo_scheduler_task
-    if _mtgo_scheduler_task is None:
-        return
-    _mtgo_scheduler_task.cancel()
-    try:
-        await _mtgo_scheduler_task
-    except asyncio.CancelledError:
-        pass
-    except Exception:  # noqa: BLE001 — surface but don't crash shutdown
-        _log.exception("mtgo scheduler raised on shutdown")
-    _mtgo_scheduler_task = None
+_mtgo_loop = BackgroundLoop("mtgo-scheduler", _mtgo_tick, _mtgo_interval)
 
 
 # ---------------------------------------------------------------------------
-# mtgtop8 scheduler
+# mtgtop8 scheduler — BackgroundLoop
 # ---------------------------------------------------------------------------
 
+_mtgtop8_interval_hours: int = 24  # updated each tick from scraper_config
 
-async def _mtgtop8_scheduler_loop() -> None:
-    """Sleep-and-check loop for the mtgtop8 results scraper.
 
-    Config-aware: reads ``analytics.scraper_config`` each iteration.
-    """
+async def _mtgtop8_tick() -> None:
+    """Single iteration for the mtgtop8 results scraper."""
+    global _mtgtop8_interval_hours
     sm = get_sessionmaker()
-    while True:
-        try:
-            enabled, interval_hours = await _read_scraper_config(sm, MTGTOP8_SCRAPER_NAME)
-            if enabled:
-                async with sm() as session:
-                    health = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
-                if _mtgo_scrape_due(health, interval_hours):
-                    await run_mtgtop8_scrape(sm)
-            else:
-                _log.debug("mtgtop8 scraper disabled via config; skipping cycle")
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 — never let scheduler crash kill the service
-            _log.exception("mtgtop8 scheduler iteration failed")
-            interval_hours = get_settings().mtgtop8_scrape_interval_hours
-        await asyncio.sleep(interval_hours * 60 * 60)
+    enabled, interval_hours = await _read_scraper_config(sm, MTGTOP8_SCRAPER_NAME)
+    _mtgtop8_interval_hours = interval_hours
+    if enabled:
+        async with sm() as session:
+            health = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
+        if _mtgo_scrape_due(health, interval_hours):
+            await run_mtgtop8_scrape(sm)
+    else:
+        _log.debug("mtgtop8 scraper disabled via config; skipping cycle")
 
 
-async def _start_mtgtop8_scheduler() -> None:
-    global _mtgtop8_scheduler_task
-    if _mtgtop8_scheduler_task is not None:
-        return
-    _mtgtop8_scheduler_task = asyncio.create_task(
-        _mtgtop8_scheduler_loop(), name="mtgtop8-scheduler"
-    )
-    _log.info("mtgtop8 scheduler task started")
+async def _mtgtop8_interval() -> float:
+    return float(_mtgtop8_interval_hours * 60 * 60)
 
 
-async def _stop_mtgtop8_scheduler() -> None:
-    global _mtgtop8_scheduler_task
-    if _mtgtop8_scheduler_task is None:
-        return
-    _mtgtop8_scheduler_task.cancel()
-    try:
-        await _mtgtop8_scheduler_task
-    except asyncio.CancelledError:
-        pass
-    except Exception:  # noqa: BLE001 — surface but don't crash shutdown
-        _log.exception("mtgtop8 scheduler raised on shutdown")
-    _mtgtop8_scheduler_task = None
+_mtgtop8_loop = BackgroundLoop("mtgtop8-scheduler", _mtgtop8_tick, _mtgtop8_interval)
+
+
+def reset_scheduler() -> None:
+    """Test hook."""
+    global _cache_invalidator_task
+    _scryfall_loop.reset()
+    _mtgo_loop.reset()
+    _mtgtop8_loop.reset()
+    _cache_invalidator_task = None
 
 
 # ---------------------------------------------------------------------------
@@ -342,15 +271,15 @@ async def _stop_cache_invalidator() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
-        await _start_scheduler()
+        await _scryfall_loop.start()
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
         _log.exception("failed to start scryfall scheduler; healthz remains available")
     try:
-        await _start_mtgo_scheduler()
+        await _mtgo_loop.start()
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
         _log.exception("failed to start mtgo scheduler; healthz remains available")
     try:
-        await _start_mtgtop8_scheduler()
+        await _mtgtop8_loop.start()
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
         _log.exception("failed to start mtgtop8 scheduler; healthz remains available")
     try:
@@ -365,9 +294,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await _stop_cache_invalidator()
-        await _stop_mtgtop8_scheduler()
-        await _stop_mtgo_scheduler()
-        await _stop_scheduler()
+        await _mtgtop8_loop.stop()
+        await _mtgo_loop.stop()
+        await _scryfall_loop.stop()
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
@@ -502,36 +431,6 @@ def _is_true_draw(wins_by_player: dict[str, int]) -> bool:
         return False
     distinct = set(wins_by_player.values())
     return len(distinct) == 1 and 0 not in distinct
-
-
-class AdminMatchItem(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    match_id: str
-    user_id: int
-    user_email: str | None = None
-    format_: str | None = Field(default=None, alias="format")
-    players: list[str] = Field(default_factory=list)
-    match_result: str | None = None
-    winner: str | None = None
-    game_count: int = 0
-    played_at: datetime | None = None
-    # True only when both players have equal nonzero game-win counts —
-    # mirrors analytics.list_matches / _classify_match. A null winner
-    # with no resolved game winners is "incomplete", not a draw.
-    is_draw: bool = False
-    # Holding-pen state — see alembic 025. ``None`` is normal /
-    # user-visible, ``'pending_review'`` is awaiting an admin verdict,
-    # ``'rejected'`` is admin-discarded. Admin endpoints surface all
-    # three; user-facing endpoints only return None rows.
-    review_status: str | None = None
-
-
-class AdminMatchListResponse(BaseModel):
-    matches: list[AdminMatchItem] = Field(default_factory=list)
-    total: int = 0
-    page: int = 1
-    per_page: int = _ADMIN_MATCHES_DEFAULT_PER_PAGE
 
 
 _VALID_REVIEW_STATUS_FILTERS = {"all", "pending_review", "rejected", "normal"}
@@ -712,10 +611,6 @@ async def admin_list_matches(
 # user-visible. ``'pending_review'`` re-flags a normal row. ``'rejected'``
 # permanently discards a held parse from users + analytics.
 _VALID_REVIEW_VERDICTS: set[str | None] = {None, "pending_review", "rejected"}
-
-
-class MatchReviewRequest(BaseModel):
-    review_status: str | None = None
 
 
 @admin_router.post("/matches/{match_id}/review", response_model=AdminMatchItem)

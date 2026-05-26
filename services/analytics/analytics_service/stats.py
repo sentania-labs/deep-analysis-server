@@ -115,7 +115,7 @@ def _classify_match(
     user_wins = game_wins_by_player.get(user, 0)
     opp_wins = sum(v for k, v in game_wins_by_player.items() if k != user)
     if user_wins == 0 and opp_wins == 0:
-        return "", opponent, 0, 0
+        return "D", opponent, 0, 0
     if user_wins > opp_wins:
         return "W", opponent, user_wins, opp_wins
     if user_wins < opp_wins:
