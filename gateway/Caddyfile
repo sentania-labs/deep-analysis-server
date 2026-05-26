@@ -14,6 +14,7 @@
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'"
     }
 
     handle /health {
@@ -26,7 +27,10 @@
     }
 
     # Per-service Prometheus metrics — path rewritten before forwarding.
+    # Restricted to RFC 1918 ranges + loopback; public requests get 403.
     handle /auth/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy auth:8000 {
             transport http {
@@ -37,6 +41,8 @@
     }
 
     handle /ingest/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy ingest:8000 {
             transport http {
@@ -47,6 +53,8 @@
     }
 
     handle /analytics/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy analytics:8000 {
             transport http {
@@ -57,6 +65,8 @@
     }
 
     handle /parser/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy parser:8000 {
             transport http {
@@ -67,11 +77,15 @@
     }
 
     handle /postgres/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy postgres-exporter:9187
     }
 
     handle /redis/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        respond @denied 403
         rewrite * /metrics
         reverse_proxy redis-exporter:9121
     }
