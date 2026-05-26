@@ -170,7 +170,9 @@ class ParserConsumer:
     async def handle_event(self, sha256: str, user_id: int) -> ParsedMatch | None:
         """Test-friendly entry point — reads, parses, persists, publishes."""
         try:
-            content = read_raw(sha256, self._raw_root, max_bytes=self._max_log_bytes)
+            content = await asyncio.to_thread(
+                read_raw, sha256, self._raw_root, max_bytes=self._max_log_bytes
+            )
         except RawFileNotFoundError:
             _log.warning("raw file missing for sha=%s; skipping", sha256)
             return None
@@ -390,8 +392,8 @@ class ParserConsumer:
     ) -> None:
         """Handle a decklist (grouping XML) upload — parse and persist."""
         try:
-            content = read_raw(
-                sha256, self._raw_root, hint_ext=".xml", max_bytes=self._max_log_bytes
+            content = await asyncio.to_thread(
+                read_raw, sha256, self._raw_root, hint_ext=".xml", max_bytes=self._max_log_bytes
             )
         except RawFileNotFoundError:
             _log.warning("raw grouping file missing for sha=%s; skipping", sha256)
