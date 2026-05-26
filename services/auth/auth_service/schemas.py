@@ -82,6 +82,7 @@ class AgentHeartbeatResponse(BaseModel):
     revoked: bool
     upload_count: int = 0
     min_agent_version: str | None = None
+    reingest_requested_at: datetime | None = None
 
 
 class UserView(BaseModel):
@@ -134,11 +135,16 @@ class AgentView(BaseModel):
     created_at: datetime
     last_seen_at: datetime | None
     revoked_at: datetime | None
+    reingest_requested_at: datetime | None = None
 
 
 class AgentListView(BaseModel):
     agents: list[AgentView]
     total: int
+
+
+class ReingestResponse(BaseModel):
+    affected_count: int
 
 
 class StaleCleanupResponse(BaseModel):

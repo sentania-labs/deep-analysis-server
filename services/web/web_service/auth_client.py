@@ -56,6 +56,7 @@ class AdminAgentItem:
     revoked_at: datetime | None
     local_file_count: int | None = None
     parsed_count: int | None = None
+    reingest_requested_at: datetime | None = None
 
 
 @dataclass
@@ -462,6 +463,7 @@ async def admin_list_agents(
             revoked_at=_parse_dt(a.get("revoked_at")),
             local_file_count=a.get("local_file_count"),
             parsed_count=a.get("parsed_count"),
+            reingest_requested_at=_parse_dt(a.get("reingest_requested_at")),
         )
         for a in data.get("agents", [])
     ]
@@ -1033,6 +1035,88 @@ async def admin_cleanup_stale_agents(
     if resp.status_code in (400, 422):
         return None, "invalid_input"
     raise AuthClientError(f"auth POST cleanup-stale returned {resp.status_code}: {resp.text}")
+
+
+# ---------------------------------------------------------------------------
+# Reingest — admin-initiated agent file re-upload via heartbeat signal
+# ---------------------------------------------------------------------------
+
+
+async def admin_reingest_agent(
+    base_url: str,
+    token: str,
+    agent_id: str,
+) -> tuple[int, str | None]:
+    """Admin-only: stamp reingest on a single agent. Returns (count, error_code).
+
+    - 200 -> (affected_count, None)
+    - 404 -> (0, "agent_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/agents/{agent_id}/reingest",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST reingest-agent transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return int(resp.json().get("affected_count", 0)), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST reingest-agent returned {resp.status_code}")
+    if resp.status_code == 404:
+        return 0, "agent_not_found"
+    raise AuthClientError(f"auth POST reingest-agent returned {resp.status_code}: {resp.text}")
+
+
+async def admin_reingest_user_agents(
+    base_url: str,
+    token: str,
+    user_id: int,
+) -> tuple[int, str | None]:
+    """Admin-only: stamp reingest on all active agents for a user. Returns (count, error_code).
+
+    - 200 -> (affected_count, None)
+    - 404 -> (0, "user_not_found")
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/users/{user_id}/reingest",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST reingest-user transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return int(resp.json().get("affected_count", 0)), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST reingest-user returned {resp.status_code}")
+    if resp.status_code == 404:
+        return 0, "user_not_found"
+    raise AuthClientError(f"auth POST reingest-user returned {resp.status_code}: {resp.text}")
+
+
+async def admin_reingest_all_agents(
+    base_url: str,
+    token: str,
+) -> tuple[int, str | None]:
+    """Admin-only: stamp reingest on all active agents globally. Returns (count, error_code).
+
+    - 200 -> (affected_count, None)
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/admin/agents/reingest-all",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AuthClientError(f"auth POST reingest-all transport error: {exc}") from exc
+    if resp.status_code == 200:
+        return int(resp.json().get("affected_count", 0)), None
+    if resp.status_code in (401, 403):
+        raise AuthForbidden(f"auth POST reingest-all returned {resp.status_code}")
+    raise AuthClientError(f"auth POST reingest-all returned {resp.status_code}: {resp.text}")
 
 
 async def admin_reset_password(
