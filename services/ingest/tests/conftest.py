@@ -136,6 +136,8 @@ async def _truncate(async_engine: Any) -> AsyncIterator[None]:
                 "RESTART IDENTITY CASCADE"
             )
         )
+        # Clear any tunable overrides from previous tests.
+        await s.execute(text("DELETE FROM auth.server_settings WHERE key LIKE 'tunable:%'"))
         await s.commit()
     yield
 
@@ -175,7 +177,7 @@ async def seed_agent(db_session: AsyncSession) -> dict[str, Any]:
                 "u": user_row,
                 "m": "test-machine",
                 "h": hash_api_token(api_token),
-                "v": "0.4.0-test",
+                "v": "0.5.0",
             },
         )
     ).scalar_one()
@@ -212,6 +214,7 @@ async def client(_truncate: None, redis_client: Any) -> AsyncIterator[Any]:
     _settings.reset_settings()
     _db.reset_engine()
     _main.reset_publisher()
+    _main.reset_min_version_cache()
 
     transport = ASGITransport(app=_main.app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

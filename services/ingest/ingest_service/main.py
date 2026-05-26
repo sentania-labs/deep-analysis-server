@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+import time
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +37,102 @@ _log = logging.getLogger("ingest.main")
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
 mount_metrics(app, SERVICE_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Agent version gate — reject uploads from agents below min_agent_version
+# ---------------------------------------------------------------------------
+
+# Compiled fallback — must match auth_service.admin._STRING_TUNABLE_DEFAULTS.
+_DEFAULT_MIN_AGENT_VERSION = "0.5.0"
+
+# Cache the DB-backed tunable so every upload doesn't query server_settings.
+_MIN_VERSION_CACHE_TTL = 60  # seconds
+_cached_min_version: tuple[str, float] | None = None
+
+
+def _parse_version(raw: str) -> tuple[int, ...]:
+    """Parse a semver-ish string into an integer tuple for comparison.
+
+    Strips an optional leading ``v`` and ignores any pre-release suffix
+    (``-rc1``, ``-beta.2``, etc.).  Returns ``(major, minor, patch)``.
+    """
+    cleaned = raw.strip().lstrip("v")
+    # Drop pre-release suffix
+    cleaned = re.split(r"[+-]", cleaned, maxsplit=1)[0]
+    return tuple(int(p) for p in cleaned.split("."))
+
+
+async def _read_min_agent_version(db: AsyncSession) -> str:
+    """Read ``min_agent_version`` from ``auth.server_settings`` with a
+    60-second in-process cache.  Falls back to the compiled default
+    when the row is absent (fresh install, migration not yet run)."""
+    global _cached_min_version
+    now = time.monotonic()
+    if _cached_min_version is not None:
+        val, ts = _cached_min_version
+        if now - ts < _MIN_VERSION_CACHE_TTL:
+            return val
+
+    try:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT value FROM auth.server_settings WHERE key = 'tunable:min_agent_version'"
+                )
+            )
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — graceful degradation
+        _log.warning("failed to read min_agent_version tunable", exc_info=True)
+        row = None
+
+    result = (
+        str(row)
+        if row is not None and isinstance(row, str) and row.strip()
+        else _DEFAULT_MIN_AGENT_VERSION
+    )
+    _cached_min_version = (result, now)
+    return result
+
+
+def reset_min_version_cache() -> None:
+    """Test hook — clear the cached min_agent_version."""
+    global _cached_min_version
+    _cached_min_version = None
+
+
+def _check_agent_version(agent: AuthenticatedAgent, min_version: str) -> JSONResponse | None:
+    """Return a 426 JSONResponse if the agent is below *min_version*,
+    or ``None`` if the agent is allowed through."""
+    if agent.client_version is None:
+        return JSONResponse(
+            status_code=426,
+            content={
+                "detail": "Agent upgrade required",
+                "min_version": min_version,
+            },
+        )
+    try:
+        agent_ver = _parse_version(agent.client_version)
+        min_ver = _parse_version(min_version)
+    except (ValueError, IndexError):
+        # Unparseable version on the agent side -> reject defensively.
+        return JSONResponse(
+            status_code=426,
+            content={
+                "detail": "Agent upgrade required",
+                "min_version": min_version,
+            },
+        )
+    if agent_ver < min_ver:
+        return JSONResponse(
+            status_code=426,
+            content={
+                "detail": "Agent upgrade required",
+                "min_version": min_version,
+            },
+        )
+    return None
 
 
 _publisher: EventPublisher | None = None
@@ -88,6 +187,12 @@ async def upload(
     db: AsyncSession = Depends(get_session),
 ) -> UploadResponse:
     settings = get_settings()
+
+    # --- Agent version gate ---
+    min_ver = await _read_min_agent_version(db)
+    version_rejection = _check_agent_version(agent, min_ver)
+    if version_rejection is not None:
+        return version_rejection
 
     # Cheap rejection before we buffer the body. Content-Length covers
     # the whole multipart envelope, not just the file part — but if
