@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from analytics_service.archetypes import router as archetypes_router
 from analytics_service.bnr_events import router as bnr_events_router
+from analytics_service.card_materializer import card_materializer_loop
 from analytics_service.card_stats import router as card_stats_router
 from analytics_service.cards import router as cards_router
 from analytics_service.db import get_session, get_sessionmaker
@@ -68,6 +69,7 @@ _log = logging.getLogger("analytics.main")
 _async_sleep = asyncio.sleep
 
 _cache_invalidator_task: asyncio.Task[None] | None = None
+_card_materializer_task: asyncio.Task[None] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,11 +191,12 @@ _mtgtop8_loop = BackgroundLoop("mtgtop8-scheduler", _mtgtop8_tick, _mtgtop8_inte
 
 def reset_scheduler() -> None:
     """Test hook."""
-    global _cache_invalidator_task
+    global _cache_invalidator_task, _card_materializer_task
     _scryfall_loop.reset()
     _mtgo_loop.reset()
     _mtgtop8_loop.reset()
     _cache_invalidator_task = None
+    _card_materializer_task = None
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +271,38 @@ async def _stop_cache_invalidator() -> None:
     _cache_invalidator_task = None
 
 
+# ---------------------------------------------------------------------------
+# Card game stats materializer
+# ---------------------------------------------------------------------------
+
+
+async def _start_card_materializer() -> None:
+    global _card_materializer_task
+    if _card_materializer_task is not None:
+        return
+    settings = get_settings()
+    sm = get_sessionmaker()
+    _card_materializer_task = asyncio.create_task(
+        card_materializer_loop(settings.redis_url, sm),
+        name="card-materializer",
+    )
+    _log.info("card materializer task started")
+
+
+async def _stop_card_materializer() -> None:
+    global _card_materializer_task
+    if _card_materializer_task is None:
+        return
+    _card_materializer_task.cancel()
+    try:
+        await _card_materializer_task
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        _log.exception("card materializer raised on shutdown")
+    _card_materializer_task = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
@@ -287,12 +322,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001 — cache is optional; service works without it
         _log.exception("failed to start cache invalidator; service continues without caching")
     try:
+        await _start_card_materializer()
+    except Exception:  # noqa: BLE001 — materializer is best-effort
+        _log.exception("failed to start card materializer; service continues without it")
+    try:
         ml_load_model()
     except Exception:  # noqa: BLE001 — ML model is optional
         _log.info("ML classifier model not loaded at startup (not yet trained or unavailable)")
     try:
         yield
     finally:
+        await _stop_card_materializer()
         await _stop_cache_invalidator()
         await _mtgtop8_loop.stop()
         await _mtgo_loop.stop()
