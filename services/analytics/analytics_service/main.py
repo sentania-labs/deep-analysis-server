@@ -290,9 +290,9 @@ async def _cache_invalidation_loop() -> None:
             await pubsub.subscribe("match.parsed")
             _log.info("cache invalidator subscribed to match.parsed")
             async for message in pubsub.listen():
-                backoff = 1.0  # reset once we are receiving messages
                 if message["type"] != "message":
                     continue
+                backoff = 1.0  # reset once we receive a real data message
                 try:
                     payload = json.loads(message["data"])
                     user_id = payload.get("user_id")
