@@ -1,7 +1,7 @@
 """auth.agent_registrations.reingest_requested_at: admin-initiated reingest signal.
 
-Revision ID: 030
-Revises: 029
+Revision ID: 010
+Revises: 009
 Create Date: 2026-05-26
 
 Adds a nullable ``reingest_requested_at`` TIMESTAMPTZ column to
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "030"
-down_revision: str | None = "029"
+revision: str = "010"
+down_revision: str | None = "009"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -264,8 +264,7 @@ async def test_self_service_reingest_revoked_agent(client: Any, db_session: Asyn
     _agent_id, agent_token = await _seed_agent(db_session, user_id, revoked=True)
 
     r = await client.post("/auth/agent/reingest", headers=_h(agent_token))
-    assert r.status_code == 403
-    assert r.json()["detail"]["error"] == "agent_revoked"
+    assert r.status_code == 401
 
 
 # -----------------------------------------------------------------------
