@@ -261,6 +261,70 @@ async def materialize_card_game_stats(
 
 
 # ---------------------------------------------------------------------------
+# Backfill scan — catches events missed during disconnects/restarts
+# ---------------------------------------------------------------------------
+
+_BACKFILL_SQL = sa_text(
+    """
+    SELECT m.id::text, m.user_id
+      FROM parser.matches m
+     WHERE m.hero_player_name IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1 FROM analytics.card_game_stats cgs
+            WHERE cgs.match_id = m.id
+       )
+     ORDER BY m.parsed_at DESC
+     LIMIT :batch_size
+    """
+)
+
+
+async def backfill_card_stats(
+    sessionmaker: async_sessionmaker[Any],
+    batch_size: int = 100,
+) -> int:
+    """Find matches missing card_game_stats and materialize them."""
+    async with sessionmaker() as session:
+        rows = (await session.execute(_BACKFILL_SQL, {"batch_size": batch_size})).all()
+
+    if not rows:
+        return 0
+
+    _log.info("card stats backfill found %d unmaterialized matches", len(rows))
+    processed = 0
+    for match_id, user_id in rows:
+        try:
+            async with sessionmaker() as session:
+                await materialize_card_game_stats(session, str(match_id), int(user_id))
+                await session.commit()
+                processed += 1
+        except Exception:  # noqa: BLE001
+            _log.exception("card stats backfill failed match_id=%s", match_id)
+
+    _log.info("card stats backfill complete found=%d processed=%d", len(rows), processed)
+    return processed
+
+
+async def card_stats_backfill_loop(
+    sessionmaker: async_sessionmaker[Any],
+    interval_seconds: int = 300,
+) -> None:
+    """Periodically scan for matches missing card_game_stats."""
+    _log.info("card stats backfill scanner started interval=%ds", interval_seconds)
+    while True:
+        try:
+            await backfill_card_stats(sessionmaker)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            _log.exception("card stats backfill iteration failed")
+        try:
+            await _async_sleep(interval_seconds)
+        except asyncio.CancelledError:
+            raise
+
+
+# ---------------------------------------------------------------------------
 # Redis subscriber loop
 # ---------------------------------------------------------------------------
 
