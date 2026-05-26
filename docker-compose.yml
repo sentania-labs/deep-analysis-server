@@ -49,7 +49,7 @@ services:
     networks:
       - backend
     environment:
-      DATA_SOURCE_NAME: "postgresql://deep_analysis:${POSTGRES_PASSWORD}@postgres:5432/deep_analysis?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/deep_analysis?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
