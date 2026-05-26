@@ -113,10 +113,13 @@ def _check_agent_version(agent: AuthenticatedAgent, min_version: str) -> JSONRes
             },
         )
     try:
-        agent_ver = _parse_version(agent.client_version)
         min_ver = _parse_version(min_version)
     except (ValueError, IndexError):
-        # Unparseable version on the agent side -> reject defensively.
+        _log.error("unparseable min_agent_version tunable: %s — allowing upload", min_version)
+        return None
+    try:
+        agent_ver = _parse_version(agent.client_version)
+    except (ValueError, IndexError):
         return JSONResponse(
             status_code=426,
             content={
