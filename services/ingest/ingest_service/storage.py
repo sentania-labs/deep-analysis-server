@@ -108,15 +108,17 @@ async def open_file(
 ) -> AsyncIterator[bytes]:
     """Stream the content of a stored file in chunks.
 
-    Disk reads are offloaded to a thread so the event loop is never
-    blocked while streaming large files.
+    Each chunk read is offloaded to a thread so the event loop is
+    never blocked, and memory usage stays bounded to one chunk at a
+    time regardless of file size.
     """
     path = _shard_path(root, sha256, extension)
-
-    def _read_all() -> bytes:
-        with open(path, "rb") as fh:
-            return fh.read()
-
-    data = await asyncio.to_thread(_read_all)
-    for offset in range(0, len(data), chunk_size):
-        yield data[offset : offset + chunk_size]
+    fh = await asyncio.to_thread(open, path, "rb")
+    try:
+        while True:
+            chunk = await asyncio.to_thread(fh.read, chunk_size)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        await asyncio.to_thread(fh.close)
