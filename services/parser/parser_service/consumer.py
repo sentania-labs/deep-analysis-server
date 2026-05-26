@@ -229,6 +229,9 @@ class ParserConsumer:
                 await session.rollback()
                 return parsed
 
+            match_id = match.id
+            match_id_str = str(match_id)
+
             # Skip format inference when an admin has manually set the
             # format — format_source='manual' is authoritative and must
             # survive both reparsing and inference.
@@ -283,7 +286,7 @@ class ParserConsumer:
                     if hero_player_name and hero_result:
                         ma_values.append(
                             {
-                                "match_id": match.id,
+                                "match_id": match_id,
                                 "player_name": hero_player_name,
                                 "archetype_id": hero_result.archetype_id,
                                 "confidence": hero_result.confidence,
@@ -294,7 +297,7 @@ class ParserConsumer:
                     if opponent_name and opp_result:
                         ma_values.append(
                             {
-                                "match_id": match.id,
+                                "match_id": match_id,
                                 "player_name": opponent_name,
                                 "archetype_id": opp_result.archetype_id,
                                 "confidence": opp_result.confidence,
@@ -328,13 +331,9 @@ class ParserConsumer:
 
             # Deck-to-match linking — best-effort.
             try:
-                await link_deck_to_match(session, match.id, user_id, match.format)
+                await link_deck_to_match(session, match_id, user_id, match.format)
             except Exception:  # noqa: BLE001
                 _log.debug("deck-to-match link failed sha=%s", sha256)
-
-            # Capture ORM attributes before leaving the session scope —
-            # accessing them after close raises DetachedInstanceError.
-            match_id_str = str(match.id)
 
         out: MatchParsedPayload = {
             "match_id": match_id_str,
