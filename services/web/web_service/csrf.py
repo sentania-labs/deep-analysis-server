@@ -125,7 +125,7 @@ async def csrf_middleware(request: Request, call_next: Any) -> Response:
                 key=CSRF_COOKIE_NAME,
                 value=token,
                 httponly=False,  # JS may need to read it
-                secure=True,
+                secure=request.url.scheme == "https",
                 samesite="lax",
                 path="/",
             )
