@@ -93,25 +93,30 @@ async def scan_unparsed(
             except Exception:  # noqa: BLE001
                 _log.exception("backfill parse failed sha256=%s user_id=%s", sha256, user_id)
 
-    # --- Decklists ---
-    async with sm() as session:
-        deck_rows = (
-            await session.execute(
-                _UNPARSED_DECKLISTS_SQL,
-                {"batch_size": batch_size},
-            )
-        ).all()
-
-    if deck_rows:
-        _log.info("backfill scan found %d unparsed decklists", len(deck_rows))
-        for sha256, user_id in deck_rows:
-            try:
-                await consumer.handle_decklist_event(str(sha256), int(user_id))
-                total_processed += 1
-            except Exception:  # noqa: BLE001
-                _log.exception(
-                    "backfill decklist parse failed sha256=%s user_id=%s", sha256, user_id
+    # --- Decklists (share remaining batch budget) ---
+    remaining = max(0, batch_size - len(rows))
+    if remaining > 0:
+        async with sm() as session:
+            deck_rows = (
+                await session.execute(
+                    _UNPARSED_DECKLISTS_SQL,
+                    {"batch_size": remaining},
                 )
+            ).all()
+
+        if deck_rows:
+            _log.info("backfill scan found %d unparsed decklists", len(deck_rows))
+            for sha256, user_id in deck_rows:
+                try:
+                    result = await consumer.handle_decklist_event(str(sha256), int(user_id))
+                    if result is not None:
+                        total_processed += 1
+                except Exception:  # noqa: BLE001
+                    _log.exception(
+                        "backfill decklist parse failed sha256=%s user_id=%s", sha256, user_id
+                    )
+    else:
+        deck_rows = []
 
     total_found = len(rows) + len(deck_rows)
     if total_found:
