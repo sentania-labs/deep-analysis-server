@@ -30,6 +30,12 @@ from auth_service.jwt_issue import (
 from auth_service.models import AgentRegistration, InviteToken, ServerSetting, User
 from auth_service.models import Session as SessionRow
 from auth_service.passwords import hash_password, verify_password
+from auth_service.rate_limit import (
+    check_agent_register_creds_rate,
+    check_login_rate,
+    check_register_rate,
+    reset_rate_limiter,
+)
 from auth_service.registration import (
     consume_registration_code,
     generate_api_token,
@@ -82,6 +88,7 @@ def reset_redis() -> None:
     """Test hook: clear the cached Redis client after env changes."""
     global _redis_client
     _redis_client = None
+    reset_rate_limiter()
 
 
 _log = logging.getLogger("auth.main")
@@ -140,13 +147,12 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": SERVICE_NAME}
 
 
-@app.post("/auth/login", response_model=TokenResponse)
+@app.post("/auth/login", response_model=TokenResponse, dependencies=[Depends(check_login_rate)])
 async def login(
     body: LoginRequest,
     request: Request,
     db: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
-    # Rate limiting deferred to W7 gateway.
     # Body carries a plaintext password — any unhandled exception escaping
     # this handler could be logged with the request body by FastAPI/uvicorn,
     # leaking the password. Catch broadly and re-raise a sanitized 500.
@@ -545,7 +551,6 @@ async def mint_registration_code(
     user: AuthenticatedUser = Depends(require_user_role),
     redis: Redis = Depends(get_redis),
 ) -> AgentRegistrationCodeResponse:
-    # Rate limiting deferred to gateway W7.
     code = generate_registration_code()
     await store_registration_code(
         redis, code, user.user_id, ttl_seconds=_REGISTRATION_CODE_TTL_SECONDS
@@ -604,6 +609,7 @@ async def register_agent(
     "/auth/agent/register-with-credentials",
     response_model=AgentRegisterResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_agent_register_creds_rate)],
 )
 async def register_agent_with_credentials(
     body: AgentRegisterWithCredentialsRequest,
@@ -744,6 +750,7 @@ async def public_motd(
     "/auth/register",
     response_model=RegisterResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(check_register_rate)],
 )
 async def register(
     body: RegisterRequest,
