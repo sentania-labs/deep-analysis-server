@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-import httpx
+from web_service.http_helper import parse_dt as _parse_dt
+from web_service.http_helper import raw_request, request
 
 
 @dataclass
@@ -35,13 +36,9 @@ class AnalyticsForbidden(Exception):
     """Analytics rejected the request as 401/403."""
 
 
-def _parse_dt(raw: Any) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return None
+# Shorthand kwargs for all analytics helpers.
+_ERR = {"error_cls": AnalyticsClientError, "forbidden_cls": AnalyticsForbidden}
+_ERR_RAW = {"error_cls": AnalyticsClientError}
 
 
 def _to_item(payload: dict[str, Any]) -> ArchetypeItem:
@@ -60,20 +57,13 @@ async def admin_list_archetypes(
     base_url: str,
     token: str,
 ) -> tuple[list[ArchetypeItem], int]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/archetypes",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /archetypes transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /archetypes returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /archetypes returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/archetypes",
+        token=token,
+        error_prefix="analytics GET /archetypes ",
+        **_ERR,
+    )
     data = resp.json()
     items = [_to_item(a) for a in data.get("archetypes", [])]
     return items, int(data.get("total", len(items)))
@@ -85,16 +75,13 @@ async def admin_get_archetype(
     archetype_id: str,
 ) -> ArchetypeItem | None:
     """Fetch a single archetype. Returns None on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/archetypes/{archetype_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /archetypes/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/archetypes/{archetype_id}",
+        token=token,
+        error_prefix="analytics GET /archetypes/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 404:
         return None
     if resp.status_code in (401, 403):
@@ -120,15 +107,14 @@ async def admin_create_archetype(
         "format": format_,
         "defining_cards": defining_cards,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/archetypes",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics POST /archetypes transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/archetypes",
+        token=token,
+        json=body,
+        error_prefix="analytics POST /archetypes ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (200, 201):
         return _to_item(resp.json()), None
     if resp.status_code in (401, 403):
@@ -154,17 +140,14 @@ async def admin_update_archetype(
         "format": format_,
         "defining_cards": defining_cards,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.put(
-                f"{base_url}/analytics/archetypes/{archetype_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics PUT /archetypes/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "PUT",
+        f"{base_url}/analytics/archetypes/{archetype_id}",
+        token=token,
+        json=body,
+        error_prefix="analytics PUT /archetypes/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return _to_item(resp.json()), None
     if resp.status_code in (401, 403):
@@ -184,16 +167,13 @@ async def admin_delete_archetype(
     archetype_id: str,
 ) -> tuple[bool, str | None]:
     """Delete. (True, None) on 204, (False, code) on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/analytics/archetypes/{archetype_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics DELETE /archetypes/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/analytics/archetypes/{archetype_id}",
+        token=token,
+        error_prefix="analytics DELETE /archetypes/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -308,21 +288,14 @@ async def get_stats_summary(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/summary",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /stats/summary transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/summary returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/summary returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/summary",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/summary ",
+        **_ERR,
+    )
     return _to_summary(resp.json())
 
 
@@ -338,23 +311,14 @@ async def get_stats_by_format(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/by-format",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/by-format transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/by-format returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/by-format returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/by-format",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/by-format ",
+        **_ERR,
+    )
     return [_to_format_stat(row) for row in resp.json()]
 
 
@@ -385,19 +349,14 @@ def _to_card(payload: dict[str, Any]) -> CardItem:
 
 
 async def search_cards(base_url: str, token: str, q: str) -> list[CardItem]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/cards",
-                params={"q": q},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /cards transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /cards returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(f"analytics GET /cards returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/cards",
+        token=token,
+        params={"q": q},
+        error_prefix="analytics GET /cards ",
+        **_ERR,
+    )
     return [_to_card(row) for row in resp.json()]
 
 
@@ -407,22 +366,13 @@ async def search_cards(base_url: str, token: str, q: str) -> list[CardItem]:
 
 
 async def admin_get_cards_status(base_url: str, token: str) -> dict[str, Any]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/cards-status",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/cards-status transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /admin/cards-status returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/cards-status returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/cards-status",
+        token=token,
+        error_prefix="analytics GET /admin/cards-status ",
+        **_ERR,
+    )
     payload = resp.json()
     return {
         "card_count": int(payload.get("card_count") or 0),
@@ -434,23 +384,14 @@ async def admin_get_scraper_health(
     base_url: str, token: str, scraper_name: str = "mtgo"
 ) -> dict[str, Any]:
     """Fetch health for a single scraper by name."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/scraper-health",
-                params={"scraper_name": scraper_name},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scraper-health transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /admin/scraper-health returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scraper-health returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scraper-health",
+        token=token,
+        params={"scraper_name": scraper_name},
+        error_prefix="analytics GET /admin/scraper-health ",
+        **_ERR,
+    )
     return _parse_scraper_health(resp.json())
 
 
@@ -468,22 +409,13 @@ def _parse_scraper_health(payload: dict[str, Any]) -> dict[str, Any]:
 
 async def admin_get_all_scraper_health(base_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch health for all registered scrapers (v0.9.4+)."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/scraper-health",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scraper-health transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /admin/scraper-health returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scraper-health returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scraper-health",
+        token=token,
+        error_prefix="analytics GET /admin/scraper-health ",
+        **_ERR,
+    )
     payload = resp.json()
     scrapers = payload.get("scrapers")
     if isinstance(scrapers, list):
@@ -494,16 +426,13 @@ async def admin_get_all_scraper_health(base_url: str, token: str) -> list[dict[s
 
 async def admin_trigger_mtgtop8_scrape(base_url: str, token: str) -> bool:
     """Trigger an mtgtop8 results scrape. Returns True on 202."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/admin/scrape-mtgtop8",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/scrape-mtgtop8 transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/admin/scrape-mtgtop8",
+        token=token,
+        error_prefix="analytics POST /admin/scrape-mtgtop8 ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 202:
         return True
     if resp.status_code in (401, 403):
@@ -519,40 +448,26 @@ async def admin_reset_scraper_health(
     base_url: str, token: str, scraper_name: str
 ) -> dict[str, Any]:
     """Reset a scraper's failure counters."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/admin/scraper-health/reset",
-                params={"scraper_name": scraper_name},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/scraper-health/reset transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics POST /admin/scraper-health/reset returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/scraper-health/reset returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "POST",
+        f"{base_url}/analytics/admin/scraper-health/reset",
+        token=token,
+        params={"scraper_name": scraper_name},
+        error_prefix="analytics POST /admin/scraper-health/reset ",
+        **_ERR,
+    )
     return _parse_scraper_health(resp.json())
 
 
 async def admin_trigger_sync(base_url: str, token: str) -> bool:
     """Kick off a card sync. Returns True on 202 (sync scheduled)."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/admin/sync-cards",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/sync-cards transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/admin/sync-cards",
+        token=token,
+        error_prefix="analytics POST /admin/sync-cards ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 202:
         return True
     if resp.status_code in (401, 403):
@@ -564,16 +479,13 @@ async def admin_trigger_sync(base_url: str, token: str) -> bool:
 
 async def admin_trigger_mtgo_scrape(base_url: str, token: str) -> bool:
     """Trigger an MTGO results scrape. Returns True on 202."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/admin/scrape-mtgo",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/scrape-mtgo transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/admin/scrape-mtgo",
+        token=token,
+        error_prefix="analytics POST /admin/scrape-mtgo ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 202:
         return True
     if resp.status_code in (401, 403):
@@ -638,14 +550,13 @@ def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
 
 async def get_match_detail(base_url: str, token: str, match_id: str) -> MatchDetail | None:
     """Fetch a single match. Returns None on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/matches/{match_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /matches/{{id}} transport error: {exc}") from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/matches/{match_id}",
+        token=token,
+        error_prefix="analytics GET /matches/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 404:
         return None
     if resp.status_code in (401, 403):
@@ -659,16 +570,13 @@ async def get_match_detail(base_url: str, token: str, match_id: str) -> MatchDet
 
 async def admin_get_match_detail(base_url: str, token: str, match_id: str) -> MatchDetail | None:
     """Admin: fetch any match regardless of owner/review status. Returns None on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/matches/admin/{match_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /matches/admin/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/matches/admin/{match_id}",
+        token=token,
+        error_prefix="analytics GET /matches/admin/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 404:
         return None
     if resp.status_code in (401, 403):
@@ -682,15 +590,14 @@ async def admin_get_match_detail(base_url: str, token: str, match_id: str) -> Ma
 
 async def update_match_format(base_url: str, token: str, match_id: str, format_: str) -> bool:
     """PATCH the format on a match. Returns True on success."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.patch(
-                f"{base_url}/analytics/matches/{match_id}/format",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"format": format_},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics PATCH /matches/{{id}}/format error: {exc}") from exc
+    resp = await raw_request(
+        "PATCH",
+        f"{base_url}/analytics/matches/{match_id}/format",
+        token=token,
+        json={"format": format_},
+        error_prefix="analytics PATCH /matches/{id}/format ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True
     if resp.status_code in (401, 403):
@@ -754,21 +661,14 @@ async def get_match_list(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/matches",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /stats/matches transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/matches returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/matches returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/matches",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/matches ",
+        **_ERR,
+    )
     data = resp.json()
     return MatchListResponse(
         matches=[_to_match_list_item(m) for m in data.get("matches", [])],
@@ -785,24 +685,13 @@ class UsernameSuggestionItem:
 
 
 async def get_username_suggestions(base_url: str, token: str) -> list[UsernameSuggestionItem]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/username-suggestion",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/username-suggestion transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /stats/username-suggestion returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/username-suggestion returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/username-suggestion",
+        token=token,
+        error_prefix="analytics GET /stats/username-suggestion ",
+        **_ERR,
+    )
     return [
         UsernameSuggestionItem(
             username=str(row.get("username", "")),
@@ -813,22 +702,13 @@ async def get_username_suggestions(base_url: str, token: str) -> list[UsernameSu
 
 
 async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatItem]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/by-opponent",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/by-opponent transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/by-opponent returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/by-opponent returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/by-opponent",
+        token=token,
+        error_prefix="analytics GET /stats/by-opponent ",
+        **_ERR,
+    )
     return [_to_opponent_stat(row) for row in resp.json()]
 
 
@@ -904,21 +784,14 @@ async def admin_list_matches(
         params["date_to"] = date_to
     if review_status and review_status.lower() != "all":
         params["review_status"] = review_status
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/matches",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /admin/matches transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /admin/matches returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/matches returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/matches",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /admin/matches ",
+        **_ERR,
+    )
     data = resp.json()
     return AdminMatchListResponse(
         matches=[_to_admin_match(m) for m in data.get("matches", [])],
@@ -942,17 +815,14 @@ async def admin_set_match_review_status(
     or ``(None, "invalid_review_status")`` on 422.
     """
     body = {"review_status": review_status}
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/admin/matches/{match_id}/review",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /admin/matches/{{id}}/review transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/admin/matches/{match_id}/review",
+        token=token,
+        json=body,
+        error_prefix="analytics POST /admin/matches/{id}/review ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return _to_admin_match(resp.json()), None
     if resp.status_code in (401, 403):
@@ -1001,23 +871,14 @@ async def get_play_draw_stats(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/play-draw",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/play-draw transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/play-draw returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/play-draw returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/play-draw",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/play-draw ",
+        **_ERR,
+    )
     d = resp.json()
     on_play = d.get("on_play") or {}
     on_draw = d.get("on_draw") or {}
@@ -1059,25 +920,14 @@ async def get_preboard_postboard_stats(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/preboard-postboard",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/preboard-postboard transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /stats/preboard-postboard returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/preboard-postboard returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/preboard-postboard",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/preboard-postboard ",
+        **_ERR,
+    )
     d = resp.json()
     preboard = d.get("preboard") or {}
     postboard = d.get("postboard") or {}
@@ -1122,23 +972,14 @@ async def get_mulligan_stats(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/mulligans",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/mulligans transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/mulligans returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/mulligans returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/mulligans",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/mulligans ",
+        **_ERR,
+    )
     # The analytics endpoint returns a bare JSON array of MulliganBucket
     # objects (not wrapped in {"buckets": [...]}). Each bucket uses
     # "total" for the game count, which we map to our client's "games".
@@ -1162,22 +1003,13 @@ class GameLengthStats:
 
 
 async def get_game_length_stats(base_url: str, token: str) -> GameLengthStats:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/game-length",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/game-length transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/game-length returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/game-length returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/game-length",
+        token=token,
+        error_prefix="analytics GET /stats/game-length ",
+        **_ERR,
+    )
     d = resp.json()
     return GameLengthStats(buckets=d.get("buckets", []))
 
@@ -1223,21 +1055,14 @@ async def get_card_stats(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/cards",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /stats/cards transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /stats/cards returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /stats/cards returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/cards",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/cards ",
+        **_ERR,
+    )
     d = resp.json()
     cards = [
         CardStatItem(
@@ -1342,25 +1167,13 @@ async def get_game_turns(
     match_id: str,
     game_number: int,
 ) -> GameTurnsResponse:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/stats/matches/{match_id}/games/{game_number}/turns",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /matches/{{id}}/games/{{n}}/turns transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /matches/{{id}}/games/{{n}}/turns returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /matches/{{id}}/games/{{n}}/turns "
-            f"returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/matches/{match_id}/games/{game_number}/turns",
+        token=token,
+        error_prefix="analytics GET /matches/{id}/games/{n}/turns ",
+        **_ERR,
+    )
     d = resp.json()
     # The analytics endpoint returns either a bare JSON array of turn
     # objects or a wrapped object with match_id/game_number/turns keys.
@@ -1388,22 +1201,13 @@ async def get_game_turns(
 
 async def get_metagame_formats(base_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch available metagame formats."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/metagame/formats",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/formats transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /metagame/formats returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/formats returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/metagame/formats",
+        token=token,
+        error_prefix="analytics GET /metagame/formats ",
+        **_ERR,
+    )
     data = resp.json()
     return list(data.get("formats", []))
 
@@ -1412,25 +1216,14 @@ async def get_metagame_tiers(
     base_url: str, token: str, format_: str, window: str = "30d"
 ) -> dict[str, Any]:
     """Fetch archetype tier list for a format."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/metagame/{format_}/tiers",
-                params={"window": window},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/tiers transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /metagame/{{format}}/tiers returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/tiers returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/metagame/{format_}/tiers",
+        token=token,
+        params={"window": window},
+        error_prefix="analytics GET /metagame/{format}/tiers ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
@@ -1438,25 +1231,14 @@ async def get_metagame_events(
     base_url: str, token: str, format_: str, page: int = 1, per_page: int = 20
 ) -> dict[str, Any]:
     """Fetch paginated events for a format."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/metagame/{format_}/events",
-                params={"page": page, "per_page": per_page},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/events transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /metagame/{{format}}/events returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/events returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/metagame/{format_}/events",
+        token=token,
+        params={"page": page, "per_page": per_page},
+        error_prefix="analytics GET /metagame/{format}/events ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
@@ -1464,16 +1246,13 @@ async def get_metagame_event_detail(
     base_url: str, token: str, format_: str, source: str, event_id: int
 ) -> dict[str, Any]:
     """Fetch a single event with results and decklists."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/metagame/{format_}/events/{source}/{event_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/events/{{source}}/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/metagame/{format_}/events/{source}/{event_id}",
+        token=token,
+        error_prefix="analytics GET /metagame/{format}/events/{source}/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(
             f"analytics GET /metagame/event detail returned {resp.status_code}"
@@ -1491,25 +1270,14 @@ async def get_metagame_trends(
     base_url: str, token: str, format_: str, window: str = "30d"
 ) -> dict[str, Any]:
     """Fetch trend data for charting archetype popularity over time."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/metagame/{format_}/trends",
-                params={"window": window},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/trends transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /metagame/{{format}}/trends returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /metagame/{{format}}/trends returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/metagame/{format_}/trends",
+        token=token,
+        params={"window": window},
+        error_prefix="analytics GET /metagame/{format}/trends ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
@@ -1520,20 +1288,13 @@ async def get_metagame_trends(
 
 async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch all scrapers with config + health."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/scrapers",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /admin/scrapers transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /admin/scrapers returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scrapers returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scrapers",
+        token=token,
+        error_prefix="analytics GET /admin/scrapers ",
+        **_ERR,
+    )
     data = resp.json()
     scrapers = data.get("scrapers", [])
     # Normalize datetime strings
@@ -1557,25 +1318,14 @@ async def admin_update_scraper(
         body["enabled"] = enabled
     if interval_hours is not None:
         body["interval_hours"] = interval_hours
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.patch(
-                f"{base_url}/analytics/admin/scrapers/{name}",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics PATCH /admin/scrapers/{{name}} transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics PATCH /admin/scrapers/{{name}} returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics PATCH /admin/scrapers/{{name}} returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "PATCH",
+        f"{base_url}/analytics/admin/scrapers/{name}",
+        token=token,
+        json=body,
+        error_prefix="analytics PATCH /admin/scrapers/{name} ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
@@ -1587,26 +1337,14 @@ async def admin_get_scraper_events(
     per_page: int = 20,
 ) -> dict[str, Any]:
     """Fetch paginated events for a specific scraper."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/scrapers/{name}/events",
-                params={"page": page, "per_page": per_page},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scrapers/{{name}}/events transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics GET /admin/scrapers/{{name}}/events returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scrapers/{{name}}/events "
-            f"returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scrapers/{name}/events",
+        token=token,
+        params={"page": page, "per_page": per_page},
+        error_prefix="analytics GET /admin/scrapers/{name}/events ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
@@ -1642,20 +1380,13 @@ async def admin_list_bnr_events(
     base_url: str,
     token: str,
 ) -> tuple[list[BnrEventItem], int]:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/bnr-events",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics GET /bnr-events transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /bnr-events returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /bnr-events returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/bnr-events",
+        token=token,
+        error_prefix="analytics GET /bnr-events ",
+        **_ERR,
+    )
     data = resp.json()
     items = [_to_bnr_event(e) for e in data.get("events", [])]
     return items, int(data.get("total", len(items)))
@@ -1667,16 +1398,13 @@ async def admin_get_bnr_event(
     event_id: str,
 ) -> BnrEventItem | None:
     """Fetch a single B&R event. Returns None on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/bnr-events/{event_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /bnr-events/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/bnr-events/{event_id}",
+        token=token,
+        error_prefix="analytics GET /bnr-events/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 404:
         return None
     if resp.status_code in (401, 403):
@@ -1704,15 +1432,14 @@ async def admin_create_bnr_event(
         "description": description,
         "card_actions": card_actions,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/bnr-events",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(f"analytics POST /bnr-events transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/analytics/bnr-events",
+        token=token,
+        json=body,
+        error_prefix="analytics POST /bnr-events ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (200, 201):
         return _to_bnr_event(resp.json()), None
     if resp.status_code in (401, 403):
@@ -1740,17 +1467,14 @@ async def admin_update_bnr_event(
         "description": description,
         "card_actions": card_actions,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.put(
-                f"{base_url}/analytics/bnr-events/{event_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics PUT /bnr-events/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "PUT",
+        f"{base_url}/analytics/bnr-events/{event_id}",
+        token=token,
+        json=body,
+        error_prefix="analytics PUT /bnr-events/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return _to_bnr_event(resp.json()), None
     if resp.status_code in (401, 403):
@@ -1770,16 +1494,13 @@ async def admin_delete_bnr_event(
     event_id: str,
 ) -> tuple[bool, str | None]:
     """Delete. (True, None) on 204, (False, code) on 404."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/analytics/bnr-events/{event_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics DELETE /bnr-events/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/analytics/bnr-events/{event_id}",
+        token=token,
+        error_prefix="analytics DELETE /bnr-events/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -1793,46 +1514,27 @@ async def admin_delete_bnr_event(
 
 async def admin_import_bnr_wiki(base_url: str, token: str) -> dict[str, Any]:
     """Trigger wiki import. Returns WikiImportResult as dict."""
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{base_url}/analytics/bnr-events/import-wiki",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics POST /bnr-events/import-wiki transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(
-            f"analytics POST /bnr-events/import-wiki returned {resp.status_code}"
-        )
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics POST /bnr-events/import-wiki returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "POST",
+        f"{base_url}/analytics/bnr-events/import-wiki",
+        token=token,
+        timeout=60.0,
+        error_prefix="analytics POST /bnr-events/import-wiki ",
+        **_ERR,
+    )
     return dict(resp.json())
 
 
 async def get_bnr_events_by_format(base_url: str, token: str, format_: str) -> list[BnrEventItem]:
     """Non-admin: fetch BNR events for a specific format (dashboard use)."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/bnr-events/by-format",
-                params={"format": format_},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /bnr-events/by-format transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AnalyticsForbidden(f"analytics GET /bnr-events/by-format returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AnalyticsClientError(
-            f"analytics GET /bnr-events/by-format returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/bnr-events/by-format",
+        token=token,
+        params={"format": format_},
+        error_prefix="analytics GET /bnr-events/by-format ",
+        **_ERR,
+    )
     data = resp.json()
     return [_to_bnr_event(e) for e in data.get("events", [])]
 
@@ -1844,16 +1546,13 @@ async def admin_get_scraper_event_detail(
     event_id: int,
 ) -> dict[str, Any]:
     """Fetch a single event with results for a scraper."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/analytics/admin/scrapers/{name}/events/{event_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AnalyticsClientError(
-            f"analytics GET /admin/scrapers/{{name}}/events/{{id}} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "GET",
+        f"{base_url}/analytics/admin/scrapers/{name}/events/{event_id}",
+        token=token,
+        error_prefix="analytics GET /admin/scrapers/{name}/events/{id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(
             f"analytics GET /admin/scrapers/{{name}}/events/{{id}} returned {resp.status_code}"
