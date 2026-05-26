@@ -322,6 +322,7 @@ class ParserConsumer:
                         match.archetype_id = hero_result.archetype_id
                     await session.commit()
             except Exception:  # noqa: BLE001
+                await session.rollback()
                 _log.debug("archetype classification failed sha=%s", sha256)
 
             # Card game stats materialization — best-effort.
