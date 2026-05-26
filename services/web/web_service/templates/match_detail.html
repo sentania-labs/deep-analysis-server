@@ -4,8 +4,24 @@
 
 {% block content %}
 <div class="mb-6">
+    {% if admin_view|default(false) %}
+    <a href="/admin/matches" class="text-xs text-accent hover:text-accent-hover">&larr; Back to match list</a>
+    {% else %}
     <a href="/dashboard" class="text-xs text-accent hover:text-accent-hover">&larr; Back to dashboard</a>
+    {% endif %}
 </div>
+
+{% if review_status %}
+{% if review_status == "rejected" %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4">
+    Held for review: {{ review_status | replace('_', ' ') }}
+</div>
+{% else %}
+<div class="bg-warning/10 border border-warning/20 text-warning rounded-md p-3 text-sm mb-4">
+    Held for review: {{ review_status | replace('_', ' ') }}
+</div>
+{% endif %}
+{% endif %}
 
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md mb-6 overflow-hidden">
     {# Match header info bar #}
@@ -23,6 +39,9 @@
             </div>
             <div>
                 <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Format</span>
+                {% if admin_view|default(false) %}
+                <p class="text-sm dark:text-txt-primary text-txt-primary-light">{{ match.format_ or "—" }}</p>
+                {% else %}
                 <form method="post" action="/matches/{{ match.match_id }}/format" class="inline">
                     <select name="format" onchange="this.form.submit()"
                             class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-2 py-1 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
@@ -37,6 +56,7 @@
                         {% endfor %}
                     </select>
                 </form>
+                {% endif %}
             </div>
             <div>
                 <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Players</span>
@@ -100,12 +120,14 @@
                         {% endif %}
                     </td>
                     <td class="px-4 py-2.5 text-right">
+                        {% if not admin_view|default(false) %}
                         <button class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors"
                             hx-get="/matches/{{ match.match_id }}/games/{{ game.game_number }}/turns"
                             hx-target="#turns-{{ game.game_number }}"
                             hx-swap="innerHTML">
                             Show turns
                         </button>
+                        {% endif %}
                     </td>
                 </tr>
                 <tr>

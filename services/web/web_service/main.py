@@ -1151,6 +1151,7 @@ async def match_detail_page(
             "user": user,
             "match": match,
             "overall_result": overall_result,
+            "review_status": match.review_status,
             "format_options": [
                 "Standard",
                 "Pioneer",
@@ -3425,6 +3426,58 @@ async def admin_matches_list(
             "format_options": _MATCH_FORMAT_OPTIONS,
             "error": None,
             "msg": msg,
+        },
+    )
+
+
+@app.get("/admin/matches/{match_id}", response_class=HTMLResponse)
+async def admin_match_detail_page(
+    match_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Admin match detail — can view any user's match regardless of review status."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        match = await analytics_client.admin_get_match_detail(
+            settings.analytics_service_url, user.token, str(match_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.matches.detail.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /matches/admin/%s call failed", match_id)
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if match is None:
+        return Response(content="Match not found.", status_code=status.HTTP_404_NOT_FOUND)
+
+    overall_result = ""
+    if match.players and match.games:
+        hero = match.hero_player_name or match.players[0]
+        user_wins = sum(1 for g in match.games if g.winner == hero)
+        opp_wins = sum(1 for g in match.games if g.winner is not None and g.winner != hero)
+        if user_wins > opp_wins:
+            overall_result = "W"
+        elif user_wins < opp_wins:
+            overall_result = "L"
+        elif user_wins or opp_wins:
+            overall_result = "D"
+    return templates.TemplateResponse(
+        request,
+        "match_detail.html",
+        {
+            "user": user,
+            "match": match,
+            "overall_result": overall_result,
+            "review_status": match.review_status,
+            "format_options": _MATCH_FORMAT_OPTIONS,
+            "admin_view": True,
         },
     )
 

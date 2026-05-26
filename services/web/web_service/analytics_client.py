@@ -606,6 +606,7 @@ class MatchDetail:
     played_at: datetime | None
     hero_player_name: str | None = None
     games: list[GameItem] = field(default_factory=list)
+    review_status: str | None = None
 
 
 def _to_game(payload: dict[str, Any]) -> GameItem:
@@ -629,6 +630,7 @@ def _to_match_detail(payload: dict[str, Any]) -> MatchDetail:
         played_at=_parse_dt(payload.get("played_at")),
         hero_player_name=payload.get("hero_player_name"),
         games=[_to_game(g) for g in (payload.get("games") or [])],
+        review_status=payload.get("review_status"),
     )
 
 
@@ -649,6 +651,29 @@ async def get_match_detail(base_url: str, token: str, match_id: str) -> MatchDet
     if resp.status_code >= 400:
         raise AnalyticsClientError(
             f"analytics GET /matches/{{id}} returned {resp.status_code}: {resp.text}"
+        )
+    return _to_match_detail(resp.json())
+
+
+async def admin_get_match_detail(base_url: str, token: str, match_id: str) -> MatchDetail | None:
+    """Admin: fetch any match regardless of owner/review status. Returns None on 404."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/matches/admin/{match_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /matches/admin/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code == 404:
+        return None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /matches/admin/{{id}} returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /matches/admin/{{id}} returned {resp.status_code}: {resp.text}"
         )
     return _to_match_detail(resp.json())
 
