@@ -2,155 +2,92 @@
 
 Active and planned outcomes for the Deep Analysis server. Each outcome is named and scoped so it can be picked up and shipped on its own.
 
-Priority numbers are the default working order, but items are independent unless a dependency is called out — pull anything forward when it's the right time.
+Shipped versions are recorded in [CHANGELOG.md](CHANGELOG.md). Tactical bugs live in [GitHub Issues](https://github.com/sentania-labs/deep-analysis-server/issues).
 
-Shipped versions are recorded in [CHANGELOG.md](CHANGELOG.md). Tactical bugs live in [GitHub Issues](https://github.com/sentania/deep-analysis-server/issues).
+---
+
+## Shipped
+
+Previously roadmapped items that are now in production.
+
+- **User profile + hero identification** — MTGO username(s), auto-detection from upload frequency, profile edit, hero/opponent attribution at query time. Shipped v0.8.4–v0.9.6.
+- **Data scraping configuration** — Admin UI for scraper sources (mtgtop8), run status, last-success timestamps. Shipped v0.9.4.
+- **Archetype detection & management** — Admin catalog, ML classifier, metagame browser, per-match archetype display. Shipped v0.9.6.
+- **Game state reconstruction** — Per-turn structured snapshots (zones, life, stack), turn viewer in match detail. Shipped v0.9.0.
+- **Admin invite + role management** — Role at invite time, agent key rotation/deletion. Shipped v0.9.1.
+- **CI auto-deploy on release** — Tag push → Release workflow → Deploy workflow → SSH compose pull/up on edge.int. Shipped v0.7.5.
+- **Cross-user agent management** — Admin key rotation, deletion, revoke across all users. Shipped v0.9.1.
+- **Admin match detail + review** — Admin-scoped match detail view, hold-reason display, read-only inspection. Shipped v0.9.15.
+- **Holding pen for inconclusive parses** — Partial matches flagged `pending_review`, admin accept/reject flow. Shipped v0.9.7.
+- **Dashboard date range filter** — Preset dropdown (7/14/30d) + custom From/To date picker, composes with format filter. Shipped v0.9.13.
+- **Card analytics engine** — Card performance table with sortable columns, avg cast turn, materialized stats. Shipped v0.9.6–v0.9.12.
 
 ---
 
 ## Active
 
-The next 1–3 outcomes to pick up. Priority 1 is current focus.
+The next 1–3 outcomes to pick up.
 
-### 1. User profile expansion + hero identification
+### 1. Matchup analysis dashboard
 
-Lets users record MTGO username(s) so the system can distinguish hero from opponent. Without this, the dashboard sometimes shows the user as their own opponent.
+The core product value — per-user performance breakdowns beyond the current overview stats.
 
-- **Design approach:**
-  - **Upload ownership is the access boundary.** MTGO username does not grant access to matches — it's purely for attribution accuracy within a user's own uploads. This holds for future team/sharing features too: sharing carries the username mapping with it, so recipients see correct hero attribution without username-based access control.
-  - **Auto-detection from upload patterns.** After parsing, the system counts player-name frequency across a user's uploads. The name appearing most often is almost certainly the uploader. Surface as a suggestion: "We think your MTGO username is **X** — confirm?" Runs as a post-parse hook so the suggestion improves with each upload.
-  - **User confirms on profile.** User reviews the suggestion and confirms, edits, or adds alt account names. `_classify_match` in `stats.py` uses the confirmed list instead of the current `players[0]` convention.
-  - **Deferred attribution.** Before the user has 2+ uploads or confirms their name, show both players neutrally — don't guess hero/opponent from a single match.
-  - **Display-time resolution.** Hero vs opponent is resolved at query time, not parse time. No re-parsing or backfill needed — existing matches retroactively show correct attribution the moment the user confirms their username.
 - **Acceptance criteria:**
-  - User profile fields: name, contact info, MTGO username(s) (in addition to existing email)
-  - Users can edit their own values via `/profile/edit`
-  - MTGO username has a format-validity check; contact info is free-form
-  - Auto-detection: system suggests MTGO username based on upload frequency analysis
-  - `_classify_match` uses confirmed MTGO username(s) for hero identification
-  - Existing matches show correct hero/opponent after username is confirmed (no re-parse)
-  - New fields surface in the admin user view
-- **Dependencies:** None
+  - Win rate by archetype played, by archetype faced, by opponent
+  - Archetype-vs-archetype matrix (hero archetype × opponent archetype)
+  - Filterable by format and date range (infrastructure already exists)
+  - Read-only API surface so the AI add-on can query
+- **Dependencies:** Archetype detection (shipped), date filtering (shipped)
 - **Status:** Not started
 
-### 2. Data scraping configuration
+### 2. BNR epoch awareness
 
-Admin UI to define where archetype/decklist data is pulled from. Feeds #3.
+Date filtering with awareness of Banned & Restricted changes, so users can scope stats to "current meta" without manually picking dates.
 
 - **Acceptance criteria:**
-  - Admin can enable, disable, and configure data sources (MTGGoldfish, Untapped, MTGTop8, others)
-  - Per-source: credentials if needed, scrape frequency, last-run status, last-success timestamp
-  - Data lands in a normalized internal format that the archetype detector consumes
+  - Reference data for B&R announcement dates per format (source: mtg.fandom.com/wiki/Banned_and_restricted_cards/Timeline)
+  - Dashboard date filter gains a "Since last B&R" preset per format
+  - Optional: admin UI to manage B&R dates manually
+- **Dependencies:** Date filter (shipped)
+- **Status:** Not started — reference resource identified
+
+### 3. Extended user account actions
+
+Admin tooling beyond the current delete + reset password surface.
+
+- **Acceptance criteria:**
+  - Admin can disable/ban a user (login refused, sessions revoked)
+  - Admin can edit any user's MTGO username and contact info
+  - Actions recorded in audit log
 - **Dependencies:** None
-- **Status:** Not started
-
-### 3. Archetype detection & management
-
-Admin-managed catalog of MTG archetypes plus automatic classification of decks into them.
-
-- **Acceptance criteria:**
-  - Admin-managed archetype catalog: name, format, defining cards, sample decklists
-  - Catalog seeded from scraped sources (#2) and editable/overridable by admin
-  - Auto-classifier: given a decklist, returns the closest archetype + confidence
-  - Surfaces in the match list and per-match detail views
-- **Dependencies:** Depends on #2 when archetype data is sourced externally
 - **Status:** Not started
 
 ---
 
 ## Next up
 
-In rough priority order. Re-shuffle freely when a different next-pick makes more sense.
+In rough priority order. Re-shuffle freely.
 
-### 4. Game state reconstruction from gamelog
+### 4. Server config UI: notifications backend
 
-The parser walks an MTGO gamelog and produces a structured game-state object per game. This is the foundation for richer match analysis (#7) and the virtual-replay stretch goal.
-
-- **Acceptance criteria:**
-  - Per game: structured state including zones (battlefield, hand, library, graveyard, exile), permanents with attached counters/auras, life totals, mana pool, the stack
-  - State is queryable per turn and per player
-  - Stored alongside the parsed match record
-- **Dependencies:** None
-- **Status:** Not started
-
-### 5. Admin user invitation & role management
-
-Extends the existing invite system so admins can invite other admin users, and gives the original installer (the very first registered user, UID=1) tools to manage them.
-
-- **Acceptance criteria:**
-  - Admin invites can specify the role at invite time (admin or user); the role is set when the invite is consumed
-  - Original installer can demote or delete other admin accounts via the admin UI
-  - Demote/delete actions are recorded in an audit log
-  - Non-installer admins cannot manage other admins (reuses the existing UID=1 gating pattern)
-- **Dependencies:** None
-- **Status:** Not started
-
-### 6. CI auto-deploy on release
-
-When the repo has deploy credentials configured, tagging a release automatically updates the running containers on the target host. Silent no-op when credentials are absent so forks still build cleanly.
-
-- **Acceptance criteria:**
-  - New CI workflow triggered on release-tag creation
-  - When repo or org secrets `DOCKER_HOST` (and a deploy SSH/API key) are present, the job pulls the new GHCR images on the target host and runs `docker compose up -d --force-recreate`
-  - Post-deploy smoke check (gateway responds; auth healthy)
-  - Rolls back to previous tag on failure and surfaces a clear error
-  - When secrets are absent, the job is silently skipped (no failure)
-- **Dependencies:** None — parallel work, can run alongside any other outcome
-- **Status:** Not started
-
-### 7. Match analysis (the core product)
-
-Per-user dashboard for what users actually want from the product: how they're performing.
-
-- **Acceptance criteria:**
-  - Performance breakdowns: win rate by archetype played, by archetype faced, by format, by event type, by opponent
-  - Time-window filtering, sortable tables, basic charts
-  - Read-only API surface so the AI add-on can subscribe and query
-- **Dependencies:** Depends on #4 (game state) and #3 (archetypes)
-- **Status:** Not started
-
-### 8. Extended user account actions
-
-Admin tooling to manage individual user accounts beyond the current "delete + reset password" surface.
-
-- **Acceptance criteria:**
-  - Admin can disable a user (login refused; existing sessions revoked); ban is the same disable with no expiry
-  - Admin can edit any user's name, contact info, and MTGO username
-  - Edit and disable actions are recorded in an audit log
-- **Dependencies:** Soft dep on #5 for shared role-management UI patterns
-- **Status:** Not started
-
-### 9. Cross-user agent management
-
-Extends the existing cross-user revoke functionality to also support key rotation and full deletion.
-
-- **Acceptance criteria:**
-  - Admin can trigger a key rotation on any user's agent (revoke existing key, issue new one without deleting the agent)
-  - Admin can delete any user's agent entirely
-  - Both actions surface in the existing cross-user agents view alongside revoke
-- **Dependencies:** None — can run parallel to #8
-- **Status:** Not started
-
-### 10. Server config UI: notifications backend
-
-Admin-configurable notification transport, starting with email. Foundation that the future Discord bot ping idea plugs into.
+Admin-configurable notification transport, starting with email.
 
 - **Acceptance criteria:**
   - Admin UI to configure SMTP transport (host, port, auth, from-address, TLS mode)
-  - "Send test email" button to verify the config end-to-end
-  - Backend abstraction is shaped so additional transports (Discord webhook, etc.) can be added later without rewriting
+  - "Send test email" button for end-to-end verification
+  - Backend shaped for additional transports (Discord webhook, etc.)
 - **Dependencies:** None
 - **Status:** Not started
 
-### 11. Macro match view in admin
+### 5. Macro match view in admin
 
 System-wide match-and-analysis surface for admins.
 
 - **Acceptance criteria:**
-  - All matches across all users, with filtering by user, archetype, format, and date range
-  - Drill into a single match for game-by-game state from #4
+  - All matches across all users, with filtering by user, archetype, format, date range
+  - Drill into single match for game-by-game state and turn viewer
   - Read-only — no admin-edit on match data
-- **Dependencies:** Depends on #7
+- **Dependencies:** None (admin match detail already shipped)
 - **Status:** Not started
 
 ---
@@ -159,7 +96,6 @@ System-wide match-and-analysis surface for admins.
 
 Tactical bugs and small tech-debt items. Resolve when convenient or alongside related work.
 
-- **Admin server version display** — show the running server version somewhere in the admin UI (footer, about page, or admin dashboard). Admin-only; users don't need it.
 - **Issue #4** — `change_password` form lost its inline "wrong current password" error after the AuthForbidden refactor. Falls through to a generic banner instead.
 - **Issue #5** — wrong template renders on `/profile` subpages when the auth service is unreachable. Returns a generic 503 instead of the contextual `_service_unavailable` template.
 
@@ -167,20 +103,16 @@ Tactical bugs and small tech-debt items. Resolve when convenient or alongside re
 
 ## Operational blockers
 
-Non-feature items currently blocking releases or deploys. Resolve as they arise; this section is empty when nothing is in the way.
-
 _None._
 
 ---
 
 ## Future Ideas (Unprioritized)
 
-Parking lot for ideas worth keeping but not currently scheduled. No acceptance criteria yet — promote into Next up when ready to scope.
+Parking lot for ideas worth keeping but not currently scheduled.
 
-- **Virtual game replay** — Cockatrice/xmage-style visual battlefield recreation driven by reconstructed game state from #7. Stretch goal.
-- **Key card identification in matchup analysis** — surface which cards mattered most in a given matchup (depends on #10)
-- **Discord bot integration** — community pings, match summaries, leaderboard posts (depends on #6)
-- **AI add-on integration contract** — formalize the events the proprietary AI repo subscribes to (`match.parsed`, `upload.received`, `insight.requested`); lock the payload shapes
-- **Production observability profile** — the Loki + Grafana + Prometheus stack is already scaffolded behind `docker-compose.observability.yml`. Activating in prod would need provisioned dashboards, a log retention policy, and alerting rules.
-- **Admin can reverse a rejected match decision** — flipping `review_status` from `'rejected'` back to `'pending_review'` (re-flag) or `NULL` (accept). Currently rejection is sticky by design; this lets admins undo mistakes without going to SQL. Sibling of the holding-pen feature.
-- **Admin match detail view** — `/admin/matches/<match_id>` admin-scoped detail page showing full match metadata (players, format, per-game results, raw_match_id, review_status, full game/turn data) so an admin can triage a `pending_review` match before deciding. Currently admins triage only from list-view metadata.
+- **Virtual game replay** — Cockatrice/xmage-style visual battlefield recreation driven by reconstructed game state. Stretch goal.
+- **Key card identification in matchup analysis** — surface which cards mattered most in a given matchup
+- **Discord bot integration** — community pings, match summaries, leaderboard posts
+- **AI add-on integration contract** — formalize the events the proprietary AI repo subscribes to; lock payload shapes
+- **Production observability profile** — Loki + Grafana + Prometheus stack already scaffolded behind compose overlay. Needs dashboards, retention policy, alerting rules.
