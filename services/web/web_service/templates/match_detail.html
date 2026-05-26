@@ -49,6 +49,7 @@
                 <p class="text-sm dark:text-txt-primary text-txt-primary-light">{{ match.format_ or "—" }}</p>
                 {% else %}
                 <form method="post" action="/matches/{{ match.match_id }}/format" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <select name="format" onchange="this.form.submit()"
                             class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-2 py-1 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
                         {% if not match.format_ %}

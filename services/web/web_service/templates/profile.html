@@ -75,6 +75,7 @@
                             @click="reparseOpen = false"
                             class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 text-sm transition-colors">Cancel</button>
                     <form method="post" action="/profile/reparse" class="inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit"
                                 class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">Reparse</button>
                     </form>

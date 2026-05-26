@@ -57,6 +57,7 @@
                                   action="/admin/archetypes/{{ a.id }}/delete"
                                   class="inline"
                                   onsubmit="return confirm('Delete archetype {{ a.name }}? Matches tagged with it will be untagged.');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button>
                             </form>
                         </div>
