@@ -43,11 +43,12 @@ class RateLimiter:
     _CLEANUP_INTERVAL: float = 60.0
 
     def _cleanup(self, now: float, rules: dict[str, RateLimitRule]) -> None:
-        """Remove entries older than the longest window."""
-        max_window = max((r.window_seconds for r in rules.values()), default=0)
-        cutoff = now - max_window - 1
+        """Remove entries older than each bucket's own window."""
         dead_keys: list[tuple[str, str]] = []
         for key, timestamps in self._store.items():
+            bucket = key[0]
+            rule = rules.get(bucket)
+            cutoff = now - (rule.window_seconds if rule else 3600) - 1
             timestamps[:] = [t for t in timestamps if t > cutoff]
             if not timestamps:
                 dead_keys.append(key)
@@ -73,7 +74,7 @@ class RateLimiter:
 
         with self._lock:
             if now - self._last_cleanup > self._CLEANUP_INTERVAL:
-                self._cleanup(now, all_rules or {bucket: rule})
+                self._cleanup(now, all_rules or RULES)
 
             timestamps = self._store.setdefault(key, [])
             cutoff = now - rule.window_seconds
