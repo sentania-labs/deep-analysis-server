@@ -30,7 +30,7 @@ _log = logging.getLogger("parser.backfill")
 
 _UNPARSED_SQL = text(
     """
-    SELECT DISTINCT u.sha256, u.user_id
+    SELECT u.sha256, u.user_id
       FROM ingest.user_uploads u
       JOIN ingest.game_log_files g ON g.sha256 = u.sha256
       LEFT JOIN parser.matches m
@@ -41,6 +41,8 @@ _UNPARSED_SQL = text(
            OR m.parsed_with_version IS NULL
            OR m.parsed_with_version < :min_version
        )
+     GROUP BY u.sha256, u.user_id
+     ORDER BY MAX(u.uploaded_at) DESC
      LIMIT :batch_size
     """
 )
