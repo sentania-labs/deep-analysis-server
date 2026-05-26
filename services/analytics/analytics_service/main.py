@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from analytics_service.archetypes import router as archetypes_router
+from analytics_service.bnr_events import router as bnr_events_router
 from analytics_service.card_stats import router as card_stats_router
 from analytics_service.cards import router as cards_router
 from analytics_service.db import get_session, get_sessionmaker
@@ -352,6 +353,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 mount_metrics(app, SERVICE_NAME)
 app.include_router(archetypes_router)
+app.include_router(bnr_events_router)
 app.include_router(stats_router)
 app.include_router(game_stats_router)
 app.include_router(card_stats_router)

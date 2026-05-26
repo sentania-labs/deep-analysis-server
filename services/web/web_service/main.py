@@ -313,6 +313,16 @@ async def dashboard(
                 filtered_summary = row
                 break
 
+    # Fetch B&R events for the selected format (epoch presets in date filter)
+    bnr_events: list[Any] = []
+    if format_filter:
+        try:
+            bnr_events = await analytics_client.get_bnr_events_by_format(
+                settings.analytics_service_url, user.token, format_filter
+            )
+        except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
+            _log.debug("bnr events unavailable for format %s", format_filter)
+
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -329,6 +339,7 @@ async def dashboard(
             "filtered_summary": filtered_summary,
             "date_from": date_from,
             "date_to": date_to,
+            "bnr_events": bnr_events,
         },
     )
 
@@ -3849,6 +3860,375 @@ async def admin_archetypes_delete(
     return Response(
         content="Could not delete archetype.",
         status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin B&R Events — CRUD + wiki import
+# ---------------------------------------------------------------------------
+
+
+def _parse_card_actions(raw: str) -> list[dict]:
+    """Parse card actions from a textarea.
+
+    Each line is ``Card Name | action``. Returns a list of dicts
+    like ``[{"card": "Fury", "action": "banned"}]``. Lines that
+    don't match the pattern are silently ignored.
+    """
+    actions: list[dict] = []
+    valid_actions = {"banned", "unbanned", "restricted", "unrestricted", "suspended"}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" not in line:
+            continue
+        parts = line.rsplit("|", 1)
+        card = parts[0].strip()
+        action = parts[1].strip().lower()
+        if card and action in valid_actions:
+            actions.append({"card": card, "action": action})
+    return actions
+
+
+@app.get("/admin/bnr-events", response_class=HTMLResponse)
+async def admin_bnr_events_list(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    error = request.query_params.get("error")
+    success = request.query_params.get("success")
+
+    try:
+        items, total = await analytics_client.admin_list_bnr_events(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.list.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /bnr-events call failed")
+        return templates.TemplateResponse(
+            request,
+            "admin_bnr_events.html",
+            {
+                "user": user,
+                "events": [],
+                "total": 0,
+                "error": "Analytics service unavailable. Please try again.",
+                "success": None,
+            },
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin_bnr_events.html",
+        {
+            "user": user,
+            "events": items,
+            "total": total,
+            "error": error,
+            "success": success,
+        },
+    )
+
+
+@app.get("/admin/bnr-events/new", response_class=HTMLResponse)
+async def admin_bnr_events_new_form(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    return templates.TemplateResponse(
+        request,
+        "admin_bnr_events_edit.html",
+        {
+            "user": user,
+            "mode": "create",
+            "event_id": None,
+            "description": "",
+            "format": "",
+            "effective_date": "",
+            "card_actions_text": "",
+            "error": None,
+        },
+    )
+
+
+@app.post("/admin/bnr-events/create")
+async def admin_bnr_events_create(
+    request: Request,
+    description: Annotated[str, Form()],
+    format: Annotated[str, Form()],
+    effective_date: Annotated[str, Form()],
+    card_actions: Annotated[str, Form()] = "",
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    submitted_description = description.strip()
+    submitted_format = format.strip()
+    submitted_date = effective_date.strip()
+    actions = _parse_card_actions(card_actions or "")
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "admin_bnr_events_edit.html",
+            {
+                "user": user,
+                "mode": "create",
+                "event_id": None,
+                "description": submitted_description,
+                "format": submitted_format,
+                "effective_date": submitted_date,
+                "card_actions_text": (card_actions or ""),
+                "error": message,
+            },
+            status_code=code,
+        )
+
+    if not submitted_description:
+        return _render_error("Description is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_format:
+        return _render_error("Format is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_date:
+        return _render_error("Effective date is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        item, err = await analytics_client.admin_create_bnr_event(
+            settings.analytics_service_url,
+            user.token,
+            format_=submitted_format,
+            effective_date=submitted_date,
+            description=submitted_description,
+            card_actions=actions,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.create.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /bnr-events call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if item is None:
+        return _render_error(
+            "Could not create B&R event.",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    return RedirectResponse(url="/admin/bnr-events", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/admin/bnr-events/{event_id}/edit", response_class=HTMLResponse)
+async def admin_bnr_events_edit_form(
+    event_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        item = await analytics_client.admin_get_bnr_event(
+            settings.analytics_service_url, user.token, str(event_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.edit.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics GET /bnr-events/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if item is None:
+        return Response(
+            content="That B&R event no longer exists.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    # Build card_actions_text from the stored actions
+    lines = []
+    for ca in item.card_actions:
+        card = ca.get("card", "")
+        action = ca.get("action", "")
+        if card and action:
+            lines.append(f"{card} | {action}")
+    return templates.TemplateResponse(
+        request,
+        "admin_bnr_events_edit.html",
+        {
+            "user": user,
+            "mode": "edit",
+            "event_id": item.id,
+            "description": item.description,
+            "format": item.format,
+            "effective_date": item.effective_date,
+            "card_actions_text": "\n".join(lines),
+            "error": None,
+        },
+    )
+
+
+@app.post("/admin/bnr-events/{event_id}/edit")
+async def admin_bnr_events_edit(
+    event_id: uuid.UUID,
+    request: Request,
+    description: Annotated[str, Form()],
+    format: Annotated[str, Form()],
+    effective_date: Annotated[str, Form()],
+    card_actions: Annotated[str, Form()] = "",
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    submitted_description = description.strip()
+    submitted_format = format.strip()
+    submitted_date = effective_date.strip()
+    actions = _parse_card_actions(card_actions or "")
+
+    def _render_error(message: str, code: int) -> Response:
+        return templates.TemplateResponse(
+            request,
+            "admin_bnr_events_edit.html",
+            {
+                "user": user,
+                "mode": "edit",
+                "event_id": str(event_id),
+                "description": submitted_description,
+                "format": submitted_format,
+                "effective_date": submitted_date,
+                "card_actions_text": (card_actions or ""),
+                "error": message,
+            },
+            status_code=code,
+        )
+
+    if not submitted_description:
+        return _render_error("Description is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_format:
+        return _render_error("Format is required.", status.HTTP_400_BAD_REQUEST)
+    if not submitted_date:
+        return _render_error("Effective date is required.", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        item, err = await analytics_client.admin_update_bnr_event(
+            settings.analytics_service_url,
+            user.token,
+            str(event_id),
+            format_=submitted_format,
+            effective_date=submitted_date,
+            description=submitted_description,
+            card_actions=actions,
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.update.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics PUT /bnr-events/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if err == "bnr_event_not_found":
+        return _render_error("That B&R event no longer exists.", status.HTTP_404_NOT_FOUND)
+    if item is None:
+        return _render_error("Could not update B&R event.", status.HTTP_400_BAD_REQUEST)
+    return RedirectResponse(url="/admin/bnr-events", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/admin/bnr-events/{event_id}/delete")
+async def admin_bnr_events_delete(
+    event_id: uuid.UUID,
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        ok, err = await analytics_client.admin_delete_bnr_event(
+            settings.analytics_service_url, user.token, str(event_id)
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.delete.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics DELETE /bnr-events/{id} call failed")
+        return Response(
+            content="Analytics service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if ok:
+        return RedirectResponse(url="/admin/bnr-events", status_code=status.HTTP_303_SEE_OTHER)
+
+    if err == "bnr_event_not_found":
+        return RedirectResponse(
+            url="/admin/bnr-events?error=That+event+no+longer+exists.",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    return Response(
+        content="Could not delete B&R event.",
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.post("/admin/bnr-events/import-wiki")
+async def admin_bnr_events_import_wiki(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result = await analytics_client.admin_import_bnr_wiki(
+            settings.analytics_service_url, user.token
+        )
+    except analytics_client.AnalyticsForbidden:
+        _log.info("admin.bnr_events.import_wiki.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics POST /bnr-events/import-wiki call failed")
+        return RedirectResponse(
+            url="/admin/bnr-events?error=Wiki+import+failed.+Analytics+service+unavailable.",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    imported = result.get("imported", 0)
+    skipped = result.get("skipped", 0)
+    errors = result.get("errors", [])
+    parts = [f"Imported {imported}", f"skipped {skipped}"]
+    if errors:
+        parts.append(f"errors: {len(errors)}")
+    msg = ", ".join(parts) + "."
+    param = "success" if not errors else "error"
+    return RedirectResponse(
+        url=f"/admin/bnr-events?{param}={msg.replace(' ', '+')}",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

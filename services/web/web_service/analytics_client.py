@@ -1606,6 +1606,233 @@ async def admin_get_scraper_events(
     return dict(resp.json())
 
 
+# ---------------------------------------------------------------------------
+# B&R Events
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BnrEventItem:
+    id: str
+    format: str
+    effective_date: str  # ISO date string
+    description: str
+    card_actions: list[dict]
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+def _to_bnr_event(payload: dict[str, Any]) -> BnrEventItem:
+    return BnrEventItem(
+        id=str(payload["id"]),
+        format=str(payload["format"]),
+        effective_date=str(payload["effective_date"]),
+        description=str(payload["description"]),
+        card_actions=list(payload.get("card_actions") or []),
+        created_at=_parse_dt(payload.get("created_at")),
+        updated_at=_parse_dt(payload.get("updated_at")),
+    )
+
+
+async def admin_list_bnr_events(
+    base_url: str,
+    token: str,
+) -> tuple[list[BnrEventItem], int]:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/bnr-events",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics GET /bnr-events transport error: {exc}") from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /bnr-events returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /bnr-events returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    items = [_to_bnr_event(e) for e in data.get("events", [])]
+    return items, int(data.get("total", len(items)))
+
+
+async def admin_get_bnr_event(
+    base_url: str,
+    token: str,
+    event_id: str,
+) -> BnrEventItem | None:
+    """Fetch a single B&R event. Returns None on 404."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/bnr-events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /bnr-events/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code == 404:
+        return None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /bnr-events/{{id}} returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /bnr-events/{{id}} returned {resp.status_code}: {resp.text}"
+        )
+    return _to_bnr_event(resp.json())
+
+
+async def admin_create_bnr_event(
+    base_url: str,
+    token: str,
+    *,
+    format_: str,
+    effective_date: str,
+    description: str,
+    card_actions: list[dict],
+) -> tuple[BnrEventItem | None, str | None]:
+    """Create. Returns (item, None) on success; (None, error_code) on 4xx."""
+    body = {
+        "format": format_,
+        "effective_date": effective_date,
+        "description": description,
+        "card_actions": card_actions,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/bnr-events",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(f"analytics POST /bnr-events transport error: {exc}") from exc
+    if resp.status_code in (200, 201):
+        return _to_bnr_event(resp.json()), None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics POST /bnr-events returned {resp.status_code}")
+    if resp.status_code in (400, 422):
+        return None, "invalid_input"
+    raise AnalyticsClientError(
+        f"analytics POST /bnr-events returned {resp.status_code}: {resp.text}"
+    )
+
+
+async def admin_update_bnr_event(
+    base_url: str,
+    token: str,
+    event_id: str,
+    *,
+    format_: str,
+    effective_date: str,
+    description: str,
+    card_actions: list[dict],
+) -> tuple[BnrEventItem | None, str | None]:
+    body = {
+        "format": format_,
+        "effective_date": effective_date,
+        "description": description,
+        "card_actions": card_actions,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.put(
+                f"{base_url}/analytics/bnr-events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics PUT /bnr-events/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code == 200:
+        return _to_bnr_event(resp.json()), None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics PUT /bnr-events/{{id}} returned {resp.status_code}")
+    if resp.status_code == 404:
+        return None, "bnr_event_not_found"
+    if resp.status_code in (400, 422):
+        return None, "invalid_input"
+    raise AnalyticsClientError(
+        f"analytics PUT /bnr-events/{{id}} returned {resp.status_code}: {resp.text}"
+    )
+
+
+async def admin_delete_bnr_event(
+    base_url: str,
+    token: str,
+    event_id: str,
+) -> tuple[bool, str | None]:
+    """Delete. (True, None) on 204, (False, code) on 404."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.delete(
+                f"{base_url}/analytics/bnr-events/{event_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics DELETE /bnr-events/{{id}} transport error: {exc}"
+        ) from exc
+    if resp.status_code == 204:
+        return True, None
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics DELETE /bnr-events/{{id}} returned {resp.status_code}")
+    if resp.status_code == 404:
+        return False, "bnr_event_not_found"
+    raise AnalyticsClientError(
+        f"analytics DELETE /bnr-events/{{id}} returned {resp.status_code}: {resp.text}"
+    )
+
+
+async def admin_import_bnr_wiki(base_url: str, token: str) -> dict[str, Any]:
+    """Trigger wiki import. Returns WikiImportResult as dict."""
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{base_url}/analytics/bnr-events/import-wiki",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics POST /bnr-events/import-wiki transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(
+            f"analytics POST /bnr-events/import-wiki returned {resp.status_code}"
+        )
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics POST /bnr-events/import-wiki returned {resp.status_code}: {resp.text}"
+        )
+    return dict(resp.json())
+
+
+async def get_bnr_events_by_format(base_url: str, token: str, format_: str) -> list[BnrEventItem]:
+    """Non-admin: fetch BNR events for a specific format (dashboard use)."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{base_url}/analytics/bnr-events/by-format",
+                params={"format": format_},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+    except httpx.HTTPError as exc:
+        raise AnalyticsClientError(
+            f"analytics GET /bnr-events/by-format transport error: {exc}"
+        ) from exc
+    if resp.status_code in (401, 403):
+        raise AnalyticsForbidden(f"analytics GET /bnr-events/by-format returned {resp.status_code}")
+    if resp.status_code >= 400:
+        raise AnalyticsClientError(
+            f"analytics GET /bnr-events/by-format returned {resp.status_code}: {resp.text}"
+        )
+    data = resp.json()
+    return [_to_bnr_event(e) for e in data.get("events", [])]
+
+
 async def admin_get_scraper_event_detail(
     base_url: str,
     token: str,

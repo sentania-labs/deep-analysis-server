@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}Admin · Archetypes ·
+{% block title %}Admin · B&R Events ·
     {% if mode == "create" %}New{% else %}Edit{% endif %} ·
     Deep Analysis{% endblock %}
 
 {% block content %}
 <div class="mb-6">
     <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">
-        {% if mode == "create" %}New archetype{% else %}Edit archetype{% endif %}
+        {% if mode == "create" %}New B&R event{% else %}Edit B&R event{% endif %}
     </h1>
 </div>
 
@@ -16,8 +16,8 @@
     <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
     <a href="/admin/agents" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Agents</a>
     <a href="/admin/matches" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Matches</a>
-    <a href="/admin/archetypes" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">Archetypes</a>
-    <a href="/admin/bnr-events" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">B&R Events</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/bnr-events" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">B&R Events</a>
     <a href="/admin/cards" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Cards</a>
     <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
     <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
@@ -30,11 +30,12 @@
 
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 max-w-xl">
     <form method="post"
-          action="{% if mode == 'create' %}/admin/archetypes/create{% else %}/admin/archetypes/{{ archetype_id }}/edit{% endif %}"
+          action="{% if mode == 'create' %}/admin/bnr-events/create{% else %}/admin/bnr-events/{{ event_id }}/edit{% endif %}"
           class="flex flex-col gap-4">
         <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Name</span>
-            <input type="text" name="name" value="{{ name }}" required maxlength="200"
+            <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Description</span>
+            <input type="text" name="description" value="{{ description }}" required maxlength="500"
+                   placeholder="e.g. December 2024 B&R Update"
                    class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-2 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
         </label>
         <label class="flex flex-col gap-1">
@@ -44,16 +45,22 @@
                    class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-2 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
         </label>
         <label class="flex flex-col gap-1">
-            <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Defining cards (one per line)</span>
-            <textarea name="defining_cards" rows="12" cols="60"
-                      placeholder="Lightning Bolt&#10;Goblin Guide&#10;..."
-                      class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-2 text-sm font-mono dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">{{ defining_cards_text }}</textarea>
+            <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Effective date</span>
+            <input type="date" name="effective_date" value="{{ effective_date }}" required
+                   class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-2 text-sm dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">
+        </label>
+        <label class="flex flex-col gap-1">
+            <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Card actions (one per line)</span>
+            <textarea name="card_actions" rows="8" cols="60"
+                      placeholder="Fury | banned&#10;Up the Beanstalk | banned&#10;Grief | unbanned"
+                      class="dark:bg-surface-3 bg-surface-light-3 border dark:border-border border-border-light rounded-md px-3 py-2 text-sm font-mono dark:text-txt-primary text-txt-primary-light focus:ring-2 focus:ring-accent focus:border-accent outline-none">{{ card_actions_text }}</textarea>
+            <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light mt-0.5">One card per line: Card Name | action. Valid actions: banned, unbanned, restricted, unrestricted, suspended</p>
         </label>
         <div class="flex gap-2 mt-2">
             <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium transition-colors">
                 {% if mode == "create" %}Create{% else %}Save changes{% endif %}
             </button>
-            <a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 text-sm no-underline transition-colors" href="/admin/archetypes">Cancel</a>
+            <a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 text-sm no-underline transition-colors" href="/admin/bnr-events">Cancel</a>
         </div>
     </form>
 </div>

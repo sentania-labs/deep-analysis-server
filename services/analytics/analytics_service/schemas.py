@@ -260,3 +260,43 @@ class TrainResult(BaseModel):
     label_count: int = 0
     accuracy: float = 0.0
     message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# B&R Events schemas
+# ---------------------------------------------------------------------------
+
+
+class CardAction(BaseModel):
+    card: str = Field(..., min_length=1)
+    action: str = Field(..., pattern="^(banned|unbanned|restricted|unrestricted|suspended)$")
+
+
+class BnrEventRecord(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    format: str
+    effective_date: date
+    description: str
+    card_actions: list[CardAction] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class BnrEventListView(BaseModel):
+    events: list[BnrEventRecord]
+    total: int
+
+
+class BnrEventWriteRequest(BaseModel):
+    format: str = Field(..., min_length=1, max_length=64)
+    effective_date: date
+    description: str = Field(..., min_length=1, max_length=500)
+    card_actions: list[CardAction] = Field(default_factory=list)
+
+
+class WikiImportResult(BaseModel):
+    imported: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)
