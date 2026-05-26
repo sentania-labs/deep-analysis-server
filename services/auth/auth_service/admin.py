@@ -765,6 +765,8 @@ async def _read_motd(db: AsyncSession) -> MotdView:
     if expires_at_str:
         try:
             expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
         except ValueError:
             expires_at = None
 
