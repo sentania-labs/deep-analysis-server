@@ -50,7 +50,7 @@ class _FakePubSub:
     async def subscribe(self, channel: str) -> None:
         self.subscribed_channels.append(channel)
 
-    async def listen(self):  # type: ignore[override]
+    async def listen(self):
         for msg in self._messages:
             yield msg
         raise ConnectionError("Redis gone")
@@ -153,9 +153,7 @@ async def test_processes_messages_after_reconnect() -> None:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert 42 in invalidated_users, (
-        f"Expected user 42 to be invalidated, got {invalidated_users}"
-    )
+    assert 42 in invalidated_users, f"Expected user 42 to be invalidated, got {invalidated_users}"
 
 
 @pytest.mark.asyncio

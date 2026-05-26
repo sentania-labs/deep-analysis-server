@@ -299,9 +299,7 @@ async def _cache_invalidation_loop() -> None:
                     if user_id is not None:
                         deleted = await invalidate_user(redis_client, int(user_id))
                         if deleted:
-                            _log.debug(
-                                "invalidated %d cache keys for user_id=%s", deleted, user_id
-                            )
+                            _log.debug("invalidated %d cache keys for user_id=%s", deleted, user_id)
                 except Exception:  # noqa: BLE001
                     _log.warning("cache invalidation message handling failed", exc_info=True)
         except asyncio.CancelledError:
