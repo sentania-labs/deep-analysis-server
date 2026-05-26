@@ -26,30 +26,36 @@ from common.health import (
 
 
 def test_health_report_all_ok() -> None:
-    report = HealthReport(checks=[
-        CheckResult(name="db", ok=True),
-        CheckResult(name="redis", ok=True),
-    ])
+    report = HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
     assert report.healthy is True
     assert report.status == "ok"
     assert report.http_status == 200
 
 
 def test_health_report_one_failed() -> None:
-    report = HealthReport(checks=[
-        CheckResult(name="db", ok=False, detail="error"),
-        CheckResult(name="redis", ok=True),
-    ])
+    report = HealthReport(
+        checks=[
+            CheckResult(name="db", ok=False, detail="error"),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
     assert report.healthy is False
     assert report.status == "degraded"
     assert report.http_status == 503
 
 
 def test_health_report_to_dict() -> None:
-    report = HealthReport(checks=[
-        CheckResult(name="db", ok=True),
-        CheckResult(name="redis", ok=False, detail="error"),
-    ])
+    report = HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=False, detail="error"),
+        ]
+    )
     d = report.to_dict("auth")
     assert d == {
         "status": "degraded",

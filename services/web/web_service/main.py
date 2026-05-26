@@ -133,10 +133,12 @@ async def healthz() -> JSONResponse:
     from common.health import check_http, evaluate
 
     settings = get_settings()
-    report = await evaluate([
-        check_http(f"{settings.auth_service_url}/healthz", "auth"),
-        check_http(f"{settings.analytics_service_url}/healthz", "analytics"),
-    ])
+    report = await evaluate(
+        [
+            check_http(f"{settings.auth_service_url}/healthz", "auth"),
+            check_http(f"{settings.analytics_service_url}/healthz", "analytics"),
+        ]
+    )
     return JSONResponse(
         content=report.to_dict(SERVICE_NAME),
         status_code=report.http_status,
