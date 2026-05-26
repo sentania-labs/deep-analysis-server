@@ -3477,6 +3477,7 @@ async def admin_match_detail_page(
             "overall_result": overall_result,
             "review_status": match.review_status,
             "format_options": _MATCH_FORMAT_OPTIONS,
+            "admin_view": True,
         },
     )
 
