@@ -66,6 +66,16 @@
         }
     }
 
+    handle /postgres/metrics {
+        rewrite * /metrics
+        reverse_proxy postgres-exporter:9187
+    }
+
+    handle /redis/metrics {
+        rewrite * /metrics
+        reverse_proxy redis-exporter:9121
+    }
+
     # Bounded keepalive recycles pooled connections every 30s so a
     # silently-replaced upstream container can't strand a stale pool
     # entry between deploys.
