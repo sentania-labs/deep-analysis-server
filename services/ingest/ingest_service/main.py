@@ -157,8 +157,19 @@ def reset_publisher() -> None:
 
 @app.get("/healthz")
 @app.get("/ingest/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": SERVICE_NAME}
+async def healthz() -> JSONResponse:
+    from common.health import check_db, check_redis, evaluate
+    from ingest_service.db import get_sessionmaker as _get_sm
+
+    redis_client = await get_redis(get_settings().redis_url)
+    report = await evaluate([
+        check_db(_get_sm()),
+        check_redis(redis_client),
+    ])
+    return JSONResponse(
+        content=report.to_dict(SERVICE_NAME),
+        status_code=report.http_status,
+    )
 
 
 def _too_large() -> HTTPException:

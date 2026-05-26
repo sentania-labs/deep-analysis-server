@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -136,8 +137,18 @@ def _client_ip(request: Request) -> str | None:
 
 @app.get("/healthz")
 @app.get("/auth/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": SERVICE_NAME}
+async def healthz() -> Response:
+    from auth_service.db import get_sessionmaker as _get_sm
+    from common.health import check_db, check_redis, evaluate
+
+    report = await evaluate([
+        check_db(_get_sm()),
+        check_redis(_get_or_create_redis()),
+    ])
+    return JSONResponse(
+        content=report.to_dict(SERVICE_NAME),
+        status_code=report.http_status,
+    )
 
 
 @app.post("/auth/login", response_model=TokenResponse)

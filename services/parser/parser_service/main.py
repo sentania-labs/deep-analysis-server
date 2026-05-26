@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from common.logging import configure_logging
 from common.metrics import mount_metrics
@@ -121,5 +122,15 @@ app.include_router(_reparse_router)
 
 @app.get("/healthz")
 @app.get("/parser/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": SERVICE_NAME}
+async def healthz() -> JSONResponse:
+    from common.health import check_db, check_redis, evaluate
+
+    redis_client = await get_redis(get_settings().redis_url)
+    report = await evaluate([
+        check_db(get_sessionmaker()),
+        check_redis(redis_client),
+    ])
+    return JSONResponse(
+        content=report.to_dict(SERVICE_NAME),
+        status_code=report.http_status,
+    )
