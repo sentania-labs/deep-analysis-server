@@ -16,17 +16,25 @@
     preset: '{{ 'custom' if date_active else 'all' }}',
     dateFrom: '{{ date_from|default('') }}',
     dateTo: '{{ date_to|default('') }}',
+    bnrDates: {{ bnr_events|map(attribute='effective_date')|list|tojson if bnr_events else '[]' }},
     localDate(d) {
         const y = d.getFullYear();
         const m = String(d.getMonth() + 1).padStart(2, '0');
         const day = String(d.getDate()).padStart(2, '0');
         return y + '-' + m + '-' + day;
     },
-    selectPreset(days) {
-        if (days === 0) {
+    selectPreset(value) {
+        if (value === 'all' || value === '0') {
             this.dateFrom = '';
             this.dateTo = '';
+        } else if (value.startsWith('bnr_')) {
+            const idx = parseInt(value.split('_')[1]) - 1;
+            if (idx >= 0 && idx < this.bnrDates.length) {
+                this.dateFrom = this.bnrDates[idx];
+                this.dateTo = this.localDate(new Date());
+            }
         } else {
+            const days = parseInt(value);
             const to = new Date();
             const from = new Date();
             from.setDate(from.getDate() - days + 1);
@@ -46,13 +54,20 @@
 }" class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md px-4 py-3 mb-6 flex flex-wrap items-center gap-3">
     <label class="text-xs dark:text-txt-secondary text-txt-secondary-light font-medium">Date range</label>
     <select x-model="preset"
-            @change="if (preset !== 'custom') selectPreset(preset === 'all' ? 0 : parseInt(preset))"
+            @change="if (preset !== 'custom') selectPreset(preset)"
             class="text-sm dark:bg-surface-2 bg-surface-light-2 border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light rounded-md px-2 py-1">
         <option value="all">All time</option>
         <option value="7">Last 7 days</option>
         <option value="14">Last 14 days</option>
         <option value="30">Last 30 days</option>
         <option value="custom" x-show="preset === 'custom'">Custom</option>
+        {% if bnr_events|default([]) %}
+        <optgroup label="Since B&R change ({{ format_filter }})">
+            {% for evt in bnr_events %}
+            <option value="bnr_{{ loop.index }}">Since: {{ evt.description }} ({{ evt.effective_date }})</option>
+            {% endfor %}
+        </optgroup>
+        {% endif %}
     </select>
     <div class="flex items-center gap-2">
         <input type="date" x-model="dateFrom"

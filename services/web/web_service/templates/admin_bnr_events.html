@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Admin · B&R Events · Deep Analysis{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">B&R Events</h1>
+</div>
+
+{# Admin tabs #}
+<nav class="flex gap-1 border-b dark:border-border border-border-light mb-6 overflow-x-auto">
+    <a href="/admin/users" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Users</a>
+    <a href="/admin/agents" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Agents</a>
+    <a href="/admin/matches" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Matches</a>
+    <a href="/admin/archetypes" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Archetypes</a>
+    <a href="/admin/bnr-events" class="px-4 py-2 text-sm font-medium text-accent border-b-2 border-accent no-underline whitespace-nowrap">B&R Events</a>
+    <a href="/admin/cards" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Cards</a>
+    <a href="/admin/invites" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Invites</a>
+    <a href="/admin/settings" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Settings</a>
+    <a href="/admin/scrapers" class="px-4 py-2 text-sm dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light border-b-2 border-transparent no-underline whitespace-nowrap">Scrapers</a>
+</nav>
+
+{% if error %}
+<div class="bg-danger-muted border border-danger/20 text-danger rounded-md p-3 text-sm mb-4" role="alert">{{ error }}</div>
+{% endif %}
+
+{% if success %}
+<div class="bg-success-muted border border-success/20 text-success rounded-md p-3 text-sm mb-4" role="status">{{ success }}</div>
+{% endif %}
+
+<div class="mb-4 flex gap-2">
+    <a class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-2 text-sm font-medium no-underline transition-colors" href="/admin/bnr-events/new">New event</a>
+    <form method="post" action="/admin/bnr-events/import-wiki" class="inline">
+        <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-4 py-2 text-sm font-medium transition-colors cursor-pointer bg-transparent"
+                onclick="this.disabled=true; this.textContent='Importing...'; this.form.submit();">Import from wiki</button>
+    </form>
+</div>
+
+{% if not events %}
+    <p class="dark:text-txt-secondary text-txt-secondary-light text-sm">No B&R events defined yet.</p>
+{% else %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b dark:border-border border-border-light">
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Description</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Format</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Effective Date</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Cards</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for evt in events %}
+                <tr id="bnr-{{ evt.id }}" class="border-b dark:border-border-subtle border-border-light hover:dark:bg-surface-2 hover:bg-surface-light-2 transition-colors">
+                    <td class="px-4 py-2.5 text-sm font-medium dark:text-txt-primary text-txt-primary-light">{{ evt.description }}</td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-secondary text-txt-secondary-light">{{ evt.format }}</td>
+                    <td class="px-4 py-2.5 text-sm font-mono dark:text-txt-secondary text-txt-secondary-light">{{ evt.effective_date }}</td>
+                    <td class="px-4 py-2.5 text-sm dark:text-txt-secondary text-txt-secondary-light">
+                        {% for ca in evt.card_actions %}{% if not loop.first %}, {% endif %}{% set card_name = ca.card if ca.card is defined else ca['card'] %}{% set card_action = ca.action if ca.action is defined else ca['action'] %}<span class="{% if card_action == 'banned' %}text-danger{% elif card_action == 'unbanned' %}text-success{% elif card_action == 'restricted' %}text-warning{% elif card_action == 'unrestricted' %}text-success{% elif card_action == 'suspended' %}text-warning{% endif %}">{{ card_name }} {{ card_action }}</span>{% endfor %}
+                    </td>
+                    <td class="px-4 py-2.5 text-right">
+                        <div class="flex gap-1 justify-end">
+                            <a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/bnr-events/{{ evt.id }}/edit">Edit</a>
+                            <form method="post"
+                                  action="/admin/bnr-events/{{ evt.id }}/delete"
+                                  class="inline"
+                                  onsubmit="return confirm('Delete this B&R event?');">
+                                <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="px-4 py-3 border-t dark:border-border border-border-light">
+        <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
+            <span class="font-mono">{{ total }}</span> event{{ "" if total == 1 else "s" }}.
+        </p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
