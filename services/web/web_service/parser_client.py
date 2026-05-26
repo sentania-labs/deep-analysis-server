@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import httpx
+from web_service.http_helper import raw_request
 
 
 class ParserClientError(Exception):
@@ -32,6 +32,10 @@ class ParserRateLimited(Exception):
         self.retry_at = retry_at
 
 
+# Shorthand kwargs for all parser helpers.
+_ERR_RAW = {"error_cls": ParserClientError}
+
+
 @dataclass
 class DeletedCountResult:
     deleted_count: int
@@ -51,15 +55,15 @@ async def delete_my_matches(
     params: dict[str, str] = {}
     if agent_id is not None:
         params["agent_id"] = agent_id
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.delete(
-                f"{base_url}/parser/matches",
-                headers={"Authorization": f"Bearer {token}"},
-                params=params,
-            )
-    except httpx.HTTPError as exc:
-        raise ParserClientError(f"parser DELETE /parser/matches transport error: {exc}") from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/parser/matches",
+        token=token,
+        timeout=30.0,
+        params=params,
+        error_prefix="parser DELETE /parser/matches ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise ParserForbidden(f"parser DELETE /parser/matches returned {resp.status_code}")
     if resp.status_code >= 400:
@@ -75,16 +79,14 @@ async def admin_delete_all_matches(
     token: str,
 ) -> DeletedCountResult:
     """Admin nuclear: delete ALL parsed matches across all users."""
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.delete(
-                f"{base_url}/parser/admin/matches",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise ParserClientError(
-            f"parser DELETE /parser/admin/matches transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/parser/admin/matches",
+        token=token,
+        timeout=60.0,
+        error_prefix="parser DELETE /parser/admin/matches ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise ParserForbidden(f"parser DELETE /parser/admin/matches returned {resp.status_code}")
     if resp.status_code >= 400:
@@ -110,17 +112,15 @@ async def admin_delete_user_matches(
     params: dict[str, str] = {}
     if agent_id is not None:
         params["agent_id"] = agent_id
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.delete(
-                f"{base_url}/parser/admin/matches/{user_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                params=params,
-            )
-    except httpx.HTTPError as exc:
-        raise ParserClientError(
-            f"parser DELETE /parser/admin/matches/{user_id} transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/parser/admin/matches/{user_id}",
+        token=token,
+        timeout=30.0,
+        params=params,
+        error_prefix=f"parser DELETE /parser/admin/matches/{user_id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise ParserForbidden(
             f"parser DELETE /parser/admin/matches/{user_id} returned {resp.status_code}"
@@ -143,14 +143,14 @@ async def user_self_service_reparse(
     Raises :class:`ParserRateLimited` on 429 with retry-after metadata
     so the web layer can render a "try again at HH:MM" message.
     """
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url}/parser/me/reparse",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise ParserClientError(f"parser POST /parser/me/reparse transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/parser/me/reparse",
+        token=token,
+        timeout=30.0,
+        error_prefix="parser POST /parser/me/reparse ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise ParserForbidden(f"parser POST /parser/me/reparse returned {resp.status_code}")
     if resp.status_code == 429:

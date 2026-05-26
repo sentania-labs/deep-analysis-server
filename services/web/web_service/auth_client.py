@@ -14,6 +14,9 @@ from typing import Any
 
 import httpx
 
+from web_service.http_helper import parse_dt as _parse_dt
+from web_service.http_helper import raw_request, request
+
 
 @dataclass
 class LoginResult:
@@ -113,24 +116,19 @@ class EmailAlreadyTaken(Exception):
     """
 
 
-def _parse_dt(raw: Any) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError:
-        return None
+# Shorthand kwargs for all auth helpers.
+_ERR = {"error_cls": AuthClientError, "forbidden_cls": AuthForbidden}
+_ERR_RAW = {"error_cls": AuthClientError}
 
 
 async def login(base_url: str, email: str, password: str) -> LoginResult:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/auth/login",
-                json={"email": email, "password": password},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /login transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/auth/login",
+        json={"email": email, "password": password},
+        error_prefix="auth /login ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 401:
         raise InvalidCredentials()
     if resp.status_code >= 400:
@@ -158,15 +156,14 @@ async def change_password(
     longer accepted by auth (revoked, expired, or current password
     rejected) and the caller must re-authenticate.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/auth/password/change",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"current_password": current_password, "new_password": new_password},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /password/change transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/auth/password/change",
+        token=token,
+        json={"current_password": current_password, "new_password": new_password},
+        error_prefix="auth /password/change ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -195,28 +192,26 @@ async def logout(base_url: str, token: str) -> None:
     the browser's perspective, and auth /logout is idempotent.
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(
-                f"{base_url}/auth/logout",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError:
+        await raw_request(
+            "POST",
+            f"{base_url}/auth/logout",
+            token=token,
+            timeout=5.0,
+            error_prefix="auth /logout ",
+            **_ERR_RAW,
+        )
+    except (AuthClientError, httpx.HTTPError):
         return
 
 
 async def get_me(base_url: str, token: str) -> MeResult:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/auth/me",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /me transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth /me returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(f"auth /me returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/auth/me",
+        token=token,
+        error_prefix="auth /me ",
+        **_ERR,
+    )
     data = resp.json()
     return MeResult(
         user_id=int(data["user_id"]),
@@ -239,19 +234,14 @@ async def list_my_agents(
     controls. ``total`` is the unfiltered count of the caller's agents
     (matches the auth-side ``AgentListView.total``).
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/auth/me/agents",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"limit": limit, "offset": offset},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /me/agents transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth /me/agents returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(f"auth /me/agents returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/auth/me/agents",
+        token=token,
+        params={"limit": limit, "offset": offset},
+        error_prefix="auth /me/agents ",
+        **_ERR,
+    )
     data = resp.json()
     items = [
         AgentItem(
@@ -283,8 +273,8 @@ async def update_me(
     JWT claim and the caller's existing token is now stale.
 
     Maps known error responses to UI-stable error codes:
-      - 409 (email_already_exists) → ``UpdateMeResult(ok=False, error="email_taken")``
-      - 400/422 → ``UpdateMeResult(ok=False, error="invalid_email")``
+      - 409 (email_already_exists) -> ``UpdateMeResult(ok=False, error="email_taken")``
+      - 400/422 -> ``UpdateMeResult(ok=False, error="invalid_email")``
 
     401/403 raise :class:`AuthForbidden`; 5xx / transport raise
     :class:`AuthClientError`.
@@ -292,15 +282,14 @@ async def update_me(
     body: dict[str, object] = {"email": email}
     if mtgo_usernames is not None:
         body["mtgo_usernames"] = mtgo_usernames
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.patch(
-                f"{base_url}/auth/me",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /me PATCH transport error: {exc}") from exc
+    resp = await raw_request(
+        "PATCH",
+        f"{base_url}/auth/me",
+        token=token,
+        json=body,
+        error_prefix="auth /me PATCH ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         data = resp.json()
         return UpdateMeResult(
@@ -325,20 +314,19 @@ async def revoke_my_agent(
 ) -> tuple[bool, str | None]:
     """Try to revoke one of the caller's own agents. Returns (ok, error_code).
 
-    - 204 → (True, None)
-    - 404 → (False, "not_found")
+    - 204 -> (True, None)
+    - 404 -> (False, "not_found")
 
     401/403 raise :class:`AuthForbidden`; 5xx / transport raise
     :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/auth/me/agents/{agent_id}/revoke",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /me/agents revoke transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/auth/me/agents/{agent_id}/revoke",
+        token=token,
+        error_prefix="auth /me/agents revoke ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -361,19 +349,14 @@ async def admin_list_users(
     :class:`AuthClientError` on transport / 5xx / other non-2xx so the
     web layer can render an admin-denied page vs. a service-outage page.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/users",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"limit": limit, "offset": offset},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /admin/users transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth /admin/users returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(f"auth /admin/users returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/users",
+        token=token,
+        params={"limit": limit, "offset": offset},
+        error_prefix="auth /admin/users ",
+        **_ERR,
+    )
     data = resp.json()
     items = [
         UserItem(
@@ -398,18 +381,17 @@ async def admin_delete_user(
 ) -> tuple[bool, str | None]:
     """Admin-only: delete a user via the auth service.
 
-    - 204 → (True, None)
-    - 400 with detail.error ∈ {cannot_delete_self, cannot_delete_last_admin} → (False, code)
-    - 404 → (False, "user_not_found")
+    - 204 -> (True, None)
+    - 400 with detail.error in {cannot_delete_self, cannot_delete_last_admin} -> (False, code)
+    - 404 -> (False, "user_not_found")
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/admin/users/{user_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth DELETE /admin/users transport error: {exc}") from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/admin/users/{user_id}",
+        token=token,
+        error_prefix="auth DELETE /admin/users ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -437,19 +419,14 @@ async def admin_list_agents(
     :class:`AuthClientError` on transport / 5xx so the web layer can
     distinguish the admin-denied page from a service-outage page.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/agents",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"limit": limit, "offset": offset},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /admin/agents transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth /admin/agents returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(f"auth /admin/agents returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/agents",
+        token=token,
+        params={"limit": limit, "offset": offset},
+        error_prefix="auth /admin/agents ",
+        **_ERR,
+    )
     data = resp.json()
     items = [
         AdminAgentItem(
@@ -477,20 +454,19 @@ async def admin_revoke_agent(
 ) -> tuple[bool, str | None]:
     """Admin-only: revoke any agent regardless of ownership.
 
-    - 204 → (True, None)
-    - 404 → (False, "agent_not_found")
+    - 204 -> (True, None)
+    - 404 -> (False, "agent_not_found")
 
     401/403 raise :class:`AuthForbidden`; transport / 5xx raise
     :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/agents/{agent_id}/revoke",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /admin/agents revoke transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/agents/{agent_id}/revoke",
+        token=token,
+        error_prefix="auth /admin/agents revoke ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -513,20 +489,19 @@ async def admin_rotate_agent_key(
 ) -> tuple[RotateKeyResult | None, str | None]:
     """Admin-only: rotate an agent's API token. Returns (result, error_code).
 
-    - 200 → (RotateKeyResult, None)
-    - 404 → (None, "agent_not_found")
+    - 200 -> (RotateKeyResult, None)
+    - 404 -> (None, "agent_not_found")
 
     401/403 raise :class:`AuthForbidden`; transport / 5xx raise
     :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/agents/{agent_id}/rotate-key",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /admin/agents rotate-key transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/agents/{agent_id}/rotate-key",
+        token=token,
+        error_prefix="auth /admin/agents rotate-key ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         data = resp.json()
         return RotateKeyResult(
@@ -547,20 +522,19 @@ async def admin_delete_agent(
 ) -> tuple[bool, str | None]:
     """Admin-only: permanently delete an agent registration.
 
-    - 204 → (True, None)
-    - 404 → (False, "agent_not_found")
+    - 204 -> (True, None)
+    - 404 -> (False, "agent_not_found")
 
     401/403 raise :class:`AuthForbidden`; transport / 5xx raise
     :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/admin/agents/{agent_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth DELETE /admin/agents transport error: {exc}") from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/admin/agents/{agent_id}",
+        token=token,
+        error_prefix="auth DELETE /admin/agents ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -582,14 +556,13 @@ async def mint_registration_code(base_url: str, token: str) -> RegistrationCodeR
     401/403 raise :class:`AuthForbidden`; transport / 5xx / other
     non-2xx raise :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/auth/agent/registration-code",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /agent/registration-code transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/auth/agent/registration-code",
+        token=token,
+        error_prefix="auth /agent/registration-code ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise AuthForbidden(f"auth /agent/registration-code returned {resp.status_code}")
     if resp.status_code != 201:
@@ -621,22 +594,13 @@ async def admin_get_registration_mode(
     transport / 5xx so the web layer can distinguish the admin-denied
     page from a service-outage page.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/settings/registration-mode",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(
-            f"auth /admin/settings/registration-mode transport error: {exc}"
-        ) from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth /admin/settings/registration-mode returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(
-            f"auth /admin/settings/registration-mode returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/settings/registration-mode",
+        token=token,
+        error_prefix="auth /admin/settings/registration-mode ",
+        **_ERR,
+    )
     data = resp.json()
     return RegistrationMode(
         mode=str(data["mode"]),
@@ -654,26 +618,23 @@ async def admin_set_registration_mode(
 ) -> tuple[RegistrationMode | None, str | None]:
     """Root-admin-only: flip the registration mode. Returns (view, error_code).
 
-    - 200 → (RegistrationMode, None)
-    - 403 with detail.error == "not_root_admin" → (None, "not_root_admin")
+    - 200 -> (RegistrationMode, None)
+    - 403 with detail.error == "not_root_admin" -> (None, "not_root_admin")
       (caller is admin but not UID=1 — surfaces inline rather than
       bouncing to /login; the page still renders for read-only admins)
-    - 422 / other 4xx with a validation-style detail → (None, "invalid_mode")
+    - 422 / other 4xx with a validation-style detail -> (None, "invalid_mode")
 
     Any other 401/403 raises :class:`AuthForbidden`; 5xx / transport
     raise :class:`AuthClientError`.
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.put(
-                f"{base_url}/admin/settings/registration-mode",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"mode": mode},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(
-            f"auth PUT /admin/settings/registration-mode transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "PUT",
+        f"{base_url}/admin/settings/registration-mode",
+        token=token,
+        json={"mode": mode},
+        error_prefix="auth PUT /admin/settings/registration-mode ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         data = resp.json()
         return RegistrationMode(
@@ -744,15 +705,14 @@ async def admin_create_invite(
         "max_uses": max_uses,
         "role": role,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/invites",
-                headers={"Authorization": f"Bearer {token}"},
-                json=payload,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST /admin/invites transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/invites",
+        token=token,
+        json=payload,
+        error_prefix="auth POST /admin/invites ",
+        **_ERR_RAW,
+    )
     if resp.status_code in (401, 403):
         raise AuthForbidden(f"auth POST /admin/invites returned {resp.status_code}")
     if resp.status_code != 201:
@@ -775,19 +735,14 @@ async def admin_list_invites(
     per_page: int = 50,
 ) -> tuple[list[InviteItem], int]:
     """Admin-only: list pending (unused, unexpired) invites."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/invites",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"page": page, "per_page": per_page},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth GET /admin/invites transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth GET /admin/invites returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(f"auth GET /admin/invites returned {resp.status_code}: {resp.text}")
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/invites",
+        token=token,
+        params={"page": page, "per_page": per_page},
+        error_prefix="auth GET /admin/invites ",
+        **_ERR,
+    )
     data = resp.json()
     items = [
         InviteItem(
@@ -813,14 +768,13 @@ async def admin_revoke_invite(
     invite_id: str,
 ) -> tuple[bool, str | None]:
     """Admin-only: revoke a pending invite. Returns (ok, error_code)."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/admin/invites/{invite_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth DELETE /admin/invites transport error: {exc}") from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/admin/invites/{invite_id}",
+        token=token,
+        error_prefix="auth DELETE /admin/invites ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
@@ -839,9 +793,14 @@ async def public_get_registration_mode(base_url: str) -> str:
     sign up.
     """
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{base_url}/auth/registration-mode")
-    except httpx.HTTPError:
+        resp = await raw_request(
+            "GET",
+            f"{base_url}/auth/registration-mode",
+            timeout=5.0,
+            error_prefix="auth /registration-mode ",
+            **_ERR_RAW,
+        )
+    except AuthClientError:
         return "invite_only"
     if resp.status_code != 200:
         return "invite_only"
@@ -874,11 +833,13 @@ async def public_register(
     payload: dict[str, Any] = {"email": email, "password": password}
     if invite_token:
         payload["token"] = invite_token
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(f"{base_url}/auth/register", json=payload)
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST /auth/register transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/auth/register",
+        json=payload,
+        error_prefix="auth POST /auth/register ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 201:
         return True, None
     if resp.status_code in (400, 403, 409, 422):
@@ -909,15 +870,14 @@ async def admin_create_user(
         "role": role,
         "must_change_password": must_change_password,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/users",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST /admin/users transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/users",
+        token=token,
+        json=body,
+        error_prefix="auth POST /admin/users ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 201:
         u = resp.json()
         return UserItem(
@@ -953,15 +913,14 @@ async def admin_update_user(
         body["role"] = role
     if disabled is not None:
         body["disabled"] = disabled
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.patch(
-                f"{base_url}/admin/users/{user_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth PATCH /admin/users/{user_id} transport error: {exc}") from exc
+    resp = await raw_request(
+        "PATCH",
+        f"{base_url}/admin/users/{user_id}",
+        token=token,
+        json=body,
+        error_prefix=f"auth PATCH /admin/users/{user_id} ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         u = resp.json()
         return UserItem(
@@ -996,14 +955,13 @@ async def admin_revoke_user_sessions(
     user_id: int,
 ) -> tuple[int | None, str | None]:
     """Admin-only: revoke all sessions for a user."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/users/{user_id}/revoke-sessions",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST revoke-sessions transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/users/{user_id}/revoke-sessions",
+        token=token,
+        error_prefix="auth POST revoke-sessions ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return int(resp.json().get("revoked_count", 0)), None
     if resp.status_code in (401, 403):
@@ -1019,15 +977,15 @@ async def admin_cleanup_stale_agents(
     stale_days: int = 90,
 ) -> tuple[int | None, str | None]:
     """Admin-only: revoke agents not seen for stale_days."""
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/agents/cleanup-stale",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"stale_days": stale_days},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST cleanup-stale transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/agents/cleanup-stale",
+        token=token,
+        timeout=30.0,
+        params={"stale_days": stale_days},
+        error_prefix="auth POST cleanup-stale ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return int(resp.json().get("revoked_count", 0)), None
     if resp.status_code in (401, 403):
@@ -1052,14 +1010,13 @@ async def admin_reingest_agent(
     - 200 -> (affected_count, None)
     - 404 -> (0, "agent_not_found")
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/agents/{agent_id}/reingest",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST reingest-agent transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/agents/{agent_id}/reingest",
+        token=token,
+        error_prefix="auth POST reingest-agent ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return int(resp.json().get("affected_count", 0)), None
     if resp.status_code in (401, 403):
@@ -1079,14 +1036,13 @@ async def admin_reingest_user_agents(
     - 200 -> (affected_count, None)
     - 404 -> (0, "user_not_found")
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/users/{user_id}/reingest",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST reingest-user transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/users/{user_id}/reingest",
+        token=token,
+        error_prefix="auth POST reingest-user ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return int(resp.json().get("affected_count", 0)), None
     if resp.status_code in (401, 403):
@@ -1104,14 +1060,13 @@ async def admin_reingest_all_agents(
 
     - 200 -> (affected_count, None)
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/agents/reingest-all",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth POST reingest-all transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/agents/reingest-all",
+        token=token,
+        error_prefix="auth POST reingest-all ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return int(resp.json().get("affected_count", 0)), None
     if resp.status_code in (401, 403):
@@ -1127,17 +1082,16 @@ async def admin_reset_password(
     """Admin-only: rotate another user's password.
 
     Returns ``(temporary_password, error_code)``:
-    - 200 → (temp, None)
-    - 404 → (None, "user_not_found")
+    - 200 -> (temp, None)
+    - 404 -> (None, "user_not_found")
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{base_url}/admin/users/{user_id}/reset-password",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth /admin/users reset-password transport error: {exc}") from exc
+    resp = await raw_request(
+        "POST",
+        f"{base_url}/admin/users/{user_id}/reset-password",
+        token=token,
+        error_prefix="auth /admin/users reset-password ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         return str(resp.json()["temporary_password"]), None
     if resp.status_code in (401, 403):
@@ -1167,20 +1121,13 @@ class TunablesResult:
 
 async def admin_get_tunables(base_url: str, token: str) -> TunablesResult:
     """Admin-only: read all tunables (mutable + read-only constants)."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/settings/tunables",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth GET /admin/settings/tunables transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth GET /admin/settings/tunables returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(
-            f"auth GET /admin/settings/tunables returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/settings/tunables",
+        token=token,
+        error_prefix="auth GET /admin/settings/tunables ",
+        **_ERR,
+    )
     data = resp.json()
     return TunablesResult(
         backfill_batch_size=int(data["backfill_batch_size"]),
@@ -1203,17 +1150,14 @@ async def admin_update_tunables(
     - 200 -> (TunablesResult, None)
     - 400/422 -> (None, "validation_error")
     """
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.patch(
-                f"{base_url}/admin/settings/tunables",
-                headers={"Authorization": f"Bearer {token}"},
-                json=updates,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(
-            f"auth PATCH /admin/settings/tunables transport error: {exc}"
-        ) from exc
+    resp = await raw_request(
+        "PATCH",
+        f"{base_url}/admin/settings/tunables",
+        token=token,
+        json=updates,
+        error_prefix="auth PATCH /admin/settings/tunables ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         data = resp.json()
         return TunablesResult(
@@ -1254,9 +1198,14 @@ class MotdResult:
 async def public_get_motd(base_url: str) -> MotdResult:
     """Public read of the active MOTD."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{base_url}/auth/motd")
-    except httpx.HTTPError:
+        resp = await raw_request(
+            "GET",
+            f"{base_url}/auth/motd",
+            timeout=5.0,
+            error_prefix="auth /motd ",
+            **_ERR_RAW,
+        )
+    except AuthClientError:
         return MotdResult(active=False)
     if resp.status_code != 200:
         return MotdResult(active=False)
@@ -1280,20 +1229,13 @@ async def public_get_motd(base_url: str) -> MotdResult:
 
 async def admin_get_motd(base_url: str, token: str) -> MotdResult:
     """Admin-only: read the current MOTD via the admin endpoint."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{base_url}/admin/settings/motd",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth GET /admin/settings/motd transport error: {exc}") from exc
-    if resp.status_code in (401, 403):
-        raise AuthForbidden(f"auth GET /admin/settings/motd returned {resp.status_code}")
-    if resp.status_code >= 400:
-        raise AuthClientError(
-            f"auth GET /admin/settings/motd returned {resp.status_code}: {resp.text}"
-        )
+    resp = await request(
+        "GET",
+        f"{base_url}/admin/settings/motd",
+        token=token,
+        error_prefix="auth GET /admin/settings/motd ",
+        **_ERR,
+    )
     data = resp.json()
     return MotdResult(
         active=bool(data.get("active")),
@@ -1321,15 +1263,14 @@ async def admin_set_motd(
         "severity": severity,
         "expires_at": expires_at,
     }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.put(
-                f"{base_url}/admin/settings/motd",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body_payload,
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth PUT /admin/settings/motd transport error: {exc}") from exc
+    resp = await raw_request(
+        "PUT",
+        f"{base_url}/admin/settings/motd",
+        token=token,
+        json=body_payload,
+        error_prefix="auth PUT /admin/settings/motd ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 200:
         data = resp.json()
         return MotdResult(
@@ -1356,14 +1297,13 @@ async def admin_clear_motd(
     token: str,
 ) -> tuple[bool, str | None]:
     """Admin-only: clear the active MOTD."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.delete(
-                f"{base_url}/admin/settings/motd",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-    except httpx.HTTPError as exc:
-        raise AuthClientError(f"auth DELETE /admin/settings/motd transport error: {exc}") from exc
+    resp = await raw_request(
+        "DELETE",
+        f"{base_url}/admin/settings/motd",
+        token=token,
+        error_prefix="auth DELETE /admin/settings/motd ",
+        **_ERR_RAW,
+    )
     if resp.status_code == 204:
         return True, None
     if resp.status_code in (401, 403):
