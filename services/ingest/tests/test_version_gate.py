@@ -70,8 +70,8 @@ async def _set_min_agent_version(db: AsyncSession, version: str) -> None:
     await db.execute(
         text(
             "INSERT INTO auth.server_settings (key, value) "
-            "VALUES ('tunable:min_agent_version', :v::jsonb) "
-            "ON CONFLICT (key) DO UPDATE SET value = :v::jsonb"
+            "VALUES ('tunable:min_agent_version', CAST(:v AS jsonb)) "
+            "ON CONFLICT (key) DO UPDATE SET value = CAST(:v AS jsonb)"
         ),
         {"v": json_value},
     )
