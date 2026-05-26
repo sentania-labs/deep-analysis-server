@@ -119,6 +119,7 @@ def _match_dict(
     played_at: datetime,
     wins_by_player: dict[str, int],
     hero_player_name: str | None = None,
+    match_tied: bool = False,
 ) -> dict[str, Any]:
     """Build a match dict in the shape returned by _load_user_matches."""
     return {
@@ -128,6 +129,7 @@ def _match_dict(
         "played_at": played_at,
         "wins_by_player": wins_by_player,
         "hero_player_name": hero_player_name or (players[0] if players else None),
+        "match_tied": match_tied,
     }
 
 
@@ -499,3 +501,154 @@ def test_cache_key_differs_with_date_params() -> None:
     # None values should not affect the key (stripped by cache_key)
     key_none = ck(7, "summary", date_from=None, date_to=None)
     assert key_none == key_no_date
+
+
+# ---------------------------------------------------------------------------
+# _classify_match — draw vs unresolved via match_tied
+# ---------------------------------------------------------------------------
+
+
+def test_classify_match_tied_true_returns_draw() -> None:
+    """match_tied=True with 0-0 game wins classifies as 'D' (draw)."""
+    from analytics_service.stats import _classify_match
+
+    result, opponent, pw, pl = _classify_match(["alice", "bob"], {}, "alice", match_tied=True)
+    assert result == "D"
+    assert opponent == "bob"
+    assert pw == 0
+    assert pl == 0
+
+
+def test_classify_match_tied_false_returns_unresolved() -> None:
+    """match_tied=False with 0-0 game wins classifies as '' (unresolved)."""
+    from analytics_service.stats import _classify_match
+
+    result, opponent, pw, pl = _classify_match(["alice", "bob"], {}, "alice", match_tied=False)
+    assert result == ""
+    assert opponent == "bob"
+    assert pw == 0
+    assert pl == 0
+
+
+def test_classify_match_normal_win_unchanged() -> None:
+    """Normal W/L classification is not affected by match_tied."""
+    from analytics_service.stats import _classify_match
+
+    # Win
+    result, _opp, pw, pl = _classify_match(
+        ["alice", "bob"], {"alice": 2, "bob": 1}, "alice", match_tied=False
+    )
+    assert result == "W"
+    assert pw == 2
+    assert pl == 1
+
+    # Loss
+    result, _opp, pw, pl = _classify_match(
+        ["alice", "bob"], {"alice": 0, "bob": 2}, "alice", match_tied=False
+    )
+    assert result == "L"
+    assert pw == 0
+    assert pl == 2
+
+
+def test_classify_match_equal_nonzero_wins_is_draw() -> None:
+    """Equal nonzero game wins remain 'D' regardless of match_tied."""
+    from analytics_service.stats import _classify_match
+
+    result, _opp, pw, pl = _classify_match(
+        ["alice", "bob"], {"alice": 1, "bob": 1}, "alice", match_tied=False
+    )
+    assert result == "D"
+    assert pw == 1
+    assert pl == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_intentional_draw(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An intentional draw (match_tied=True, 0-0 game wins) counts in draws."""
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    matches = [
+        _match_dict(
+            uuid.uuid4(),
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 9, 10, 0, tzinfo=UTC),
+            {},
+            match_tied=True,
+        ),
+    ]
+    _patch_loader(monkeypatch, matches)
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get("/analytics/stats/summary")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_matches"] == 1
+    assert body["draws"] == 1
+    assert body["wins"] == 0
+    assert body["losses"] == 0
+    assert body["recent_matches"][0]["result"] == "D"
+
+
+@pytest.mark.asyncio
+async def test_summary_unresolved_not_counted_as_draw(
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unresolved match (match_tied=False, 0-0 game wins) is not a draw."""
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    matches = [
+        _match_dict(
+            uuid.uuid4(),
+            "Modern",
+            ["alice", "bob"],
+            datetime(2026, 5, 9, 10, 0, tzinfo=UTC),
+            {},
+            match_tied=False,
+        ),
+    ]
+    _patch_loader(monkeypatch, matches)
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get("/analytics/stats/summary")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total_matches"] == 1
+    assert body["draws"] == 0
+    assert body["wins"] == 0
+    assert body["losses"] == 0
+    assert body["recent_matches"][0]["result"] == ""
+
+
+# ---------------------------------------------------------------------------
+# _is_true_draw — unit tests for admin draw detection
+# ---------------------------------------------------------------------------
+
+
+def test_is_true_draw_with_match_tied() -> None:
+    """match_tied=True makes _is_true_draw return True even with empty wins."""
+    from analytics_service.main import _is_true_draw
+
+    assert _is_true_draw({}, match_tied=True) is True
+    assert _is_true_draw({}, match_tied=False) is False
+
+
+def test_is_true_draw_equal_nonzero_wins() -> None:
+    """Equal nonzero game wins are a true draw regardless of match_tied."""
+    from analytics_service.main import _is_true_draw
+
+    assert _is_true_draw({"alice": 1, "bob": 1}) is True
+    assert _is_true_draw({"alice": 1, "bob": 1}, match_tied=False) is True

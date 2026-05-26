@@ -421,12 +421,18 @@ _ADMIN_MATCHES_DEFAULT_PER_PAGE = 20
 _ADMIN_MATCHES_MAX_PER_PAGE = 100
 
 
-def _is_true_draw(wins_by_player: dict[str, int]) -> bool:
-    """A match is a true draw when at least two players have equal,
-    nonzero game-win counts. Mirrors ``stats._classify_match`` and
-    fixes the "null winner = Draw" template bug from issue #71 —
-    incomplete matches (no game winners, or only one player has any)
-    are not draws."""
+def _is_true_draw(wins_by_player: dict[str, int], *, match_tied: bool = False) -> bool:
+    """A match is a true draw when either:
+
+    1. At least two players have equal, nonzero game-win counts, OR
+    2. The MTGO log explicitly reported "Match Tied" (``match_tied=True``).
+
+    Case 2 covers intentional draws where both players have 0 game wins.
+    Without the ``match_tied`` flag, those 0-0 matches would be
+    indistinguishable from partial/unresolved parses.
+    """
+    if match_tied:
+        return True
     if len(wins_by_player) < 2:
         return False
     distinct = set(wins_by_player.values())
@@ -511,7 +517,8 @@ async def admin_list_matches(
             SELECT m.id, m.user_id, u.email, m.format, m.players,
                    m.match_result, m.winner, m.game_count,
                    COALESCE(m.played_at, m.parsed_at) AS played_at,
-                   m.review_status
+                   m.review_status,
+                   m.match_tied
             FROM parser.matches m
             LEFT JOIN auth.users u ON u.id = m.user_id
             WHERE 1=1{where_clause}
@@ -524,8 +531,10 @@ async def admin_list_matches(
         rows = (await session.execute(fetch_sql, params)).all()
 
     # Compute per-match game-winner counts so we can mark *true* draws
-    # (both players have equal nonzero game wins) — see issue #71.
+    # (both players have equal nonzero game wins, or match_tied) — see issue #71.
     match_ids = [row[0] for row in rows]
+    # Build a quick lookup of match_tied by match_id from the fetched rows.
+    match_tied_by_id: dict[Any, bool] = {r[0]: bool(r[10]) for r in rows}
     draw_match_ids: set[Any] = set()
     if match_ids:
         async with sm() as session:
@@ -546,8 +555,10 @@ async def admin_list_matches(
         by_match: dict[Any, dict[str, int]] = {}
         for mid, gwinner, n in game_win_rows:
             by_match.setdefault(mid, {})[str(gwinner)] = int(n)
-        for mid, wins_by_player in by_match.items():
-            if _is_true_draw(wins_by_player):
+        for mid in match_ids:
+            wins_by_player = by_match.get(mid, {})
+            mt = match_tied_by_id.get(mid, False)
+            if _is_true_draw(wins_by_player, match_tied=mt):
                 draw_match_ids.add(mid)
 
     # Post-filter by result if requested (W/L/D classification needs
@@ -567,6 +578,7 @@ async def admin_list_matches(
             game_count,
             played_at,
             row_review_status,
+            _row_match_tied,
         ) = row
         item = AdminMatchItem(
             match_id=str(match_id),
@@ -668,7 +680,8 @@ async def admin_update_match_review_status(
                     SELECT m.id, m.user_id, u.email, m.format, m.players,
                            m.match_result, m.winner, m.game_count,
                            COALESCE(m.played_at, m.parsed_at) AS played_at,
-                           m.review_status
+                           m.review_status,
+                           m.match_tied
                     FROM parser.matches m
                     LEFT JOIN auth.users u ON u.id = m.user_id
                     WHERE m.id = :mid
@@ -692,7 +705,7 @@ async def admin_update_match_review_status(
             )
         ).all()
     wins_by_player = {str(w): int(n) for w, n in game_win_rows}
-    is_draw_flag = _is_true_draw(wins_by_player)
+    is_draw_flag = _is_true_draw(wins_by_player, match_tied=bool(row[10]))
     if owner_row is not None:
         try:
             redis_client = await get_redis(get_settings().redis_url)

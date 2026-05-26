@@ -272,3 +272,41 @@ def test_dat_unrecognised_payload_returns_empty_match() -> None:
     assert isinstance(parsed, ParsedMatch)
     assert parsed.winner is None
     assert parsed.games == []
+
+
+# --- match_tied flag --------------------------------------------------------
+
+
+def test_dat_match_tied_set_from_tied_log() -> None:
+    """When a .dat log contains "Match Tied", match_tied must be True."""
+    strategy = MTGODatStrategy()
+    # Build a synthetic .dat-style payload with the tied marker.
+    # The strip_binary pass keeps printable ASCII, so we embed the
+    # tied line directly in an otherwise minimal payload.
+    payload = (
+        b"\x01\x00$aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        b"\x04\x00$aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        + b"\x00" * 8  # fake frame header (8 bytes)
+        + b"@P@PAlice joined the game."
+        + b"\x00" * 8
+        + b"@P@PBob joined the game."
+        + b"\x00" * 8
+        + b"Match Tied 0-0"
+    )
+    assert strategy.can_parse(payload)
+    parsed = strategy.parse(payload)
+    assert parsed.match_tied is True
+    assert parsed.winner is None
+    assert parsed.match_result == "0-0"
+
+
+def test_dat_normal_match_not_tied() -> None:
+    """A normal .dat match with a winner has match_tied=False."""
+    parsed = LogParser().parse(_read(DAT_FIXTURE_01EA1246))
+    assert parsed.match_tied is False
+
+
+def test_parsed_match_match_tied_default_false() -> None:
+    """ParsedMatch defaults match_tied to False."""
+    m = ParsedMatch()
+    assert m.match_tied is False

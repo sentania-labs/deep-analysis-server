@@ -97,12 +97,19 @@ def _classify_match(
     players: list[Any] | None,
     game_wins_by_player: dict[str, int],
     hero_player_name: str | None = None,
+    *,
+    match_tied: bool = False,
 ) -> tuple[str, str | None, int, int]:
     """Return (result, opponent, player_wins, player_losses).
 
     ``hero_player_name`` is the pre-resolved hero from
     ``parser.matches.hero_player_name`` (set at parse time).
     Falls back to ``players[0]`` when not available.
+
+    ``match_tied`` distinguishes intentional draws (MTGO reported
+    "Match Tied") from unresolved partial parses. When both players
+    have 0 game wins: ``match_tied=True`` returns ``"D"`` (draw),
+    ``match_tied=False`` returns ``""`` (unresolved).
     """
     if not players:
         return "", None, 0, 0
@@ -115,6 +122,8 @@ def _classify_match(
     user_wins = game_wins_by_player.get(user, 0)
     opp_wins = sum(v for k, v in game_wins_by_player.items() if k != user)
     if user_wins == 0 and opp_wins == 0:
+        if match_tied:
+            return "D", opponent, 0, 0
         return "", opponent, 0, 0
     if user_wins > opp_wins:
         return "W", opponent, user_wins, opp_wins
@@ -157,7 +166,8 @@ async def _load_user_matches(
                 f"""
                 SELECT id, format, players,
                        COALESCE(played_at, parsed_at) AS played_at,
-                       hero_player_name
+                       hero_player_name,
+                       match_tied
                 FROM parser.matches
                 {where}
                 ORDER BY COALESCE(played_at, parsed_at) DESC
@@ -187,7 +197,7 @@ async def _load_user_matches(
     for match_id, winner, n in game_rows:
         by_match.setdefault(match_id, {})[str(winner)] = int(n)
     out: list[dict[str, Any]] = []
-    for match_id, fmt, players, played_at, hero_player_name in rows:
+    for match_id, fmt, players, played_at, hero_player_name, match_tied in rows:
         out.append(
             {
                 "id": match_id,
@@ -196,6 +206,7 @@ async def _load_user_matches(
                 "played_at": played_at,
                 "wins_by_player": by_match.get(match_id, {}),
                 "hero_player_name": hero_player_name,
+                "match_tied": bool(match_tied),
             }
         )
     return out
@@ -213,6 +224,7 @@ def _summarize(
             m["players"],
             m["wins_by_player"],
             m.get("hero_player_name"),
+            match_tied=m.get("match_tied", False),
         )
         if result == "W":
             wins += 1
@@ -289,6 +301,7 @@ async def get_by_format(
             m["players"],
             m["wins_by_player"],
             m.get("hero_player_name"),
+            match_tied=m.get("match_tied", False),
         )
         if result == "W":
             bucket["wins"] += 1
@@ -339,6 +352,7 @@ async def get_by_opponent(
             m["players"],
             m["wins_by_player"],
             m.get("hero_player_name"),
+            match_tied=m.get("match_tied", False),
         )
         if not opponent:
             continue
@@ -484,7 +498,8 @@ async def list_matches(
                     f"""
                     SELECT m.id, m.format, m.players,
                            COALESCE(m.played_at, m.parsed_at) AS played_at,
-                           m.hero_player_name
+                           m.hero_player_name,
+                           m.match_tied
                     FROM parser.matches m
                     {where}
                     ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
@@ -511,7 +526,8 @@ async def list_matches(
                     f"""
                     SELECT m.id, m.format, m.players,
                            COALESCE(m.played_at, m.parsed_at) AS played_at,
-                           m.hero_player_name
+                           m.hero_player_name,
+                           m.match_tied
                     FROM parser.matches m
                     {where}
                     ORDER BY COALESCE(m.played_at, m.parsed_at) DESC
@@ -549,10 +565,12 @@ async def list_matches(
 
     # Classify and build items
     classified: list[MatchListItem] = []
-    for match_id, fmt, players, played_at, hero_name in rows:
+    for match_id, fmt, players, played_at, hero_name, mt in rows:
         player_list = list(players or [])
         wins_by_player = by_match.get(match_id, {})
-        r, opp, pw, pl = _classify_match(player_list, wins_by_player, hero_name)
+        r, opp, pw, pl = _classify_match(
+            player_list, wins_by_player, hero_name, match_tied=bool(mt)
+        )
         classified.append(
             MatchListItem(
                 match_id=str(match_id),
