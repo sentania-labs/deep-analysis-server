@@ -6,18 +6,12 @@
 
 name: deep-analysis
 
-x-logging: &default-logging
-  driver: json-file
-  options:
-    max-size: "50m"
-    max-file: "3"
-
 services:
 
   postgres:
     image: postgres:16
     restart: unless-stopped
-    logging: *default-logging
+
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     environment:
       POSTGRES_DB: deep_analysis
@@ -39,7 +33,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    logging: *default-logging
+
     command: ["redis-server", "--save", ""]
     networks:
       - backend
@@ -118,7 +112,7 @@ services:
   gateway:
     image: caddy:2.9-alpine
     restart: unless-stopped
-    logging: *default-logging
+
     volumes:
       - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
@@ -142,7 +136,7 @@ services:
       context: .
       dockerfile: services/auth/Dockerfile
     restart: unless-stopped
-    logging: *default-logging
+
     networks:
       - backend
     environment:
@@ -176,7 +170,7 @@ services:
       context: .
       dockerfile: services/ingest/Dockerfile
     restart: unless-stopped
-    logging: *default-logging
+
     networks:
       - backend
     environment:
@@ -208,7 +202,7 @@ services:
       context: .
       dockerfile: services/parser/Dockerfile
     restart: unless-stopped
-    logging: *default-logging
+
     networks:
       - backend
     environment:
@@ -238,7 +232,7 @@ services:
       context: .
       dockerfile: services/analytics/Dockerfile
     restart: unless-stopped
-    logging: *default-logging
+
     networks:
       - backend
     environment:
@@ -266,7 +260,7 @@ services:
       context: .
       dockerfile: services/web/Dockerfile
     restart: unless-stopped
-    logging: *default-logging
+
     networks:
       - frontend
       - backend

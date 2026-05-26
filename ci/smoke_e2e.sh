@@ -53,6 +53,15 @@ http_body() {
 echo "=== Deep Analysis E2E smoke — $BASE_URL ==="
 
 # --------------------------------------------------------------------------
+# 0. Infrastructure probes (no credentials)
+# --------------------------------------------------------------------------
+echo ""
+echo "--- Infrastructure probes ---"
+
+status=$(http_status "$BASE_URL/metrics")
+check "GET /metrics → 200" "200" "$status"
+
+# --------------------------------------------------------------------------
 # 1. Auth gate checks (no credentials)
 # --------------------------------------------------------------------------
 echo ""
