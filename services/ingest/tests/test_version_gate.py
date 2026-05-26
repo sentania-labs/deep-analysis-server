@@ -7,6 +7,7 @@ unparseable agent version.
 
 from __future__ import annotations
 
+import json
 import secrets
 import uuid
 from typing import Any
@@ -60,14 +61,19 @@ async def _seed_agent_with_version(
 
 
 async def _set_min_agent_version(db: AsyncSession, version: str) -> None:
-    """Insert or update the min_agent_version tunable in server_settings."""
+    """Insert or update the min_agent_version tunable in server_settings.
+
+    The ``value`` column is JSONB, so the version string must be
+    JSON-encoded (e.g. ``'"0.5.0"'``) before insertion.
+    """
+    json_value = json.dumps(version)
     await db.execute(
         text(
             "INSERT INTO auth.server_settings (key, value) "
-            "VALUES ('tunable:min_agent_version', :v) "
-            "ON CONFLICT (key) DO UPDATE SET value = :v"
+            "VALUES ('tunable:min_agent_version', :v::jsonb) "
+            "ON CONFLICT (key) DO UPDATE SET value = :v::jsonb"
         ),
-        {"v": version},
+        {"v": json_value},
     )
     await db.commit()
     # Bust the in-process cache so the test picks up the new value.
