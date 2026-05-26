@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -57,6 +58,10 @@ SERVICE_NAME = "analytics"
 configure_logging(SERVICE_NAME)
 
 _log = logging.getLogger("analytics.main")
+
+# Indirection for asyncio.sleep so tests can patch backoff delays
+# without interfering with the global event loop.
+_async_sleep = asyncio.sleep
 
 _scheduler_task: asyncio.Task[None] | None = None
 _mtgo_scheduler_task: asyncio.Task[None] | None = None
@@ -268,31 +273,47 @@ async def _stop_mtgtop8_scheduler() -> None:
 
 async def _cache_invalidation_loop() -> None:
     """Subscribe to ``match.parsed`` Redis pub/sub and invalidate cached
-    stats for the affected user. Runs for the lifetime of the service."""
-    settings = get_settings()
-    try:
-        redis_client = await get_redis(settings.redis_url)
-        pubsub = redis_client.pubsub()
-        await pubsub.subscribe("match.parsed")
-        _log.info("cache invalidator subscribed to match.parsed")
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            try:
-                import json as _json
+    stats for the affected user. Runs for the lifetime of the service.
 
-                payload = _json.loads(message["data"])
-                user_id = payload.get("user_id")
-                if user_id is not None:
-                    deleted = await invalidate_user(redis_client, int(user_id))
-                    if deleted:
-                        _log.debug("invalidated %d cache keys for user_id=%s", deleted, user_id)
-            except Exception:  # noqa: BLE001
-                _log.warning("cache invalidation message handling failed", exc_info=True)
-    except asyncio.CancelledError:
-        raise
-    except Exception:  # noqa: BLE001
-        _log.exception("cache invalidation loop failed")
+    Wraps the subscription in a retry loop with exponential backoff so
+    that a transient Redis disconnect does not permanently kill cache
+    invalidation (the previous behaviour). On reconnect the backoff
+    resets and the loop resumes normally.
+    """
+    settings = get_settings()
+    backoff = 1.0
+    max_backoff = 60.0
+    while True:
+        try:
+            redis_client = await get_redis(settings.redis_url)
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe("match.parsed")
+            _log.info("cache invalidator subscribed to match.parsed")
+            async for message in pubsub.listen():
+                backoff = 1.0  # reset once we are receiving messages
+                if message["type"] != "message":
+                    continue
+                try:
+                    payload = json.loads(message["data"])
+                    user_id = payload.get("user_id")
+                    if user_id is not None:
+                        deleted = await invalidate_user(redis_client, int(user_id))
+                        if deleted:
+                            _log.debug(
+                                "invalidated %d cache keys for user_id=%s", deleted, user_id
+                            )
+                except Exception:  # noqa: BLE001
+                    _log.warning("cache invalidation message handling failed", exc_info=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            _log.warning(
+                "cache invalidation loop lost Redis connection; retrying in %.0fs",
+                backoff,
+                exc_info=True,
+            )
+            await _async_sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
 
 async def _start_cache_invalidator() -> None:
