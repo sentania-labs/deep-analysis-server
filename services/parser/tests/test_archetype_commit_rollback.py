@@ -148,7 +148,7 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
     async def _stub_resolve_hero(_uid: int, players: list[str]) -> str | None:
         return str(players[0]) if players else None
 
-    consumer._resolve_hero = _stub_resolve_hero  # type: ignore[assignment]
+    consumer._resolve_hero = _stub_resolve_hero
 
     # Patch persist_match to return our mock match, and patch the
     # analytics settings to enable archetype classification.
