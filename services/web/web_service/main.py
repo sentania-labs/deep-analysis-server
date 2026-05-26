@@ -129,8 +129,21 @@ templates.TemplateResponse = _patched_template_response  # type: ignore[assignme
 
 @app.get("/healthz")
 @app.get("/web/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": SERVICE_NAME}
+async def healthz() -> JSONResponse:
+    from common.health import check_http, evaluate
+
+    settings = get_settings()
+    report = await evaluate(
+        [
+            check_http(f"{settings.auth_service_url}/healthz", "auth"),
+            check_http(f"{settings.analytics_service_url}/healthz", "analytics"),
+            check_http(f"{settings.parser_service_url}/healthz", "parser"),
+        ]
+    )
+    return JSONResponse(
+        content=report.to_dict(SERVICE_NAME),
+        status_code=report.http_status,
+    )
 
 
 _ADMIN_LANDING_PATH = "/admin/users"

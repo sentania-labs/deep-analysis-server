@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1382,5 +1383,17 @@ app.include_router(admin_router)
 
 @app.get("/healthz")
 @app.get("/analytics/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "service": SERVICE_NAME}
+async def healthz() -> JSONResponse:
+    from common.health import check_db, check_redis, evaluate
+
+    redis_client = await get_redis(get_settings().redis_url)
+    report = await evaluate(
+        [
+            check_db(get_sessionmaker()),
+            check_redis(redis_client),
+        ]
+    )
+    return JSONResponse(
+        content=report.to_dict(SERVICE_NAME),
+        status_code=report.http_status,
+    )

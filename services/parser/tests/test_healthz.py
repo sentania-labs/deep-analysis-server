@@ -1,8 +1,7 @@
-"""Smoke test for the parser /healthz + /parser/healthz endpoints.
+"""Tests for the parser /healthz + /parser/healthz endpoints.
 
-The parser app starts a Redis consumer task on lifespan startup;
-the test patches the start hook to a no-op so this stays a pure HTTP
-smoke test (no live Redis or Postgres required).
+Covers both the happy path (all deps healthy) and degraded states
+(DB failure, Redis failure) via mocked check helpers.
 """
 
 from __future__ import annotations
@@ -10,10 +9,13 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+
+from common.health import CheckResult, HealthReport
 
 
 def _stub_env(repo_root: Path) -> None:
@@ -38,8 +40,6 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     async def _noop() -> None:
         return None
 
-    # Skip the live Redis/Postgres bring-up; just run lifespan with stubs
-    # so the FastAPI app boots cleanly.
     monkeypatch.setattr(_main, "_start_consumer", _noop)
     monkeypatch.setattr(_main, "_stop_consumer", _noop)
 
@@ -48,15 +48,70 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
         yield ac
 
 
+def _healthy_report() -> HealthReport:
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
+
+
+def _db_down_report() -> HealthReport:
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=False, detail="error"),
+            CheckResult(name="redis", ok=True),
+        ]
+    )
+
+
+def _redis_down_report() -> HealthReport:
+    return HealthReport(
+        checks=[
+            CheckResult(name="db", ok=True),
+            CheckResult(name="redis", ok=False, detail="error"),
+        ]
+    )
+
+
 @pytest.mark.asyncio
-async def test_healthz_alias(client: AsyncClient) -> None:
-    r = await client.get("/healthz")
+async def test_healthz_all_healthy(client: AsyncClient) -> None:
+    with patch("common.health.evaluate", new_callable=AsyncMock, return_value=_healthy_report()):
+        r = await client.get("/healthz")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "service": "parser"}
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "parser"
+    assert body["db"] == "ok"
+    assert body["redis"] == "ok"
 
 
 @pytest.mark.asyncio
 async def test_parser_healthz_canonical(client: AsyncClient) -> None:
-    r = await client.get("/parser/healthz")
+    with patch("common.health.evaluate", new_callable=AsyncMock, return_value=_healthy_report()):
+        r = await client.get("/parser/healthz")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "service": "parser"}
+    assert r.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_healthz_db_failure(client: AsyncClient) -> None:
+    with patch("common.health.evaluate", new_callable=AsyncMock, return_value=_db_down_report()):
+        r = await client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["db"] == "error"
+    assert body["redis"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_healthz_redis_failure(client: AsyncClient) -> None:
+    with patch("common.health.evaluate", new_callable=AsyncMock, return_value=_redis_down_report()):
+        r = await client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["db"] == "ok"
+    assert body["redis"] == "error"
