@@ -12,6 +12,7 @@ replaced with a JOIN to ``parser.game_players``.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -113,11 +114,11 @@ async def _load_games_with_context(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
-        params["date_from"] = date_from
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date.fromisoformat(date_from)
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
-        params["date_to"] = date_to
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date.fromisoformat(date_to)
 
     rows = (
         await db.execute(
@@ -320,11 +321,11 @@ async def get_game_length(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
-        params["date_from"] = date_from
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
+        params["date_from"] = date.fromisoformat(date_from)
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
-        params["date_to"] = date_to
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
+        params["date_to"] = date.fromisoformat(date_to)
 
     rows = (
         await db.execute(

@@ -13,6 +13,7 @@ cards, G1/G2/G3 split, opponent archetype and on_play filters.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -185,11 +186,11 @@ def _build_match_where(
         clauses.append("m.players::text ILIKE :opp_pattern ESCAPE '\\'")
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        clauses.append("COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date")
-        params["date_from"] = date_from
+        clauses.append("COALESCE(m.played_at, m.parsed_at)::date >= :date_from")
+        params["date_from"] = date.fromisoformat(date_from)
     if date_to:
-        clauses.append("COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date")
-        params["date_to"] = date_to
+        clauses.append("COALESCE(m.played_at, m.parsed_at)::date <= :date_to")
+        params["date_to"] = date.fromisoformat(date_to)
     if opponent_archetype_id:
         clauses.append(
             "EXISTS (SELECT 1 FROM parser.match_archetypes opp_ma "
