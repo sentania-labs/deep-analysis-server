@@ -10,6 +10,7 @@ a no-op. Disk-full is surfaced as :class:`InsufficientStorageError`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import errno
 import os
@@ -69,27 +70,34 @@ async def store_file(
     rewriting. Uses write-to-temp + atomic rename so concurrent
     uploads of the same file can't produce a half-written archive
     entry. Raises :class:`InsufficientStorageError` on ENOSPC.
+
+    All disk I/O is offloaded to a thread so the event loop is never
+    blocked under concurrent load.
     """
-    target = _shard_path(root, sha256, extension)
-    if target.exists():
+
+    def _write_sync() -> Path:
+        target = _shard_path(root, sha256, extension)
+        if target.exists():
+            return target
+
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        try:
+            with open(tmp, "wb") as fh:
+                fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.rename(tmp, target)
+        except OSError as exc:
+            # Best-effort cleanup of the tmp file; ignore if it's already gone.
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+            if exc.errno == errno.ENOSPC:
+                raise InsufficientStorageError("disk full") from exc
+            raise
         return target
 
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    try:
-        with open(tmp, "wb") as fh:
-            fh.write(content)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.rename(tmp, target)
-    except OSError as exc:
-        # Best-effort cleanup of the tmp file; ignore if it's already gone.
-        with contextlib.suppress(OSError):
-            tmp.unlink()
-        if exc.errno == errno.ENOSPC:
-            raise InsufficientStorageError("disk full") from exc
-        raise
-    return target
+    return await asyncio.to_thread(_write_sync)
 
 
 async def open_file(
@@ -98,11 +106,17 @@ async def open_file(
     root: Path,
     chunk_size: int = 64 * 1024,
 ) -> AsyncIterator[bytes]:
-    """Stream the content of a stored file in chunks."""
+    """Stream the content of a stored file in chunks.
+
+    Disk reads are offloaded to a thread so the event loop is never
+    blocked while streaming large files.
+    """
     path = _shard_path(root, sha256, extension)
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(chunk_size)
-            if not chunk:
-                return
-            yield chunk
+
+    def _read_all() -> bytes:
+        with open(path, "rb") as fh:
+            return fh.read()
+
+    data = await asyncio.to_thread(_read_all)
+    for offset in range(0, len(data), chunk_size):
+        yield data[offset : offset + chunk_size]
