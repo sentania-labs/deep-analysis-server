@@ -127,8 +127,8 @@ async def _load_user_matches(
     db: AsyncSession,
     user_id: int,
     *,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a user's matches plus per-match game-winner counts.
 
@@ -146,10 +146,10 @@ async def _load_user_matches(
     params: dict[str, Any] = {"user_id": user_id}
     if date_from:
         where += " AND COALESCE(played_at, parsed_at)::date >= :date_from"
-        params["date_from"] = date.fromisoformat(date_from)
+        params["date_from"] = date_from
     if date_to:
         where += " AND COALESCE(played_at, parsed_at)::date <= :date_to"
-        params["date_to"] = date.fromisoformat(date_to)
+        params["date_to"] = date_to
 
     rows = (
         await db.execute(
@@ -248,8 +248,8 @@ def _summarize(
 async def get_summary(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> StatsSummary:
     redis_client = await _get_redis_or_none()
     ck = cache_key(user.user_id, "summary", date_from=date_from, date_to=date_to)
@@ -268,8 +268,8 @@ async def get_summary(
 async def get_by_format(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> list[FormatStat]:
     redis_client = await _get_redis_or_none()
     ck = cache_key(user.user_id, "by-format", date_from=date_from, date_to=date_to)
@@ -468,10 +468,10 @@ async def list_matches(
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
-        params["date_from"] = str(date_from)
+        params["date_from"] = date_from
     if date_to:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
-        params["date_to"] = str(date_to)
+        params["date_to"] = date_to
 
     # When there's no result filter, we can paginate in SQL
     has_result_filter = result is not None and result.lower() != "all"

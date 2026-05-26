@@ -92,8 +92,8 @@ async def _load_games_with_context(
     user_id: int,
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """Load all games with match context for a user.
 
@@ -115,10 +115,10 @@ async def _load_games_with_context(
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
-        params["date_from"] = date.fromisoformat(date_from)
+        params["date_from"] = date_from
     if date_to:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
-        params["date_to"] = date.fromisoformat(date_to)
+        params["date_to"] = date_to
 
     rows = (
         await db.execute(
@@ -169,8 +169,8 @@ async def get_play_draw(
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> PlayDrawResponse:
     """Win rate on the play vs on the draw."""
     games = await _load_games_with_context(
@@ -212,8 +212,8 @@ async def get_preboard_postboard(
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> PrePostBoardResponse:
     """Win rate in game 1 (pre-board) vs games 2-3 (post-board)."""
     games = await _load_games_with_context(
@@ -251,8 +251,8 @@ async def get_mulligans(
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> list[MulliganBucket]:
     """Frequency and win rate by opening hand size."""
     games = await _load_games_with_context(
@@ -304,8 +304,8 @@ async def get_game_length(
     db: AsyncSession = Depends(get_session),
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> list[GameLengthBucket]:
     """Turns distribution bucketed into ranges.
 
@@ -322,10 +322,10 @@ async def get_game_length(
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
-        params["date_from"] = date.fromisoformat(date_from)
+        params["date_from"] = date_from
     if date_to:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
-        params["date_to"] = date.fromisoformat(date_to)
+        params["date_to"] = date_to
 
     rows = (
         await db.execute(

@@ -144,8 +144,8 @@ def _patch_card_loader(
         card_name: str | None = None,
         format_filter: str | None = None,
         opponent: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        date_from: Any = None,
+        date_to: Any = None,
     ) -> list[dict[str, Any]]:
         result = appearances
         if card_name:

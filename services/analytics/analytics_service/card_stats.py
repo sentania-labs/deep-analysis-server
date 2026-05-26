@@ -169,8 +169,8 @@ def _build_match_where(
     params: dict[str, Any],
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     opponent_archetype_id: str | None = None,
 ) -> str:
     """Build WHERE fragments that filter on parser.matches columns.
@@ -187,10 +187,10 @@ def _build_match_where(
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
         clauses.append("COALESCE(m.played_at, m.parsed_at)::date >= :date_from")
-        params["date_from"] = date.fromisoformat(date_from)
+        params["date_from"] = date_from
     if date_to:
         clauses.append("COALESCE(m.played_at, m.parsed_at)::date <= :date_to")
-        params["date_to"] = date.fromisoformat(date_to)
+        params["date_to"] = date_to
     if opponent_archetype_id:
         clauses.append(
             "EXISTS (SELECT 1 FROM parser.match_archetypes opp_ma "
@@ -253,8 +253,8 @@ async def _card_stats_from_materialized(
     card_name: str | None = None,
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     opponent_archetype_id: str | None = None,
     on_play: bool | None = None,
     is_postboard: bool | None = None,
@@ -368,8 +368,8 @@ async def _load_card_appearances(
     card_name: str | None = None,
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """Load per-game card appearance data using SQL-level JSONB extraction."""
     where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
@@ -381,10 +381,10 @@ async def _load_card_appearances(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
         params["date_to"] = date_to
 
     if not hero_name:
@@ -446,8 +446,8 @@ async def _load_card_appearances_fallback(
     card_name: str | None = None,
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """Fallback loader for battlefield entries stored as plain strings."""
     where = "WHERE m.user_id = :user_id AND m.review_status IS NULL"
@@ -459,10 +459,10 @@ async def _load_card_appearances_fallback(
         where += " AND m.players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
     if date_from:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from::date"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date >= :date_from"
         params["date_from"] = date_from
     if date_to:
-        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to::date"
+        where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
         params["date_to"] = date_to
 
     rows = (
@@ -546,8 +546,8 @@ async def _load_card_appearances_auto(
     card_name: str | None = None,
     format_filter: str | None = None,
     opponent: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """Try the fast SQL path first; fall back to Python extraction."""
     results = await _load_card_appearances(
@@ -615,8 +615,8 @@ async def get_card_stats(
     sort_dir: Annotated[str | None, Query()] = None,
     format: Annotated[str | None, Query()] = None,
     opponent: Annotated[str | None, Query()] = None,
-    date_from: Annotated[str | None, Query()] = None,
-    date_to: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
     opponent_archetype_id: Annotated[uuid.UUID | None, Query()] = None,
     on_play: Annotated[bool | None, Query()] = None,
     is_postboard: Annotated[bool | None, Query()] = None,
