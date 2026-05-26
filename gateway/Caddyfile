@@ -29,7 +29,7 @@
     # Per-service Prometheus metrics — path rewritten before forwarding.
     # Restricted to RFC 1918 ranges + loopback; public requests get 403.
     handle /auth/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy auth:8000 {
@@ -41,7 +41,7 @@
     }
 
     handle /ingest/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy ingest:8000 {
@@ -53,7 +53,7 @@
     }
 
     handle /analytics/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy analytics:8000 {
@@ -65,7 +65,7 @@
     }
 
     handle /parser/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy parser:8000 {
@@ -77,14 +77,14 @@
     }
 
     handle /postgres/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy postgres-exporter:9187
     }
 
     handle /redis/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
         respond @denied 403
         rewrite * /metrics
         reverse_proxy redis-exporter:9121
