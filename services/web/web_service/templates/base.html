@@ -134,6 +134,38 @@
         </div>
     </header>
 
+    {# -- MOTD Banner -- #}
+    {% if motd and motd.active %}
+    <div x-data="{ dismissed: false }" x-show="!dismissed" x-cloak
+         class="fixed top-12 left-0 right-0 z-40 border-b text-sm px-4 py-2.5 flex items-center justify-between gap-3
+                {% if motd.severity == 'warning' %}
+                dark:bg-red-900/40 bg-red-50 dark:border-red-700/50 border-red-300 dark:text-red-200 text-red-800
+                {% else %}
+                dark:bg-emerald-900/40 bg-emerald-50 dark:border-emerald-700/50 border-emerald-300 dark:text-emerald-200 text-emerald-800
+                {% endif %}"
+         id="motd-banner">
+        <div class="flex items-center gap-2 min-w-0">
+            {% if motd.severity == 'warning' %}
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            {% else %}
+            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            {% endif %}
+            <span class="truncate">{{ motd.message }}</span>
+        </div>
+        <button @click="dismissed = true"
+                class="flex-shrink-0 p-0.5 rounded hover:opacity-70 transition-opacity"
+                aria-label="Dismiss banner">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+    {% endif %}
+
     {% block body_layout %}
     {% if user %}
     {# ── Authenticated: sidebar + main ── #}

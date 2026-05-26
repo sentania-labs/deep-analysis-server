@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,77 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 # Browser-auth redirect handler — converts BrowserAuthRedirect into a
 # 302 to /login (or /settings/password for password-change scope).
 app.add_exception_handler(BrowserAuthRedirect, browser_auth_redirect_handler)
+
+
+# ---------------------------------------------------------------------------
+# MOTD cache — short TTL so updates propagate quickly
+# ---------------------------------------------------------------------------
+
+_motd_cache: auth_client.MotdResult | None = None
+_motd_cache_ts: float = 0.0
+_MOTD_CACHE_TTL_SECONDS = 30.0
+
+
+async def _get_cached_motd(settings_obj: WebSettings) -> auth_client.MotdResult:
+    """Return the current MOTD, using a 30-second in-memory cache."""
+    global _motd_cache, _motd_cache_ts
+    now = time.monotonic()
+    if _motd_cache is not None and (now - _motd_cache_ts) < _MOTD_CACHE_TTL_SECONDS:
+        return _motd_cache
+    result = await auth_client.public_get_motd(settings_obj.auth_service_url)
+    _motd_cache = result
+    _motd_cache_ts = now
+    return result
+
+
+def _reset_motd_cache() -> None:
+    """Test hook + post-update invalidation."""
+    global _motd_cache, _motd_cache_ts
+    _motd_cache = None
+    _motd_cache_ts = 0.0
+
+
+@app.middleware("http")
+async def inject_motd_middleware(request: Request, call_next: Any) -> Response:
+    """Fetch the MOTD once per request and stash it on request.state."""
+    path = request.url.path
+    if path.startswith("/static") or path.endswith("/healthz") or path == "/metrics":
+        return await call_next(request)
+    try:
+        motd = await _get_cached_motd(get_settings())
+    except Exception:  # noqa: BLE001
+        motd = auth_client.MotdResult(active=False)
+    request.state.motd = motd
+    return await call_next(request)
+
+
+# Patch Jinja2Templates to auto-inject ``motd`` into every render context.
+_original_template_response = templates.TemplateResponse
+
+
+def _patched_template_response(
+    request_or_name: Any,
+    name_or_context: Any = None,
+    context: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Response:
+    """Wrapper that injects ``motd`` into every template context."""
+    if isinstance(request_or_name, Request):
+        req = request_or_name
+        tpl_name = name_or_context
+        ctx = context or {}
+    else:
+        tpl_name = request_or_name
+        ctx = name_or_context if isinstance(name_or_context, dict) else (context or {})
+        req = ctx.get("request")
+    if req is not None and hasattr(req, "state") and hasattr(req.state, "motd"):
+        ctx.setdefault("motd", req.state.motd)
+    else:
+        ctx.setdefault("motd", None)
+    return _original_template_response(req, tpl_name, ctx, **kwargs)
+
+
+templates.TemplateResponse = _patched_template_response  # type: ignore[assignment]
 
 
 @app.get("/healthz")
@@ -2493,6 +2565,10 @@ def _render_admin_settings(
     cards_status: dict[str, Any] | None = None,
     scraper_health: dict[str, Any] | None = None,
     scraper_healths: list[dict[str, Any]] | None = None,
+    admin_motd: auth_client.MotdResult | None = None,
+    motd_saved: bool = False,
+    motd_cleared: bool = False,
+    motd_error: str | None = None,
     error: str | None,
     saved: bool,
     tunables_saved: bool = False,
@@ -2520,6 +2596,10 @@ def _render_admin_settings(
             "cards_status": cards_status,
             "scraper_health": mtgo_health,
             "mtgtop8_health": mtgtop8_health,
+            "admin_motd": admin_motd,
+            "motd_saved": motd_saved,
+            "motd_cleared": motd_cleared,
+            "motd_error": motd_error,
             "is_root_admin": user.user_id == _ROOT_ADMIN_USER_ID,
             "lock_tooltip": _REGISTRATION_MODE_LOCK_TOOLTIP,
             "error": error,
@@ -2540,6 +2620,8 @@ async def admin_settings(
     settings: WebSettings = Depends(get_settings),
     saved: Annotated[int, Query(ge=0, le=1)] = 0,
     tunables_saved: Annotated[int, Query(ge=0, le=1)] = 0,
+    motd_saved: Annotated[int, Query(ge=0, le=1)] = 0,
+    motd_cleared: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgo_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgtop8_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
@@ -2549,6 +2631,7 @@ async def admin_settings(
 
     mode: auth_client.RegistrationMode | None = None
     tunables: auth_client.TunablesResult | None = None
+    admin_motd: auth_client.MotdResult | None = None
     cards_status: dict[str, Any] | None = None
     scraper_healths: list[dict[str, Any]] | None = None
     error: str | None = None
@@ -2573,6 +2656,11 @@ async def admin_settings(
             error = "Authentication service unavailable. Please try again."
 
     try:
+        admin_motd = await auth_client.admin_get_motd(settings.auth_service_url, user.token)
+    except (auth_client.AuthForbidden, auth_client.AuthClientError):
+        _log.debug("admin.settings.motd unavailable")
+
+    try:
         cards_status = await analytics_client.admin_get_cards_status(
             settings.analytics_service_url, user.token
         )
@@ -2592,11 +2680,14 @@ async def admin_settings(
         user,
         mode=mode,
         tunables=tunables,
+        admin_motd=admin_motd,
         cards_status=cards_status,
         scraper_healths=scraper_healths,
         error=error,
         saved=saved == 1,
         tunables_saved=tunables_saved == 1,
+        motd_saved=motd_saved == 1,
+        motd_cleared=motd_cleared == 1,
         scrape_mtgo_triggered=scrape_mtgo_triggered == 1,
         scrape_mtgtop8_triggered=scrape_mtgtop8_triggered == 1,
         status_code=code,
@@ -2735,6 +2826,128 @@ async def admin_settings_tunables(
         saved=False,
         tunables_error="Invalid tunable values. Check ranges and try again.",
         status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.post("/admin/settings/motd")
+async def admin_settings_set_motd(
+    request: Request,
+    motd_message: Annotated[str, Form()],
+    motd_severity: Annotated[str, Form()],
+    motd_expires_at: Annotated[str, Form()],
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    message = motd_message.strip()
+    severity = motd_severity.strip()
+    expires_at_raw = motd_expires_at.strip()
+
+    if not message:
+        admin_motd_err: auth_client.MotdResult | None = None
+        with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+            admin_motd_err = await auth_client.admin_get_motd(settings.auth_service_url, user.token)
+        mode_err: auth_client.RegistrationMode | None = None
+        with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+            mode_err = await auth_client.admin_get_registration_mode(
+                settings.auth_service_url, user.token
+            )
+        return _render_admin_settings(
+            request,
+            user,
+            mode=mode_err,
+            admin_motd=admin_motd_err,
+            error=None,
+            saved=False,
+            motd_error="Banner message is required.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if severity not in ("info", "warning"):
+        severity = "info"
+
+    if (
+        expires_at_raw
+        and "T" in expires_at_raw
+        and "+" not in expires_at_raw
+        and "Z" not in expires_at_raw
+    ):
+        expires_at_iso = expires_at_raw + ":00+00:00"
+    else:
+        expires_at_iso = expires_at_raw
+
+    try:
+        result, err = await auth_client.admin_set_motd(
+            settings.auth_service_url,
+            user.token,
+            message=message,
+            severity=severity,
+            expires_at=expires_at_iso,
+        )
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.motd.set.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth PUT /admin/settings/motd call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    if result is not None:
+        _reset_motd_cache()
+        return RedirectResponse(
+            url="/admin/settings?motd_saved=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    admin_motd_re: auth_client.MotdResult | None = None
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        admin_motd_re = await auth_client.admin_get_motd(settings.auth_service_url, user.token)
+    mode_re: auth_client.RegistrationMode | None = None
+    with contextlib.suppress(auth_client.AuthForbidden, auth_client.AuthClientError):
+        mode_re = await auth_client.admin_get_registration_mode(
+            settings.auth_service_url, user.token
+        )
+    return _render_admin_settings(
+        request,
+        user,
+        mode=mode_re,
+        admin_motd=admin_motd_re,
+        error=None,
+        saved=False,
+        motd_error="Could not set the banner. Check the expiration date.",
+        status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@app.post("/admin/settings/motd/clear")
+async def admin_settings_clear_motd(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        await auth_client.admin_clear_motd(settings.auth_service_url, user.token)
+    except auth_client.AuthForbidden:
+        _log.info("admin.settings.motd.clear.forbidden", extra={"user_id": user.user_id})
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth DELETE /admin/settings/motd call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    _reset_motd_cache()
+    return RedirectResponse(
+        url="/admin/settings?motd_cleared=1", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
