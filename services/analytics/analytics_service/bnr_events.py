@@ -364,6 +364,7 @@ async def import_wiki(
             existing_keys.add(key)
             result.imported += 1
         except Exception as exc:  # noqa: BLE001
+            await db.rollback()
             result.errors.append(f"Failed to import {fmt} {eff_date}: {exc}")
 
     await db.commit()
