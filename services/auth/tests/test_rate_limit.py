@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.fixture(autouse=True)
-def _enable_rate_limiting() -> Any:
+def _enable_rate_limiting(client: Any) -> Any:
     """Re-enable rate limiting for this test module.
 
     The global conftest disables rate-limit dependencies so other tests
