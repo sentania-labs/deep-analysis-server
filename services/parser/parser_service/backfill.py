@@ -3,7 +3,8 @@
 Runs as a periodic task inside the parser service. Queries across
 the ingest and parser schemas to find (sha256, user_id) pairs that
 exist in ``ingest.user_uploads`` but have no corresponding row in
-``parser.matches``, then feeds them through the normal parse pipeline.
+``parser.matches`` (for match logs) or ``parser.deck_compositions``
+(for decklists), then feeds them through the normal parse pipeline.
 
 This closes the reliability gap in the Redis pub/sub delivery: if the
 parser misses a ``file.ingested`` event (downtime, DB outage, Redis
@@ -47,6 +48,21 @@ _UNPARSED_SQL = text(
     """
 )
 
+_UNPARSED_DECKLISTS_SQL = text(
+    """
+    SELECT u.sha256, u.user_id
+      FROM ingest.user_uploads u
+      JOIN ingest.game_log_files g ON g.sha256 = u.sha256
+      LEFT JOIN parser.deck_compositions d
+        ON d.sha256 = u.sha256 AND d.user_id = u.user_id
+     WHERE g.content_type = 'decklist'
+       AND d.id IS NULL
+     GROUP BY u.sha256, u.user_id
+     ORDER BY MAX(u.uploaded_at) DESC
+     LIMIT :batch_size
+    """
+)
+
 
 async def scan_unparsed(
     sm: async_sessionmaker[AsyncSession],
@@ -55,6 +71,10 @@ async def scan_unparsed(
 ) -> int:
     if batch_size is None:
         batch_size = get_settings().backfill_batch_size
+
+    total_processed = 0
+
+    # --- Match logs ---
     async with sm() as session:
         rows = (
             await session.execute(
@@ -63,21 +83,40 @@ async def scan_unparsed(
             )
         ).all()
 
-    if not rows:
-        return 0
+    if rows:
+        _log.info("backfill scan found %d unparsed match logs", len(rows))
+        for sha256, user_id in rows:
+            try:
+                result = await consumer.handle_event(str(sha256), int(user_id))
+                if result is not None:
+                    total_processed += 1
+            except Exception:  # noqa: BLE001
+                _log.exception("backfill parse failed sha256=%s user_id=%s", sha256, user_id)
 
-    _log.info("backfill scan found %d unparsed files", len(rows))
-    processed = 0
-    for sha256, user_id in rows:
-        try:
-            result = await consumer.handle_event(str(sha256), int(user_id))
-            if result is not None:
-                processed += 1
-        except Exception:  # noqa: BLE001
-            _log.exception("backfill parse failed sha256=%s user_id=%s", sha256, user_id)
+    # --- Decklists ---
+    async with sm() as session:
+        deck_rows = (
+            await session.execute(
+                _UNPARSED_DECKLISTS_SQL,
+                {"batch_size": batch_size},
+            )
+        ).all()
 
-    _log.info("backfill scan complete found=%d processed=%d", len(rows), processed)
-    return processed
+    if deck_rows:
+        _log.info("backfill scan found %d unparsed decklists", len(deck_rows))
+        for sha256, user_id in deck_rows:
+            try:
+                await consumer.handle_decklist_event(str(sha256), int(user_id))
+                total_processed += 1
+            except Exception:  # noqa: BLE001
+                _log.exception(
+                    "backfill decklist parse failed sha256=%s user_id=%s", sha256, user_id
+                )
+
+    total_found = len(rows) + len(deck_rows)
+    if total_found:
+        _log.info("backfill scan complete found=%d processed=%d", total_found, total_processed)
+    return total_processed
 
 
 async def backfill_loop(
