@@ -2,6 +2,9 @@
 	# Slot-internal reverse proxy. Fleet-caddy terminates TLS;
 	# this gateway runs plaintext only.
 	auto_https off
+	servers {
+		metrics
+	}
 }
 
 :8080 {
