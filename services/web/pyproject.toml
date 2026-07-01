@@ -20,7 +20,3 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["web_service"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"web_service/templates" = "web_service/templates"
-"web_service/static" = "web_service/static"
