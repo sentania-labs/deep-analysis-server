@@ -138,6 +138,8 @@ async def _load_user_matches(
     *,
     date_from: date | None = None,
     date_to: date | None = None,
+    format_: str | None = None,
+    opponent: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a user's matches plus per-match game-winner counts.
 
@@ -150,6 +152,10 @@ async def _load_user_matches(
 
     v0.9.8: Optional ``date_from`` / ``date_to`` params push date
     filtering to SQL (same pattern as ``game_stats._load_games_with_context``).
+
+    Issue #124: optional ``format_`` / ``opponent`` params reuse the same
+    SQL predicates as ``list_matches`` so by-opponent aggregates and the
+    match list agree on which matches are in scope.
     """
     where = "WHERE user_id = :user_id AND review_status IS NULL"
     params: dict[str, Any] = {"user_id": user_id}
@@ -159,6 +165,12 @@ async def _load_user_matches(
     if date_to:
         where += " AND COALESCE(played_at, parsed_at)::date <= :date_to"
         params["date_to"] = date_to
+    if format_:
+        where += " AND LOWER(format) = LOWER(:format)"
+        params["format"] = format_
+    if opponent:
+        where += " AND players::text ILIKE :opp_pattern ESCAPE '\\'"
+        params["opp_pattern"] = f"%{_escape_like(opponent)}%"
 
     rows = (
         await db.execute(
@@ -332,37 +344,87 @@ async def get_by_format(
     return out
 
 
+def _normalize_result_filter(result: str | None) -> str | None:
+    """Map a ``result`` query value to a classifier code, or None for all.
+
+    Accepts the same vocabulary as ``/stats/matches``: ``wins`` / ``losses``
+    / ``draws`` or the bare ``W`` / ``L`` / ``D`` codes. ``all`` and empty
+    values mean no filtering.
+    """
+    if not result or result.lower() == "all":
+        return None
+    return {"wins": "W", "losses": "L", "draws": "D"}.get(result.lower(), result.upper())
+
+
 @router.get("/by-opponent", response_model=list[OpponentStat])
 async def get_by_opponent(
     user: AuthenticatedUser = Depends(require_user),
     db: AsyncSession = Depends(get_session),
+    format: Annotated[str | None, Query()] = None,
+    opponent: Annotated[str | None, Query()] = None,
+    result: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
 ) -> list[OpponentStat]:
+    """Per-opponent aggregates, honouring the same filters as ``/stats/matches``.
+
+    Issue #124: the Match History page shows this table next to a filtered
+    match list, so it has to be computed from the same set of matches.
+    Filters are normalized before they reach the cache key, so an explicit
+    ``format=all`` and an absent ``format`` share one cache entry while a
+    real filter gets its own.
+    """
+    format_filter = format if format and format.lower() != "all" else None
+    opponent_filter = opponent or None
+    result_filter = _normalize_result_filter(result)
+
     redis_client = await _get_redis_or_none()
-    ck = cache_key(user.user_id, "by-opponent")
+    # Both SQL predicates are case-insensitive, so fold case for the key too:
+    # otherwise ``format=modern`` and ``format=Modern`` mint two identical entries.
+    ck = cache_key(
+        user.user_id,
+        "by-opponent",
+        format=format_filter.lower() if format_filter else None,
+        opponent=opponent_filter.lower() if opponent_filter else None,
+        result=result_filter,
+        date_from=date_from,
+        date_to=date_to,
+    )
     if redis_client:
         cached = await get_cached(redis_client, ck, endpoint="by-opponent")
         if isinstance(cached, list):
             return [OpponentStat(**item) for item in cached]
-    matches = await _load_user_matches(db, user.user_id)
+    matches = await _load_user_matches(
+        db,
+        user.user_id,
+        date_from=date_from,
+        date_to=date_to,
+        format_=format_filter,
+        opponent=opponent_filter,
+    )
     if not matches:
         return []
     buckets: dict[str, dict[str, int]] = {}
     for m in matches:
-        result, opponent, _pw, _pl = _classify_match(
+        result_code, opponent_name, _pw, _pl = _classify_match(
             m["players"],
             m["wins_by_player"],
             m.get("hero_player_name"),
             match_tied=m.get("match_tied", False),
         )
-        if not opponent:
+        if not opponent_name:
             continue
-        bucket = buckets.setdefault(opponent, {"matches": 0, "wins": 0, "losses": 0, "draws": 0})
+        if result_filter and result_code != result_filter:
+            continue
+        bucket = buckets.setdefault(
+            opponent_name, {"matches": 0, "wins": 0, "losses": 0, "draws": 0}
+        )
         bucket["matches"] += 1
-        if result == "W":
+        if result_code == "W":
             bucket["wins"] += 1
-        elif result == "L":
+        elif result_code == "L":
             bucket["losses"] += 1
-        elif result == "D":
+        elif result_code == "D":
             bucket["draws"] += 1
     out: list[OpponentStat] = []
     for opp, b in sorted(buckets.items(), key=lambda kv: -kv[1]["matches"]):

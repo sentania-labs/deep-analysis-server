@@ -69,6 +69,8 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
         *,
         date_from: date | None = None,
         date_to: date | None = None,
+        format_: str | None = None,
+        opponent: str | None = None,
     ) -> list[dict[str, Any]]:
         return matches
 
@@ -99,8 +101,17 @@ def _patch_loader_date_aware(
         *,
         date_from: date | None = None,
         date_to: date | None = None,
+        format_: str | None = None,
+        opponent: str | None = None,
     ) -> list[dict[str, Any]]:
-        calls.append({"date_from": date_from, "date_to": date_to})
+        calls.append(
+            {
+                "date_from": date_from,
+                "date_to": date_to,
+                "format_": format_,
+                "opponent": opponent,
+            }
+        )
         return matches
 
     monkeypatch.setattr(_stats, "_load_user_matches", fake_loader)
