@@ -276,34 +276,38 @@ async def upload(
     inserted = insert_res.first() is not None
     deduped = not inserted
 
-    # Only write to the archive on first-time content; re-uploads are a
-    # no-op (store_file is idempotent anyway, since the key is derived
-    # from the content, but skipping the round-trip is cheap).
-    if inserted:
-        try:
-            await store_file(
-                get_store(),
-                content,
-                sha,
-                content_type.value,
-                key_prefix=settings.s3_key_prefix,
-            )
-        except ObjectStoreFullError as exc:
-            # Roll back the db row so the archive + table stay in sync.
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
-                detail={"error": "insufficient_storage"},
-            ) from exc
-        except ObjectStorageError as exc:
-            # Store unreachable or refusing writes. Fail fast and loudly
-            # rather than committing a row whose object never landed.
-            await db.rollback()
-            _log.error("object store write failed sha=%s: %s", sha, exc)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"error": "storage_unavailable"},
-            ) from exc
+    # Write to the archive on every upload, dedup hit or not. A 201 has
+    # to mean the content IS in the object store, and the db row alone
+    # does not prove that: on a host upgraded from the filesystem
+    # archive, every legacy sha is already in game_log_files with no
+    # object behind it until the backfill runs, and an object can also
+    # go missing by accident. store_file is idempotent (HEAD before
+    # PUT), so the already-present case costs one metadata round-trip
+    # and the missing case is repaired by the next upload of that file.
+    try:
+        await store_file(
+            get_store(),
+            content,
+            sha,
+            content_type.value,
+            key_prefix=settings.s3_key_prefix,
+        )
+    except ObjectStoreFullError as exc:
+        # Roll back the db row so the archive + table stay in sync.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail={"error": "insufficient_storage"},
+        ) from exc
+    except ObjectStorageError as exc:
+        # Store unreachable or refusing writes. Fail fast and loudly
+        # rather than committing a row whose object never landed.
+        await db.rollback()
+        _log.error("object store write failed sha=%s: %s", sha, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "storage_unavailable"},
+        ) from exc
 
     # Always record the per-user attribution row, even on dedup.
     now = datetime.now(UTC)

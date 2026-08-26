@@ -6,6 +6,23 @@
 
 name: deep-analysis
 
+# Every setting the S3 adapter reads, forwarded to every service that
+# uses it. `.env` supplies Compose *interpolation* values; it does not
+# populate container environments on its own, so anything not listed
+# here silently stays at the code default no matter what `.env` says.
+# Defaults below must track common/settings.py.
+x-s3-env: &s3-env
+  DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
+  DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
+  DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+  DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
+  DA_S3_REGION: ${DA_S3_REGION:-us-east-1}
+  DA_S3_FORCE_PATH_STYLE: ${DA_S3_FORCE_PATH_STYLE:-true}
+  DA_S3_CONNECT_TIMEOUT_SECONDS: ${DA_S3_CONNECT_TIMEOUT_SECONDS:-3.0}
+  DA_S3_READ_TIMEOUT_SECONDS: ${DA_S3_READ_TIMEOUT_SECONDS:-10.0}
+  DA_S3_MAX_ATTEMPTS: ${DA_S3_MAX_ATTEMPTS:-3}
+  DA_S3_KEY_PREFIX: ${DA_S3_KEY_PREFIX:-raw}
+
 services:
 
   postgres:
@@ -165,13 +182,22 @@ services:
     networks:
       - backend
     environment:
-      MC_HOST_da: http://${DA_S3_ACCESS_KEY:-deep-analysis}:${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}@minio:9000
+      # Credentials go in as plain env values and reach `mc` as separate
+      # argv entries. Interpolating them into an MC_HOST_da URL instead
+      # would let a secret containing a URL-reserved character (/, #, ?,
+      # @) change how that URL parses, so a generated password with a
+      # slash in it would fail this job, and both ingest and parser wait
+      # on it with service_completed_successfully.
+      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
+      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        mc mb --ignore-existing "da/${DA_S3_BUCKET:-deep-analysis-raw}"
-        echo "bucket ready: ${DA_S3_BUCKET:-deep-analysis-raw}"
+        mc alias set da http://minio:9000 "$$DA_S3_ACCESS_KEY" "$$DA_S3_SECRET_KEY"
+        mc mb --ignore-existing "da/$$DA_S3_BUCKET"
+        echo "bucket ready: $$DA_S3_BUCKET"
     depends_on:
       minio:
         condition: service_healthy
@@ -190,10 +216,7 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
-      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
-      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
-      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
-      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
+      <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
     volumes:
       - raw_archive:/data/raw:ro
@@ -278,10 +301,7 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
-      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
-      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
-      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
-      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
+      <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
@@ -317,10 +337,7 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
-      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
-      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
-      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
-      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
+      <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
@@ -413,9 +430,21 @@ networks:
 volumes:
   postgres_data:
   minio_data:
-  # Pre-object-store archive. Nothing writes to it any more and no
-  # running service mounts it: it stays declared so the backfill job can
-  # read it and so `compose down -v` on an upgraded host does not take
-  # the old copy with it. Reclaim it deliberately, after verifying the
-  # backfill: `docker volume rm deep-analysis_raw_archive`.
+  # Pre-object-store archive. Nothing writes to it any more and only the
+  # one-shot backfill job mounts it, read-only.
+  #
+  # `external: true` is the point: a volume Compose manages is a volume
+  # `docker compose down -v` deletes, and during the migration window
+  # this holds the only pre-backfill copy of the archive. External means
+  # Compose will neither create it nor remove it, so `down -v` leaves it
+  # alone and reclaiming it stays a deliberate act:
+  #   docker volume rm deep-analysis_raw_archive
+  #
+  # The tradeoff: Compose no longer CREATES it either. A fresh install
+  # has no legacy archive, so `docker compose up` never references this
+  # and is unaffected, but `--profile backfill` there fails with "external
+  # volume not found" instead of mounting an empty directory. That is the
+  # correct answer to "back up an archive that does not exist".
   raw_archive:
+    external: true
+    name: deep-analysis_raw_archive
