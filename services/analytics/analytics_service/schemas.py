@@ -176,6 +176,13 @@ class ScraperConfigResponse(BaseModel):
     consecutive_failures: int = 0
     is_broken: bool = False
     last_error: str | None = None
+    #: Live-run state (#127). ``running_since`` is the start of the run
+    #: currently holding the scraper's lock; both clear when it ends.
+    is_running: bool = False
+    running_since: datetime | None = None
+    run_trigger: str | None = None
+    run_id: str | None = None
+    last_heartbeat_at: datetime | None = None
 
 
 class ScraperConfigListResponse(BaseModel):

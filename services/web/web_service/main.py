@@ -2794,6 +2794,8 @@ def _render_admin_settings(
     tunables_error: str | None = None,
     scrape_mtgo_triggered: bool = False,
     scrape_mtgtop8_triggered: bool = False,
+    scrape_mtgo_running: bool = False,
+    scrape_mtgtop8_running: bool = False,
     status_code: int,
 ) -> Response:
     # Build per-scraper dicts for template convenience
@@ -2827,6 +2829,8 @@ def _render_admin_settings(
             "tunables_error": tunables_error,
             "scrape_mtgo_triggered": scrape_mtgo_triggered,
             "scrape_mtgtop8_triggered": scrape_mtgtop8_triggered,
+            "scrape_mtgo_running": scrape_mtgo_running,
+            "scrape_mtgtop8_running": scrape_mtgtop8_running,
         },
         status_code=status_code,
     )
@@ -2843,6 +2847,8 @@ async def admin_settings(
     motd_cleared: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgo_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgtop8_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
+    scrape_mtgo_running: Annotated[int, Query(ge=0, le=1)] = 0,
+    scrape_mtgtop8_running: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -2909,6 +2915,8 @@ async def admin_settings(
         motd_cleared=motd_cleared == 1,
         scrape_mtgo_triggered=scrape_mtgo_triggered == 1,
         scrape_mtgtop8_triggered=scrape_mtgtop8_triggered == 1,
+        scrape_mtgo_running=scrape_mtgo_running == 1,
+        scrape_mtgtop8_running=scrape_mtgtop8_running == 1,
         status_code=code,
     )
 
@@ -3183,6 +3191,12 @@ async def admin_settings_scrape_mtgo(
         await analytics_client.admin_trigger_mtgo_scrape(settings.analytics_service_url, user.token)
     except analytics_client.AnalyticsForbidden:
         return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsConflict:
+        # A run is already in progress. Say so instead of pretending the
+        # click started something.
+        return RedirectResponse(
+            url="/admin/settings?scrape_mtgo_running=1", status_code=status.HTTP_303_SEE_OTHER
+        )
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics POST /admin/scrape-mtgo call failed")
         return Response(
@@ -3209,6 +3223,12 @@ async def admin_settings_scrape_mtgtop8(
         )
     except analytics_client.AnalyticsForbidden:
         return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsConflict:
+        # A run is already in progress. Say so instead of pretending the
+        # click started something.
+        return RedirectResponse(
+            url="/admin/settings?scrape_mtgtop8_running=1", status_code=status.HTTP_303_SEE_OTHER
+        )
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics POST /admin/scrape-mtgtop8 call failed")
         return Response(
@@ -3238,7 +3258,10 @@ async def admin_scrapers_dashboard(
     if blocked is not None:
         return blocked
     scrapers: list[dict[str, Any]] = []
-    error: str | None = None
+    # The trigger/toggle/interval/reset handlers all redirect back here
+    # with ?error=..., so read it: without this the "already running"
+    # answer to a duplicate trigger would never reach the admin.
+    error: str | None = request.query_params.get("error")
     success_msg: str | None = request.query_params.get("success")
     try:
         scrapers = await analytics_client.admin_get_scrapers(
@@ -3362,6 +3385,11 @@ async def admin_scraper_trigger(
             )
     except analytics_client.AnalyticsForbidden:
         return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsConflict:
+        return RedirectResponse(
+            url=f"/admin/scrapers?error={name}+scrape+already+running",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics POST /admin/scrape-%s trigger failed", name)
         return RedirectResponse(

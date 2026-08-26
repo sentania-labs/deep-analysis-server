@@ -36,9 +36,27 @@ class AnalyticsForbidden(Exception):
     """Analytics rejected the request as 401/403."""
 
 
+class AnalyticsConflict(Exception):
+    """Analytics rejected the request as 409 (a run is already active)."""
+
+    def __init__(self, message: str, payload: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.payload = payload or {}
+
+
 # Shorthand kwargs for all analytics helpers.
 _ERR = {"error_cls": AnalyticsClientError, "forbidden_cls": AnalyticsForbidden}
 _ERR_RAW = {"error_cls": AnalyticsClientError}
+
+
+def _conflict_payload(resp: Any) -> dict[str, Any]:
+    """Best-effort decode of a 409 body; analytics ships JSON, but a
+    proxy in the way might not."""
+    try:
+        data = resp.json()
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _to_item(payload: dict[str, Any]) -> ArchetypeItem:
@@ -404,6 +422,9 @@ def _parse_scraper_health(payload: dict[str, Any]) -> dict[str, Any]:
         "consecutive_failures": int(payload.get("consecutive_failures") or 0),
         "is_broken": bool(payload.get("is_broken")),
         "last_error": payload.get("last_error"),
+        "is_running": bool(payload.get("is_running")),
+        "running_since": _parse_dt(payload.get("running_since")),
+        "run_trigger": payload.get("run_trigger"),
     }
 
 
@@ -435,6 +456,11 @@ async def admin_trigger_mtgtop8_scrape(base_url: str, token: str) -> bool:
     )
     if resp.status_code == 202:
         return True
+    if resp.status_code == 409:
+        raise AnalyticsConflict(
+            "analytics POST /admin/scrape-mtgtop8 returned 409",
+            _conflict_payload(resp),
+        )
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(
             f"analytics POST /admin/scrape-mtgtop8 returned {resp.status_code}"
@@ -488,6 +514,11 @@ async def admin_trigger_mtgo_scrape(base_url: str, token: str) -> bool:
     )
     if resp.status_code == 202:
         return True
+    if resp.status_code == 409:
+        raise AnalyticsConflict(
+            "analytics POST /admin/scrape-mtgo returned 409",
+            _conflict_payload(resp),
+        )
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(f"analytics POST /admin/scrape-mtgo returned {resp.status_code}")
     raise AnalyticsClientError(
@@ -1301,6 +1332,8 @@ async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
     for s in scrapers:
         s["last_run_at"] = _parse_dt(s.get("last_run_at"))
         s["last_success_at"] = _parse_dt(s.get("last_success_at"))
+        s["is_running"] = bool(s.get("is_running"))
+        s["running_since"] = _parse_dt(s.get("running_since"))
     return list(scrapers)
 
 
