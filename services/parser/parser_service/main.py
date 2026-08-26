@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from common.logging import configure_logging
-from common.metrics import mount_metrics
+from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
 from parser_service import models as _models  # noqa: F401 — load Base.metadata
 from parser_service.backfill import backfill_loop
@@ -102,6 +102,7 @@ async def _stop_consumer() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
     try:
         await _start_consumer()
     except Exception:  # noqa: BLE001 — healthz still serves even if redis is down
@@ -113,7 +114,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
-mount_metrics(app, SERVICE_NAME)
 
 from parser_service.reparse import router as _reparse_router  # noqa: E402
 

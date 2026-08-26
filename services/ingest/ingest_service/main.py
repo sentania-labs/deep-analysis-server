@@ -6,6 +6,8 @@ import hashlib
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
@@ -16,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from common.agent_auth import AuthenticatedAgent
 from common.events import FILE_INGESTED, FileIngestedPayload
 from common.logging import configure_logging
-from common.metrics import mount_metrics
+from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
 from ingest_service import models as _models  # noqa: F401 — load Base.metadata
 from ingest_service.db import get_session
@@ -35,8 +37,14 @@ configure_logging(SERVICE_NAME)
 
 _log = logging.getLogger("ingest.main")
 
-app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
-mount_metrics(app, SERVICE_NAME)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
+    yield
+
+
+app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------

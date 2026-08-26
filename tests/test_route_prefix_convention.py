@@ -11,7 +11,10 @@ Allowed paths per service:
 * ``/healthz`` — infra probe (gateway routes per-service via
   ``/<service>/healthz``, but services still expose the bare form
   for direct probing)
-* ``/metrics`` — Prometheus scrape endpoint
+
+Prometheus metrics are served on a separate port (``DA_METRICS_PORT``,
+default 9000) via ``common.metrics.start_metrics_server`` and are not
+FastAPI routes on the app at all, so they never show up here.
 
 Both auth and web own ``/admin/*``: auth keeps its JSON admin API for
 service-to-service calls (web → auth) and direct ops access on the
@@ -34,8 +37,8 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 # Services that run as HTTP apps. Parser is primarily a Redis worker but
-# still exposes /parser/healthz + /metrics for the docker healthcheck and
-# scrape; web is a UI shell with its own browser-routes carve-out below.
+# still exposes /parser/healthz for the docker healthcheck; web is a UI
+# shell with its own browser-routes carve-out below.
 _SERVICES: dict[str, tuple[str, ...]] = {
     "auth": ("/auth/", "/admin/"),
     "ingest": ("/ingest/",),
@@ -44,7 +47,7 @@ _SERVICES: dict[str, tuple[str, ...]] = {
     "web": ("/web/", "/admin/"),
 }
 
-_INFRA_PATHS = frozenset({"/healthz", "/metrics"})
+_INFRA_PATHS = frozenset({"/healthz"})
 
 # Web-service browser routes that Caddy routes via the catch-all — they
 # sit outside the /web/ namespace on purpose because they are URLs a

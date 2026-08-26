@@ -67,7 +67,7 @@ from auth_service.schemas import (
 )
 from auth_service.settings import get_settings
 from common.logging import configure_logging
-from common.metrics import mount_metrics
+from common.metrics import start_metrics_server
 
 SERVICE_NAME = "auth"
 configure_logging(SERVICE_NAME)
@@ -97,6 +97,7 @@ _log = logging.getLogger("auth.main")
 
 @contextlib.asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
     try:
         sm = get_sessionmaker()
         async with sm() as session:
@@ -107,7 +108,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
-mount_metrics(app, SERVICE_NAME)
 
 from auth_service import admin  # noqa: E402
 from auth_service.admin import router as _admin_router  # noqa: E402

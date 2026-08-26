@@ -58,8 +58,12 @@ echo "=== Deep Analysis E2E smoke — $BASE_URL ==="
 echo ""
 echo "--- Infrastructure probes ---"
 
+# App metrics moved off the public gateway path entirely (issue #134):
+# each service now serves /metrics on its own DA_METRICS_PORT (default
+# 9000), never on the app port the gateway proxies to. Bare /metrics on
+# the gateway must be unreachable regardless of what the proxy does.
 status=$(http_status "$BASE_URL/metrics")
-check "GET /metrics → 200" "200" "$status"
+check "GET /metrics → 404 (moved off the app port, issue #134)" "404" "$status"
 
 status=$(http_status "$BASE_URL/postgres/metrics")
 check "GET /postgres/metrics → 200" "200" "$status"

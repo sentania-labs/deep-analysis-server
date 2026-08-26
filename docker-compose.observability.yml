@@ -17,7 +17,10 @@ name: deep-analysis
 services:
 
   prometheus:
-    # Scrapes /metrics endpoints on each service.
+    # Scrapes each service's metrics endpoint on its own port
+    # (DA_METRICS_PORT, default 9000), not the app port. Services publish
+    # metrics via common.metrics.start_metrics_server, not a route on the
+    # app itself.
     # Config: prometheus.yml (to be added in Phase 2)
     image: prom/prometheus:v2.51.0
     restart: unless-stopped

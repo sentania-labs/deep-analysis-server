@@ -15,5 +15,6 @@ class BaseServiceSettings(BaseSettings):
     jwt_public_key_path: Path
     jwt_issuer: str = "deep-analysis-auth"
     jwt_audience: str = "deep-analysis"
+    metrics_port: int = 9000
 
     model_config = SettingsConfigDict(env_prefix="DA_", env_nested_delimiter="__")
