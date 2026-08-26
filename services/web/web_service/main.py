@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
-from web_service import analytics_client, auth_client, parser_client
+from web_service import analytics_client, auth_client, ingest_client, parser_client
 from web_service import csrf as _csrf_mod
 from web_service.deps import (
     BrowserAuthRedirect,
@@ -2808,6 +2808,9 @@ def _render_admin_settings(
     scrape_mtgtop8_triggered: bool = False,
     scrape_mtgo_running: bool = False,
     scrape_mtgtop8_running: bool = False,
+    raw_backfill: dict[str, Any] | None = None,
+    raw_backfill_triggered: bool = False,
+    raw_backfill_running: bool = False,
     status_code: int,
 ) -> Response:
     # Build per-scraper dicts for template convenience
@@ -2843,6 +2846,9 @@ def _render_admin_settings(
             "scrape_mtgtop8_triggered": scrape_mtgtop8_triggered,
             "scrape_mtgo_running": scrape_mtgo_running,
             "scrape_mtgtop8_running": scrape_mtgtop8_running,
+            "raw_backfill": raw_backfill,
+            "raw_backfill_triggered": raw_backfill_triggered,
+            "raw_backfill_running": raw_backfill_running,
         },
         status_code=status_code,
     )
@@ -2861,6 +2867,8 @@ async def admin_settings(
     scrape_mtgtop8_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgo_running: Annotated[int, Query(ge=0, le=1)] = 0,
     scrape_mtgtop8_running: Annotated[int, Query(ge=0, le=1)] = 0,
+    raw_backfill_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
+    raw_backfill_running: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -2909,6 +2917,17 @@ async def admin_settings(
         )
     except (analytics_client.AnalyticsForbidden, analytics_client.AnalyticsClientError):
         _log.debug("admin.settings.scraper_health unavailable")
+
+    # Raw-archive migration (issue #161). Best-effort: ingest being
+    # briefly unreachable hides this panel, it does not 503 the page.
+    raw_backfill: dict[str, Any] | None = None
+    try:
+        raw_backfill = await ingest_client.admin_get_raw_backfill(
+            settings.ingest_service_url, user.token
+        )
+    except (ingest_client.IngestForbidden, ingest_client.IngestClientError):
+        _log.debug("admin.settings.raw_backfill unavailable")
+
     code = (
         status.HTTP_503_SERVICE_UNAVAILABLE if error and mode is None and tunables is None else 200
     )
@@ -2929,6 +2948,9 @@ async def admin_settings(
         scrape_mtgtop8_triggered=scrape_mtgtop8_triggered == 1,
         scrape_mtgo_running=scrape_mtgo_running == 1,
         scrape_mtgtop8_running=scrape_mtgtop8_running == 1,
+        raw_backfill=raw_backfill,
+        raw_backfill_triggered=raw_backfill_triggered == 1,
+        raw_backfill_running=raw_backfill_running == 1,
         status_code=code,
     )
 
@@ -3187,6 +3209,44 @@ async def admin_settings_clear_motd(
     _reset_motd_cache()
     return RedirectResponse(
         url="/admin/settings?motd_cleared=1", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/admin/settings/raw-backfill")
+async def admin_settings_raw_backfill(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Run the legacy raw-archive migration now (issue #161).
+
+    The migration normally runs itself after a deploy. This button is
+    for the operator who turned the automatic path off, or who needs to
+    re-run it after fixing a missing mount, or who simply wants to
+    confirm the last run finished (the job is idempotent, so re-running
+    it is the supported way to check).
+    """
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+    try:
+        await ingest_client.admin_run_raw_backfill(settings.ingest_service_url, user.token)
+    except ingest_client.IngestForbidden:
+        return _admin_forbidden(request, user)
+    except ingest_client.IngestBusy:
+        # Already migrating. Say so instead of pretending the click
+        # started something.
+        return RedirectResponse(
+            url="/admin/settings?raw_backfill_running=1", status_code=status.HTTP_303_SEE_OTHER
+        )
+    except ingest_client.IngestClientError:
+        _log.exception("ingest POST /ingest/admin/raw-backfill/run call failed")
+        return Response(
+            content="Ingest service unavailable.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return RedirectResponse(
+        url="/admin/settings?raw_backfill_triggered=1", status_code=status.HTTP_303_SEE_OTHER
     )
 
 

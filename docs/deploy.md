@@ -109,9 +109,12 @@ Named volumes (managed by Docker):
 - `postgres_data` — Postgres data directory.
 - `minio_data`: the raw game-log archive, in the stack's own MinIO.
 - `raw_archive`: the pre-object-store archive, on hosts upgraded from
-  it. Declared `external: true`, so Compose neither creates nor removes
-  it and `down -v` leaves it alone. Nothing mounts it any more except
-  the one-shot backfill job. See "Raw archive" below.
+  it. Declared `external: true` with its name in
+  `DA_LEGACY_ARCHIVE_VOLUME`, so Compose neither creates nor removes it
+  and `down -v` leaves it alone. Only the one-shot backfill job mounts
+  it. The automatic migration reads the same data through a read-only
+  bind path (`DA_LEGACY_ARCHIVE_SOURCE`) instead, so a fresh install
+  that has no such volume still comes up. See "Raw archive" below.
 - `caddy_data` — Caddy's internal CA, issued certs, and OCSP state.
 - `auth_secrets` — mounted into the `auth` container at `/data/secrets`.
   Holds `initial_admin.txt` (mode `0600`) when the auto-generate
@@ -182,42 +185,170 @@ content the archive does not have.
 
 ### Backfill from the old volume
 
-Migrating an existing install off the `raw_archive` volume:
+On a host upgraded from the filesystem archive, the old files exist only
+on the legacy volume until they are migrated. Until then, anything that
+re-reads a raw log fails: force-reparse, the parser's backfill scan,
+admin re-ingest. Normal browsing and stats are unaffected, because
+parsed data is already in Postgres.
+
+**Once it can see the old archive, it runs itself.** `ingest` starts the
+migration in the background after it is up and serving. Nothing has to
+be run by hand and nothing waits on it. There is exactly one
+host-specific thing to tell it first: **where the old files are.**
+
+#### Step 1: point it at the old archive
+
+`ingest` mounts the legacy archive read-only at `/data/raw`. The default
+is an empty directory Docker creates, which is the correct answer for a
+fresh install: there is nothing to migrate, so nothing happens and the
+stack comes up normally.
+
+On an upgraded host, pick whichever of these matches how the old archive
+is stored.
+
+**The old archive is a Docker volume** (the usual case). Find its real
+name, then bring the stack up with the overlay:
+
+```bash
+docker volume ls | grep raw_archive
+DA_LEGACY_ARCHIVE_VOLUME=<that-name> \
+  docker compose -f docker-compose.yml -f docker-compose.legacy-archive.yml up -d
+```
+
+Do not guess the name (issue #159). Compose derives it from the project
+name, so a stack brought up with `--project-directory
+/srv/services/deep-analysis-server` has `deep-analysis-server_raw_archive`,
+not `deep-analysis_raw_archive`. Read it off the host.
+
+**The old archive is a host path.** Set `DA_LEGACY_ARCHIVE_SOURCE` in
+`.env` and use the base file with no overlay:
+
+```bash
+DA_LEGACY_ARCHIVE_SOURCE=/srv/old-archive
+```
+
+Why two mechanisms: the legacy volume is declared `external: true` so
+`docker compose down -v` cannot destroy the only pre-migration copy of
+the archive. External also means Compose will not create it, and Compose
+cannot mount a volume conditionally, so a base file that mounted it
+would make `docker compose up` fail on every fresh install. The base
+file therefore takes a bind path (created empty if missing) and the
+overlay is how a host that has the volume says so.
+
+#### Step 2: nothing
+
+It starts on its own and finishes on its own.
+
+If `/data/raw` is empty or unmounted while rows still exist, `ingest`
+does not guess. It asks the object store whether every row is already
+there:
+
+- **Everything is present** (the archive was migrated earlier, or the
+  mount was removed after a completed migration): it records `complete`
+  and never asks again. That is what makes step 4 safe.
+- **Files are missing**: it says so, specifically, on the admin page and
+  in the logs, and waits for the mount to be fixed. A forgotten mount is
+  never papered over as "done".
+
+#### Step 3: watching it
+
+Admin > Settings > "Raw archive migration" shows status, a progress bar,
+and the counts, and carries a "Run migration now" button. The same data
+is on `GET /ingest/admin/raw-backfill` (admin JWT) and as Prometheus
+gauges on the ingest metrics port (`DA_METRICS_PORT`, default 9000):
+
+| Gauge | Meaning |
+|---|---|
+| `ingest_raw_backfill_expected` | rows that must be accounted for |
+| `ingest_raw_backfill_processed` | rows accounted for in this pass |
+| `ingest_raw_backfill_remaining` | the difference |
+| `ingest_raw_backfill_uploaded` | objects actually moved |
+| `ingest_raw_backfill_missing_source` | rows with no file to migrate |
+| `ingest_raw_backfill_failed` | rows whose migration failed |
+| `ingest_raw_backfill_verify_errors` | rows the verify pass could not check (store unreachable) |
+| `ingest_raw_backfill_running` | 1 while THIS process is migrating (per-replica, not shared) |
+| `ingest_raw_backfill_complete` | 1 once every row is verified present |
+| `ingest_raw_backfill_source_available` | 1 when the old archive is mounted and non-empty |
+
+**Migration is complete when `status` reads `complete`** (equivalently,
+`ingest_raw_backfill_complete` is 1). That means the verify pass found
+an object in the bucket for every single row in
+`ingest.game_log_files`, not merely that the run ended.
+
+#### Turning it off, and driving it by hand
+
+`DA_S3_AUTO_BACKFILL=false` disables the automatic run. The one-shot job
+is unchanged and still supported:
 
 ```bash
 docker compose --profile backfill run --rm raw-backfill
 ```
 
-The volume is external, so this only works on a host that actually has
-one. On a fresh install it fails with an external-volume-not-found
-error, which is the right answer: there is no legacy archive to move.
+That job mounts the external `raw_archive` volume, whose name comes from
+`DA_LEGACY_ARCHIVE_VOLUME` (default `deep-analysis_raw_archive`). Set it
+to whatever `docker volume ls` actually shows on the host. On a fresh
+install the profile fails with an external-volume-not-found error, which
+is the right answer: there is no legacy archive to move.
 
-Until the backfill has run, every legacy sha is already in
-`ingest.game_log_files` with no object behind it. Uploads handle that
-safely: an upload writes its bytes to the archive on every request,
-dedup hit or not, so a re-upload of a not-yet-backfilled file stores the
-content instead of returning 201 over an empty archive. The same
-behaviour repairs an object deleted by accident. The backfill is still
-what moves files nobody re-uploads.
+It prints a count block: expected, uploaded, already present, missing
+source, hash mismatch, failed, verified. `result: OK` means every row
+was verified present in the bucket. Anything else is `INCOMPLETE` and
+the job exits non-zero. Add `--dry-run` (via `run --rm raw-backfill
+python -m ingest_service.backfill_s3 --source /data/raw --dry-run`) to
+see the plan without writing.
 
-It is idempotent (keys are content-addressed), so re-running it is the
-supported way to confirm the first run finished. It prints a count
-block: expected, uploaded, already present, missing source, hash
-mismatch, failed, verified. `result: OK` means every row in
-`ingest.game_log_files` was verified present in the bucket. Anything
-else is `INCOMPLETE` and the job exits non-zero. Add `--dry-run` (via
-`run --rm raw-backfill python -m ingest_service.backfill_s3 --source
-/data/raw --dry-run`) to see the plan without writing.
+#### Why it is safe to leave running
 
-**The backfill never deletes anything.** The old volume is left exactly
-as it was, so the change is reversible until someone deliberately
-removes it. The volume is declared `external: true` in the Compose file,
-so `docker compose down -v` does not remove it either. Once the run reports `result: OK` and you have confirmed
-uploads and parses are working against the object store, reclaim the
-space yourself:
+- **It does not delay startup.** The migration is a background task
+  created after the app is serving. `/healthz` answers and uploads work
+  while thousands of objects are still moving.
+- **Only one replica does it.** The run holds a Postgres lock row
+  (`ingest.job_runs`, the same heartbeat mechanism the analytics
+  scrapers use). A second ingest replica skips and waits.
+- **A restart resumes.** Keys are content-addressed and the work list is
+  re-derived from the database, so a container killed mid-migration
+  re-checks what is already there and moves only what is missing.
+  Nothing is written twice and nothing is corrupted.
+- **A finished migration costs nothing.** Completion is recorded in
+  `ingest.backfill_state`, so later boots stop at a single row read: no
+  directory walk, no scan, no requests to the object store.
+
+Uploads cover the window before the migration reaches a given file: an
+upload writes its bytes to the archive on every request, dedup hit or
+not, so a re-upload of a not-yet-migrated file stores the content
+instead of returning 201 over an empty archive. The migration is what
+moves files nobody re-uploads.
+
+#### Step 4: removing the mount afterwards
+
+The `raw_archive` mount on `ingest` is **temporary coupling and is meant
+to be removed.** Issue #135 took the shared archive volume away
+precisely so the stack would not need RWX or node-pinning on Kubernetes.
+A read-only mount on `ingest` alone does not bring that back (parser no
+longer mounts it, so exactly one service touches it, which is plain
+RWO), but it is still a mount that exists only for the migration.
+
+Once Admin > Settings reports **complete**:
+
+1. Stop passing `-f docker-compose.legacy-archive.yml` (or unset
+   `DA_LEGACY_ARCHIVE_SOURCE`).
+2. Redeploy. Nothing re-checks: the recorded `complete` state means the
+   migration never runs again, and the ingest container no longer
+   touches the old archive at all.
+
+Leaving the mount in place is harmless, just untidy. Removing it before
+the migration finishes is safe too: `ingest` notices the files are not
+all in the store yet and says so rather than recording a false
+completion.
+
+**The migration never deletes anything.** The old archive is left
+exactly as it was, so the change is reversible until someone
+deliberately removes it, and `docker compose down -v` does not touch it.
+Once you have confirmed uploads and parses are working against the
+object store, reclaim the space yourself:
 
 ```bash
-docker volume rm deep-analysis_raw_archive
+docker volume rm "$DA_LEGACY_ARCHIVE_VOLUME"   # or the name from `docker volume ls`
 ```
 
 That is the only step that destroys the old copy, and nothing does it

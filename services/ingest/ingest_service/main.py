@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import logging
 import re
@@ -10,13 +12,25 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.agent_auth import AuthenticatedAgent
 from common.events import FILE_INGESTED, FileIngestedPayload
+from common.job_lock import TRIGGER_MANUAL, JobAlreadyRunning, acquire
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
@@ -27,9 +41,11 @@ from common.storage import (
     get_object_store,
     reset_object_store,
 )
+from ingest_service import auto_backfill
 from ingest_service import models as _models  # noqa: F401 — load Base.metadata
-from ingest_service.db import get_session
-from ingest_service.deps import get_current_agent
+from ingest_service.db import get_session, get_sessionmaker
+from ingest_service.deps import AuthenticatedUser, get_current_agent, require_admin
+from ingest_service.job_lock import get_store as get_lock_store
 from ingest_service.schemas import AgentClassification, ContentType, UploadResponse
 from ingest_service.settings import get_settings
 from ingest_service.storage import storage_path_for, store_file
@@ -40,10 +56,45 @@ configure_logging(SERVICE_NAME)
 _log = logging.getLogger("ingest.main")
 
 
+_backfill_task: asyncio.Task[None] | None = None
+_manual_task: asyncio.Task[None] | None = None
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
-    yield
+    global _backfill_task
+    settings = get_settings()
+    start_metrics_server(SERVICE_NAME, settings.metrics_port)
+
+    # The legacy-archive migration (issue #161) is started here and
+    # deliberately NOT awaited. `create_task` schedules the coroutine
+    # without running a line of it, so this lifespan returns at its
+    # normal speed: healthz answers and uploads are served while a
+    # 5,000-object migration is still moving bytes in the background.
+    # Awaiting it here would turn every deploy into a multi-minute hang.
+    if settings.s3_auto_backfill:
+        _backfill_task = auto_backfill.start(
+            get_sessionmaker(),
+            get_store(),
+            settings.legacy_archive_path,
+            key_prefix=settings.s3_key_prefix,
+            retry_seconds=settings.s3_auto_backfill_retry_seconds,
+        )
+    else:
+        _log.info("automatic raw archive migration disabled (DA_S3_AUTO_BACKFILL=false)")
+
+    try:
+        yield
+    finally:
+        global _manual_task
+        for task in (_backfill_task, _manual_task):
+            if task is None:
+                continue
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        _backfill_task = None
+        _manual_task = None
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
@@ -359,3 +410,85 @@ async def upload(
         deduped=deduped,
         upload_id=upload_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin: legacy raw-archive migration (issue #161)
+# ---------------------------------------------------------------------------
+#
+# A background data operation nobody can see is the failure mode this
+# workspace keeps getting bitten by, so the migration reports itself two
+# ways: these endpoints (which the admin Settings page renders) and
+# Prometheus gauges on the metrics port. Neither requires reading
+# container logs.
+
+admin_router = APIRouter(prefix="/ingest/admin", tags=["admin"])
+
+
+@admin_router.get("/raw-backfill")
+async def admin_raw_backfill_status(
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> JSONResponse:
+    """Progress and verdict of the legacy raw-archive migration."""
+    settings = get_settings()
+    payload = await auto_backfill.status_payload(
+        get_sessionmaker(),
+        settings.legacy_archive_path,
+        enabled=settings.s3_auto_backfill,
+    )
+    return JSONResponse(content=jsonable_encoder(payload))
+
+
+@admin_router.post("/raw-backfill/run", status_code=status.HTTP_202_ACCEPTED)
+async def admin_raw_backfill_run(
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> JSONResponse:
+    """Trigger the migration now, whatever the automatic gate says.
+
+    The lock is taken here rather than inside the background task so a
+    contended trigger can answer 409 on the spot instead of returning
+    202 for work that will not happen. A manual run also overrides the
+    ``stalled`` state and the ``DA_S3_AUTO_BACKFILL=false`` gate: the
+    operator asked for it explicitly.
+    """
+    settings = get_settings()
+    sm = get_sessionmaker()
+    try:
+        run = await acquire(auto_backfill.JOB_NAME, trigger=TRIGGER_MANUAL, store=get_lock_store())
+    except JobAlreadyRunning as exc:
+        running_since = exc.run.started_at.isoformat() if exc.run is not None else None
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "error": "already_running",
+                "job_name": auto_backfill.JOB_NAME,
+                "running_since": running_since,
+            },
+        )
+
+    async def _run() -> None:
+        try:
+            await auto_backfill.run_once(
+                sm,
+                get_store(),
+                settings.legacy_archive_path,
+                key_prefix=settings.s3_key_prefix,
+                trigger=TRIGGER_MANUAL,
+                run=run,
+            )
+        except Exception:  # noqa: BLE001  (a manual run must not kill the service)
+            _log.exception("manual raw archive migration failed")
+
+    # Detached on purpose: the migration takes minutes and tying up an
+    # admin request that long is the wrong shape. Progress is on GET
+    # /ingest/admin/raw-backfill. The reference is held so the task is
+    # not garbage-collected mid-run and so shutdown can cancel it.
+    global _manual_task
+    _manual_task = asyncio.create_task(_run(), name="ingest-raw-backfill-manual")
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={"status": "started", "job_name": auto_backfill.JOB_NAME, "run_id": run.run_id},
+    )
+
+
+app.include_router(admin_router)

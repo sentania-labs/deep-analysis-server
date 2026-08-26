@@ -120,7 +120,7 @@ async def test_concurrent_acquires_produce_exactly_one_winner(store: InMemoryLoc
 async def test_lock_is_per_scraper_not_global(store: InMemoryLockStore) -> None:
     await acquire(MTGO, trigger=TRIGGER_MANUAL, store=store)
     other = await acquire("mtgtop8", trigger=TRIGGER_MANUAL, store=store)
-    assert other.scraper_name == "mtgtop8"
+    assert other.job_name == "mtgtop8"
 
 
 # --------------------------------------------------------------------------- #
