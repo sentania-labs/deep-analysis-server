@@ -34,14 +34,28 @@ command and blocks pushes that have not been reviewed. What it checks:
 ### What it is not
 
 The gate is a guard against pushing unreviewed work by accident, not an
-adversarial boundary. It parses command text, so shell forms it does not model
-still slip through: `&` as a separator, subshells and brace groups, shell
-keywords (`if`/`for`), a `GIT_DIR=` environment prefix, and prefix commands like
-`time` or `nice`. A marker that resolves to HEAD by name rather than by SHA (the
-literal text `HEAD`, or a branch name) also satisfies it. Do not treat a green
-gate as proof that a reviewer saw the diff. Tightening these is tracked
-separately, and any change has to land in all three Deep Analysis repos at once,
-because they deliberately carry the identical hook file.
+adversarial boundary. It reads command text with a shell-shaped parser rather
+than a shell, so forms it does not model slip through and are ALLOWED:
+
+- `&` as a separator, subshells `( ... )`, brace groups, shell keywords
+  (`if`/`for`), and a backslash-newline line continuation.
+- A quoted path containing whitespace (`git -C '/tmp/my tree' push`), because
+  tokenization is whitespace-based.
+- A leading redirection (`2>/dev/null git push`) or a prefix command (`time`,
+  `nice`, `stdbuf`).
+- A `GIT_DIR=` / `GIT_WORK_TREE=` environment prefix, which can point the push
+  at a different tree than the one whose marker was checked.
+- `git send-pack` or an alias-to-push inside a wrapper, since the wrapper branch
+  only blocks on the literal words `git` and `push`.
+- An alias defined only in a repo selected by `--git-dir`, since alias lookup
+  uses the current directory's config.
+
+A marker that resolves to HEAD by name rather than by SHA (the literal text
+`HEAD`, or a branch name) also satisfies the gate permanently.
+
+Do not treat a green gate as proof that a reviewer saw the diff. These are
+tracked in issue #164. Any fix has to land in all three Deep Analysis repos at
+once, because they deliberately carry the identical hook file.
 
 One practical consequence of failing closed: a command that merely *contains*
 something that parses as a push, for example a heredoc writing a doc or test
