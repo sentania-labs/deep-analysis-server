@@ -59,13 +59,22 @@ check() {
     fi
 }
 
+# NOTE on `|| true` throughout this script: `set -euo pipefail` is on, so
+# any command substitution whose command (or pipeline) exits non-zero kills
+# the run AT THE ASSIGNMENT. For extractions where "no match" or "no answer"
+# is a MEANINGFUL result the script is supposed to report, that turns a clean
+# FAIL line plus the final summary into a silent abort. `|| true` keeps the
+# empty/000 value flowing to the explicit `check` below it. It is never used
+# to paper over a status code: `check` still does the asserting.
+
 http_status() {
     # Returns just the HTTP status code; -k skips TLS verify (self-signed in CI).
-    curl -s -o /dev/null -w "%{http_code}" "$@"
+    # A connection failure yields 000, which the caller's `check` reports.
+    curl -s -o /dev/null -w "%{http_code}" "$@" || true
 }
 
 http_body() {
-    curl -s "$@"
+    curl -s "$@" || true
 }
 
 echo "=== Deep Analysis E2E smoke — $BASE_URL ==="
@@ -116,11 +125,11 @@ check "POST /auth/login empty body → 422" "422" "$status"
 # browser-redirect semantics apply. No session cookie gives a 302 to
 # /login, and an Authorization bearer header is ignored entirely (it is
 # a cookie session or nothing).
-noauth_admin=$(curl -s -D - -o /dev/null "$BASE_URL/admin/users" | tr -d "\r")
+noauth_admin=$(curl -s -D - -o /dev/null "$BASE_URL/admin/users" | tr -d "\r" || true)
 status=$(echo "$noauth_admin" | awk 'NR == 1 { print $2 }')
 check "GET /admin/users no cookie → 302" "302" "$status"
 
-location=$(echo "$noauth_admin" | grep -i "^location:")
+location=$(echo "$noauth_admin" | grep -i "^location:" || true)
 case "$location" in
     *"/login"*) check "GET /admin/users no cookie redirects to /login" "ok" "ok" ;;
     *) check "GET /admin/users no cookie redirects to /login" "ok" "FAILED: $location" ;;
@@ -206,9 +215,9 @@ fi
 echo ""
 echo "--- CI test user provisioning (web admin UI) ---"
 
-login_page=$(curl -s -c "$ADMIN_JAR" -b "$ADMIN_JAR" "$BASE_URL/login")
+login_page=$(curl -s -c "$ADMIN_JAR" -b "$ADMIN_JAR" "$BASE_URL/login" || true)
 csrf_token=$(echo "$login_page" | grep -o 'name="csrf_token" value="[^"]*"' \
-    | head -1 | sed 's/.*value="//;s/"//')
+    | head -1 | sed 's/.*value="//;s/"//' || true)
 
 if [ -n "$csrf_token" ]; then
     check "GET /login (csrf_token present)" "ok" "ok"
@@ -229,7 +238,7 @@ check "GET /admin/users (admin cookie) → 200" "200" "$status"
 # Read the token straight from the cookie jar rather than reusing the
 # one scraped off the login page: the double-submit check compares the
 # form field against whatever da_csrf the jar currently holds.
-csrf_token=$(awk '$6 == "da_csrf" { print $7 }' "$ADMIN_JAR" | tail -1)
+csrf_token=$(awk '$6 == "da_csrf" { print $7 }' "$ADMIN_JAR" | tail -1 || true)
 
 # Idempotent: a leftover user from a prior run answers 409.
 create_status=$(http_status -b "$ADMIN_JAR" -c "$ADMIN_JAR" \
