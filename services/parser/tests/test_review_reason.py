@@ -25,6 +25,7 @@ import pytest
 from parser_service.consumer import (
     ParserConsumer,
     _build_review_reason,
+    _coerce_agent_classification,
 )
 from parser_service.models import Match
 from parser_service.parsing.models import ParsedGame, ParsedMatch
@@ -295,3 +296,140 @@ async def test_rejected_row_preserves_review_reason(parser_session: Any) -> None
 @pytest.fixture(autouse=True)
 def _ensure_loop_policy() -> None:
     asyncio.get_event_loop_policy()
+
+
+# ---------------------------------------------------------------------------
+# Agent tail-scan verdict (issue #125)
+#
+# The agent ships an ``agent_classification`` of "complete" or
+# "inconclusive" with each match log. It rides file.ingested through to
+# the review reason so an admin can tell "the agent's tail scan saw no
+# completion signal" apart from "the parser could not resolve winners".
+# ---------------------------------------------------------------------------
+
+
+class TestAgentClassificationInReviewReason:
+    @staticmethod
+    def _partial() -> ParsedMatch:
+        return ParsedMatch(
+            players=["alice", "bob"],
+            games=[
+                ParsedGame(game_number=1, winner=None),
+                ParsedGame(game_number=2, winner=None),
+            ],
+        )
+
+    def test_omitted_verdict_matches_legacy_wording(self) -> None:
+        """No verdict (old agent) leaves the string exactly as before."""
+        parsed = self._partial()
+        assert _build_review_reason(parsed) == _build_review_reason(parsed, None)
+        assert "agent tail scan" not in _build_review_reason(parsed)
+
+    def test_inconclusive_verdict_is_named(self) -> None:
+        reason = _build_review_reason(self._partial(), "inconclusive")
+        assert "No game winners resolved" in reason
+        assert "agent tail scan: inconclusive" in reason
+
+    def test_complete_verdict_is_distinguishable(self) -> None:
+        """A 'complete' file the parser could not resolve reads differently."""
+        inconclusive = _build_review_reason(self._partial(), "inconclusive")
+        complete = _build_review_reason(self._partial(), "complete")
+        assert "agent tail scan: complete" in complete
+        assert complete != inconclusive
+
+    def test_unknown_verdict_is_ignored(self) -> None:
+        """A junk value degrades to the parser-only reason, never raises."""
+        parsed = self._partial()
+        assert _build_review_reason(parsed, "banana") == _build_review_reason(parsed)
+
+
+class TestCoerceAgentClassification:
+    def test_accepts_contracted_values(self) -> None:
+        assert _coerce_agent_classification("complete") == "complete"
+        assert _coerce_agent_classification("inconclusive") == "inconclusive"
+
+    def test_rejects_everything_else(self) -> None:
+        for raw in (None, "", "COMPLETE", "partial", 3, True):
+            assert _coerce_agent_classification(raw) is None
+
+
+@pytest.mark.asyncio
+async def test_consumer_records_agent_verdict_on_partial(
+    parser_session: Any, tmp_path: Path
+) -> None:
+    sha = "a1" + "0" * 62
+    _write_raw(tmp_path, sha)
+    sm = _session_maker_returning(parser_session)
+    consumer = _consumer_with(
+        ParsedMatch(
+            raw_match_id="agent-verdict-uuid-1",
+            players=["alice", "bob"],
+            games=[ParsedGame(game_number=1, winner=None)],
+        ),
+        sm,
+        tmp_path,
+    )
+
+    await consumer.handle_event(sha, user_id=1, agent_classification="inconclusive")
+    parser_session.expire_all()
+
+    row = (await parser_session.execute(select(Match))).scalar_one()
+    assert row.review_status == "pending_review"
+    assert row.review_reason is not None
+    # Both signals present and separable in the one string an admin sees.
+    assert "No game winners resolved" in row.review_reason
+    assert "agent tail scan: inconclusive" in row.review_reason
+
+
+@pytest.mark.asyncio
+async def test_consumer_partial_without_agent_verdict_unchanged(
+    parser_session: Any, tmp_path: Path
+) -> None:
+    """A parser-derived hold with no agent verdict says nothing about one."""
+    sha = "a2" + "0" * 62
+    _write_raw(tmp_path, sha)
+    sm = _session_maker_returning(parser_session)
+    consumer = _consumer_with(
+        ParsedMatch(
+            raw_match_id="agent-verdict-uuid-2",
+            players=["alice", "bob"],
+            games=[ParsedGame(game_number=1, winner=None)],
+        ),
+        sm,
+        tmp_path,
+    )
+
+    await consumer.handle_event(sha, user_id=1)
+    parser_session.expire_all()
+
+    row = (await parser_session.execute(select(Match))).scalar_one()
+    assert row.review_status == "pending_review"
+    assert row.review_reason is not None
+    assert "agent tail scan" not in row.review_reason
+
+
+@pytest.mark.asyncio
+async def test_handle_routes_agent_classification_from_event(tmp_path: Path) -> None:
+    """The file.ingested decode path forwards the verdict to handle_event."""
+    import json as _json
+
+    sm = _session_maker_returning(None)
+    consumer = _consumer_with(ParsedMatch(games=[]), sm, tmp_path)
+
+    seen: list[tuple[str, int, str | None]] = []
+
+    async def _capture(sha256: str, user_id: int, agent_classification: str | None = None) -> None:
+        seen.append((sha256, user_id, agent_classification))
+
+    consumer.handle_event = _capture
+
+    base = {"sha256": "f" * 64, "user_id": 7, "content_type": "match-log"}
+    await consumer._handle({"data": _json.dumps({**base, "agent_classification": "inconclusive"})})
+    await consumer._handle({"data": _json.dumps(base)})
+    await consumer._handle({"data": _json.dumps({**base, "agent_classification": "nonsense"})})
+
+    assert seen == [
+        ("f" * 64, 7, "inconclusive"),
+        ("f" * 64, 7, None),
+        ("f" * 64, 7, None),
+    ]

@@ -163,12 +163,29 @@ class ParserConsumer:
                 file_mtime=float(file_mtime) if file_mtime is not None else None,
             )
         elif content_type == "match-log":
-            await self.handle_event(sha, int(user_id))
+            await self.handle_event(
+                sha,
+                int(user_id),
+                agent_classification=_coerce_agent_classification(
+                    payload.get("agent_classification")
+                ),
+            )
         else:
             _log.debug("skipping unknown content_type sha=%s ct=%s", sha, content_type)
 
-    async def handle_event(self, sha256: str, user_id: int) -> ParsedMatch | None:
-        """Test-friendly entry point — reads, parses, persists, publishes."""
+    async def handle_event(
+        self,
+        sha256: str,
+        user_id: int,
+        agent_classification: str | None = None,
+    ) -> ParsedMatch | None:
+        """Test-friendly entry point: reads, parses, persists, publishes.
+
+        ``agent_classification`` is the agent's tail-scan verdict from
+        the upload ("complete" or "inconclusive"), or None for agents
+        that predate the field. It only annotates the review reason;
+        the server parse stays authoritative.
+        """
         try:
             content = await asyncio.to_thread(
                 read_raw, sha256, self._raw_root, max_bytes=self._max_log_bytes
@@ -213,7 +230,7 @@ class ParserConsumer:
                 parsed.winner,
             )
             review_status = "pending_review"
-            review_reason = _build_review_reason(parsed)
+            review_reason = _build_review_reason(parsed, agent_classification)
 
         # Resolve the hero player name from auth.users.mtgo_usernames.
         hero_player_name = await self._resolve_hero(user_id, parsed.players)
@@ -469,22 +486,61 @@ def _is_partial_parse(parsed: ParsedMatch) -> bool:
     return not any(g.winner for g in parsed.games)
 
 
-def _build_review_reason(parsed: ParsedMatch) -> str:
+_VALID_AGENT_CLASSIFICATIONS = frozenset({"complete", "inconclusive"})
+
+# Appended to the parser's own reason so an admin can tell the two
+# causes apart at a glance in the review UI:
+#   - "inconclusive": the agent's tail scan saw no completion signal,
+#     so the file itself is almost certainly truncated. Nothing to fix
+#     server-side.
+#   - "complete": the file looked finished to the agent but the parser
+#     still could not resolve a winner. That is a parser gap worth
+#     investigating.
+_AGENT_VERDICT_SUFFIX = {
+    "inconclusive": ("; agent tail scan: inconclusive (no match-completion signal in the file)"),
+    "complete": (
+        "; agent tail scan: complete (file looked finished, parser could not resolve a winner)"
+    ),
+}
+
+
+def _coerce_agent_classification(raw: object) -> str | None:
+    """Normalize the event's ``agent_classification`` field.
+
+    Anything that is not one of the two contracted values (including a
+    missing field from an older agent) degrades to None rather than
+    failing the parse.
+    """
+    if isinstance(raw, str) and raw in _VALID_AGENT_CLASSIFICATIONS:
+        return raw
+    if raw is not None:
+        _log.debug("ignoring unrecognized agent_classification: %r", raw)
+    return None
+
+
+def _build_review_reason(parsed: ParsedMatch, agent_classification: str | None = None) -> str:
     """Build a concise, human-readable reason for why a parse is partial.
 
     Called only when ``_is_partial_parse(parsed)`` is True -- i.e., games
     exist but no match-level or per-game winner was resolved.
+
+    When the agent sent a tail-scan verdict, it is appended as a
+    distinct clause. Without one the string is byte-identical to the
+    pre-#125 wording.
     """
     game_count = len(parsed.games)
     games_with_winners = sum(1 for g in parsed.games if g.winner)
     plural = "s" if game_count != 1 else ""
 
     if games_with_winners == 0:
-        return f"No game winners resolved ({game_count} game{plural} observed)"
+        reason = f"No game winners resolved ({game_count} game{plural} observed)"
+    else:
+        # Safety net -- theoretically unreachable when _is_partial_parse is
+        # True (it requires *no* game winners).
+        reason = f"Partial: {games_with_winners} of {game_count} game{plural} have winners"
 
-    # Safety net -- theoretically unreachable when _is_partial_parse is
-    # True (it requires *no* game winners).
-    return f"Partial: {games_with_winners} of {game_count} game{plural} have winners"
+    suffix = _AGENT_VERDICT_SUFFIX.get(_coerce_agent_classification(agent_classification) or "")
+    return reason + suffix if suffix else reason
 
 
 def _collect_cards_by_side(
