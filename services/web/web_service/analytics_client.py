@@ -732,11 +732,37 @@ async def get_username_suggestions(base_url: str, token: str) -> list[UsernameSu
     ]
 
 
-async def get_stats_by_opponent(base_url: str, token: str) -> list[OpponentStatItem]:
+async def get_stats_by_opponent(
+    base_url: str,
+    token: str,
+    *,
+    format_filter: str | None = None,
+    opponent: str | None = None,
+    result: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> list[OpponentStatItem]:
+    """Per-opponent aggregates, optionally narrowed by the Match History filters.
+
+    Same filter vocabulary as :func:`get_match_list` so the two halves of
+    the page describe the same set of matches (issue #124).
+    """
+    params: dict[str, Any] = {}
+    if format_filter and format_filter.lower() != "all":
+        params["format"] = format_filter
+    if opponent:
+        params["opponent"] = opponent
+    if result and result.lower() != "all":
+        params["result"] = result
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
     resp = await request(
         "GET",
         f"{base_url}/analytics/stats/by-opponent",
         token=token,
+        params=params,
         error_prefix="analytics GET /stats/by-opponent ",
         **_ERR,
     )

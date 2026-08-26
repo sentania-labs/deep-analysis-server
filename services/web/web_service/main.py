@@ -479,8 +479,16 @@ async def match_history_page(
     match_list: Any = None
     stats_error = False
     try:
+        # Same filters as the match list below: a filtered page must not put
+        # all-time opponent aggregates next to a filtered set of rows (#124).
         opponent_stats = await analytics_client.get_stats_by_opponent(
-            settings.analytics_service_url, user.token
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format or None,
+            opponent=opponent or None,
+            result=result or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
         )
         match_list = await analytics_client.get_match_list(
             settings.analytics_service_url,
