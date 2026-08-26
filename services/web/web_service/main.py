@@ -3995,8 +3995,9 @@ async def admin_match_set_review_status(
 
     ``verdict`` is one of ``""`` (back to NULL, so user-visible),
     ``"pending_review"`` (flag for admin review), or ``"rejected"``
-    (hide from the user and keep it hidden across reparses).
-    Anything else 422s.
+    (hide from the user; the verdict is kept through an in-place
+    reparse, but a force-reparse deletes the row and loses it, see
+    issue #154). Anything else 422s.
     """
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:

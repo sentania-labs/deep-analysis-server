@@ -183,7 +183,11 @@ async def _update_match_row(
     (``None`` for a conclusive parse, ``'pending_review'`` for a
     partial one). ``existing_review_status`` is what's already on the
     row. The rule: a row that an admin has already ``'rejected'`` stays
-    rejected on reparse — admin verdicts are not auto-undone. Otherwise
+    rejected on an in-place reparse: admin verdicts are not auto-undone.
+    This only holds while the row survives. A force-reparse deletes the
+    matches row outright (see ``parser_service/reparse.py``), so the
+    verdict is lost and the match can be recreated visible; issue #154
+    tracks that gap. Otherwise
     the new status wins, which is what upgrades a previous
     ``pending_review`` row to NULL when a later conclusive snapshot
     arrives for the same logical match.
@@ -259,7 +263,8 @@ async def persist_match(
     holding-pen parses (winner-less but at least one game observed).
     On reparse, the new status wins so a later, conclusive snapshot
     upgrades a ``pending_review`` row back to NULL. Admin rejections
-    (``'rejected'``) survive across reparses — see
+    (``'rejected'``) survive an in-place reparse, but not a
+    force-reparse, which deletes the row first (issue #154). See
     :func:`_update_match_row`.
     """
     now = datetime.now(UTC)

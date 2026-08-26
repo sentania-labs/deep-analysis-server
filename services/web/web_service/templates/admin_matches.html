@@ -11,6 +11,14 @@
   confirmation: it un-hides a match, so a misclick costs nothing and a
   prompt there would only train admins to click through the ones that
   matter.
+
+  The reject wording deliberately stops short of promising that a
+  rejection survives a force-reparse. It does not: the force-reparse
+  flows in ``parser_service/reparse.py`` hard-delete the matches rows,
+  so the verdict goes with them and the match can come back visible.
+  Only the in-place reparse path preserves it. Issue #154 tracks making
+  the verdict durable across delete-and-rebuild; when that lands, this
+  wording can go back to the stronger claim.
 #}
 {% macro review_confirm(m, action) -%}
 {%- set who = m.user_email or ("UID " ~ m.user_id) -%}
@@ -25,7 +33,7 @@
 {%- endif -%}
 {%- if action == "reject" -%}
 {%- set headline = "Reject this match?" -%}
-{%- set effect = "Rejecting hides this match from the user's stats and match history. The match is not deleted, and the rejection is kept even if the match is reparsed. You can Restore it later." -%}
+{%- set effect = "Rejecting hides this match from the user's stats and match history. The match is not deleted, and the rejection survives an ordinary reparse. It is not guaranteed to survive a force-reparse, which deletes matches and rebuilds them. You can Restore it later." -%}
 {%- elif action == "accept" -%}
 {%- set headline = "Accept this match?" -%}
 {%- set effect = "Accepting makes this match visible to the user and counts it in their stats, including win rate. Only accept if the parse looks correct." -%}
@@ -204,7 +212,7 @@ Review reason: {{ m.review_reason or "none recorded" }}
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="rejected">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
-                                <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Reject this match: hidden from the user's stats and history, kept across reparses, not deleted. Restore undoes it.">Reject</button>
+                                <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Reject this match: hidden from the user's stats and history, not deleted. Kept through an ordinary reparse, but a force-reparse can bring it back. Restore undoes it.">Reject</button>
                             </form>
                         {% elif m.review_status == "rejected" %}
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
