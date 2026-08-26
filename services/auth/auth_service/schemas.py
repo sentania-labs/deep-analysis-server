@@ -122,6 +122,9 @@ class UpdateUserRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     temporary_password: str
+    # Sessions killed as part of the reset. The caller's own session is
+    # not counted when an admin resets their own password.
+    revoked_sessions: int = 0
 
 
 class AgentView(BaseModel):

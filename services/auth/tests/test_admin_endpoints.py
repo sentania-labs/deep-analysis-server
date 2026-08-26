@@ -177,6 +177,84 @@ async def test_reset_password(client: Any, db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_password_revokes_existing_sessions(
+    client: Any, db_session: AsyncSession
+) -> None:
+    """Regression (#123): a live session must die when an admin resets the password."""
+    _admin_id, token = await _seed_admin(client, db_session)
+    r = await client.post(
+        "/admin/users",
+        json={
+            "email": "stillloggedin@example.com",
+            "password": "originalpw",
+            "must_change_password": False,
+        },
+        headers=_h(token),
+    )
+    assert r.status_code == 201
+    target_id = r.json()["id"]
+
+    # Target logs in twice and both sessions work.
+    victim_a = await _login(client, "stillloggedin@example.com", "originalpw")
+    victim_b = await _login(client, "stillloggedin@example.com", "originalpw")
+    for tok in (victim_a, victim_b):
+        assert (await client.get("/auth/me", headers=_h(tok))).status_code == 200
+
+    r = await client.post(f"/admin/users/{target_id}/reset-password", headers=_h(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["revoked_sessions"] == 2
+
+    # Both pre-existing sessions are now rejected, not just the password.
+    for tok in (victim_a, victim_b):
+        assert (await client.get("/auth/me", headers=_h(tok))).status_code == 401
+
+    # And the admin's own session is untouched.
+    assert (await client.get("/auth/me", headers=_h(token))).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reset_password_self_keeps_calling_session(
+    client: Any, db_session: AsyncSession
+) -> None:
+    """An admin resetting their own password stays signed in on the calling session."""
+    admin_id, token = await _seed_admin(
+        client, db_session, email="selfreset@example.com", password="pw"
+    )
+    other_session = await _login(client, "selfreset@example.com", "pw")
+
+    r = await client.post(f"/admin/users/{admin_id}/reset-password", headers=_h(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["revoked_sessions"] == 1
+
+    assert (await client.get("/auth/me", headers=_h(token))).status_code == 200
+    assert (await client.get("/auth/me", headers=_h(other_session))).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_reset_password_missing_user_revokes_nothing(
+    client: Any, db_session: AsyncSession
+) -> None:
+    """A 404 reset must not touch anyone's sessions."""
+    _admin_id, token = await _seed_admin(client, db_session)
+    r = await client.post(
+        "/admin/users",
+        json={
+            "email": "bystander@example.com",
+            "password": "pw",
+            "must_change_password": False,
+        },
+        headers=_h(token),
+    )
+    assert r.status_code == 201
+    bystander = await _login(client, "bystander@example.com", "pw")
+
+    r = await client.post("/admin/users/999999/reset-password", headers=_h(token))
+    assert r.status_code == 404
+
+    assert (await client.get("/auth/me", headers=_h(bystander))).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_revoke_sessions(client: Any, db_session: AsyncSession) -> None:
     _admin_id, token = await _seed_admin(client, db_session)
     # Create a target user and log them in twice (two sessions).

@@ -1078,11 +1078,11 @@ async def admin_reset_password(
     base_url: str,
     token: str,
     user_id: int,
-) -> tuple[str | None, str | None]:
-    """Admin-only: rotate another user's password.
+) -> tuple[tuple[str, int] | None, str | None]:
+    """Admin-only: rotate another user's password and revoke their sessions.
 
-    Returns ``(temporary_password, error_code)``:
-    - 200 -> (temp, None)
+    Returns ``((temporary_password, revoked_sessions), error_code)``:
+    - 200 -> ((temp, n), None)
     - 404 -> (None, "user_not_found")
     """
     resp = await raw_request(
@@ -1093,7 +1093,8 @@ async def admin_reset_password(
         **_ERR_RAW,
     )
     if resp.status_code == 200:
-        return str(resp.json()["temporary_password"]), None
+        body = resp.json()
+        return (str(body["temporary_password"]), int(body.get("revoked_sessions", 0))), None
     if resp.status_code in (401, 403):
         raise AuthForbidden(f"auth /admin/users reset-password returned {resp.status_code}")
     if resp.status_code == 404:

@@ -269,11 +269,14 @@ async def test_admin_reset_password_returns_temp(monkeypatch: pytest.MonkeyPatch
     capture: dict[str, Any] = {}
     _stub_post(
         monkeypatch,
-        httpx.Response(200, json={"temporary_password": "abc123abc123abc123ab"}),
+        httpx.Response(
+            200,
+            json={"temporary_password": "abc123abc123abc123ab", "revoked_sessions": 3},
+        ),
         capture,
     )
-    temp, err = await auth_client.admin_reset_password("http://auth:8000", "tok", 7)
-    assert temp == "abc123abc123abc123ab"
+    reset, err = await auth_client.admin_reset_password("http://auth:8000", "tok", 7)
+    assert reset == ("abc123abc123abc123ab", 3)
     assert err is None
     assert capture["url"] == "http://auth:8000/admin/users/7/reset-password"
     assert capture["kwargs"]["headers"]["Authorization"] == "Bearer tok"
@@ -289,8 +292,8 @@ async def test_admin_reset_password_user_not_found(
         monkeypatch,
         httpx.Response(404, json={"detail": {"error": "user_not_found"}}),
     )
-    temp, err = await auth_client.admin_reset_password("http://auth:8000", "tok", 999)
-    assert temp is None
+    reset, err = await auth_client.admin_reset_password("http://auth:8000", "tok", 999)
+    assert reset is None
     assert err == "user_not_found"
 
 

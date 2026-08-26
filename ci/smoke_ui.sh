@@ -487,6 +487,8 @@ for u in d.get("users", []):
         check "POST /admin/users/{id}/reset-password → 200" "200" "$reset_status"
         check_contains "Reset-password page renders temporary password" \
             "temp-password" "$reset_html"
+        check_contains "Reset-password page reports the session revocation" \
+            "revoked, so any browser" "$reset_html"
 
         # Self-delete must be blocked at the web layer (admin == bootstrap).
         admin_user_id=$(docker compose exec -T auth sh -c \
