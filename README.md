@@ -111,7 +111,7 @@ There is one definition of it, `ci/smoke.sh`, and CI runs the same script. From 
 bash ci/smoke.sh
 ```
 
-That is the whole sequence. The script creates the external `edge-slots` network, writes a throwaway compose env file (it never touches your `.env`), generates the JWT keypair the compose override bind-mounts, brings the stack up, waits for container health and for the bootstrap admin to answer, runs both smoke suites, dumps logs if anything failed, and tears the stack down. It needs `docker`, `uv`, `curl` and `python3` on your PATH.
+That is the whole sequence. The script creates the external `edge-slots` network, writes a throwaway compose env file (it never touches your `.env`), generates the JWT keypair the compose override bind-mounts, brings the stack up, waits for container health and for the bootstrap admin to answer, runs both smoke suites, dumps logs if anything failed, and tears the stack down. It needs `docker`, `uv`, `curl` and `python3` on your PATH, and Docker Compose **v2.24.4 or newer** (the compose override uses the `!override` / `!reset` merge tags). The script checks the Compose version up front and tells you if it is too old.
 
 Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD, `ci/smoke_ui.sh`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
 

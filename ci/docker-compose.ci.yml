@@ -16,6 +16,11 @@
 #      bind-mounts it into every service that needs it (auth: both keys,
 #      everyone else: the public key), at DA_SMOKE_JWT_DIR.
 #
+# Both jobs use the `!override` / `!reset` merge tags, which need Docker
+# Compose v2.24.4 or newer. ci/smoke.sh preflights that version and says so
+# plainly, because without the check an older Compose fails here with a bare
+# YAML parse error that names neither the tag nor the version.
+#
 # The gateway deliberately uses the PRODUCTION gateway/Caddyfile from the
 # base file. A separate ci/Caddyfile.ci existed here until this file
 # stopped needing one, and it drifted from production twice; a smoke test

@@ -70,6 +70,21 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
+# ci/docker-compose.ci.yml uses the `!override` and `!reset` merge tags, and
+# this script passes the compose env file via COMPOSE_ENV_FILES. All three
+# landed in Compose v2.24.4. On anything older the override file fails to
+# parse with a bare YAML error that says nothing about the cause, so check
+# it here and say so plainly instead.
+COMPOSE_MIN="2.24.4"
+compose_version=$(docker compose version --short 2>/dev/null | sed 's/^v//')
+if [ -z "$compose_version" ] || \
+   [ "$(printf '%s\n%s\n' "$COMPOSE_MIN" "$compose_version" | sort -V | head -1)" != "$COMPOSE_MIN" ]; then
+    echo "STOP: docker compose ${compose_version:-unknown} is too old." >&2
+    echo "      ci/docker-compose.ci.yml needs the !override / !reset merge tags" >&2
+    echo "      and COMPOSE_ENV_FILES, all of which need Compose v${COMPOSE_MIN} or newer." >&2
+    exit 1
+fi
+
 # A throwaway compose env file rather than .env: this script must never
 # clobber a developer's real .env, and --env-file makes compose read this
 # one INSTEAD of .env, so there is no ambiguity about which values won.
