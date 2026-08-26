@@ -304,10 +304,34 @@ services:
       <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+      # Automatic migration of the pre-object-store archive (issue
+      # #161). On by default so a deploy closes the gap with no
+      # operator step; set false to drive the one-shot job by hand.
+      DA_S3_AUTO_BACKFILL: ${DA_S3_AUTO_BACKFILL:-true}
+      DA_LEGACY_ARCHIVE_PATH: /data/raw
     expose:
       - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
+      # The legacy archive, READ-ONLY, for as long as the migration
+      # needs it. This is temporary coupling and is meant to be removed:
+      # see "Backfill from the old volume" in docs/deploy.md for how to
+      # confirm the migration is complete and drop this line.
+      #
+      # It does NOT reintroduce the shared-volume problem #135 removed.
+      # Parser no longer mounts it, so exactly one service touches it
+      # and it is plain RWO, not the RWX (or node-pinning) that a
+      # concurrently-shared archive forced on Kubernetes.
+      #
+      # A bind path rather than the external `raw_archive` volume, on
+      # purpose: an external volume that a fresh install does not have
+      # would make `docker compose up` fail outright, and Compose cannot
+      # mount a volume conditionally. The default path is created empty
+      # if missing, so a fresh install starts and the migration sees
+      # nothing to do. On a host upgraded from the filesystem archive,
+      # point this at the real data:
+      #   docker volume inspect -f '{{ .Mountpoint }}' <legacy-volume>
+      - ${DA_LEGACY_ARCHIVE_SOURCE:-./.legacy-archive}:/data/raw:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -438,13 +462,21 @@ volumes:
   # this holds the only pre-backfill copy of the archive. External means
   # Compose will neither create it nor remove it, so `down -v` leaves it
   # alone and reclaiming it stays a deliberate act:
-  #   docker volume rm deep-analysis_raw_archive
+  #   docker volume rm "$DA_LEGACY_ARCHIVE_VOLUME"
   #
   # The tradeoff: Compose no longer CREATES it either. A fresh install
   # has no legacy archive, so `docker compose up` never references this
   # and is unaffected, but `--profile backfill` there fails with "external
   # volume not found" instead of mounting an empty directory. That is the
   # correct answer to "back up an archive that does not exist".
+  #
+  # The name is host-specific (issue #159). Compose derives a project
+  # volume's name from the project name, and the edge.int deploy runs
+  # with `--project-directory /srv/services/deep-analysis-server`, so the
+  # volume there is `deep-analysis-server_raw_archive`, not the default
+  # below. Never guess it: read it off the host with
+  #   docker volume ls | grep raw_archive
+  # and set DA_LEGACY_ARCHIVE_VOLUME to what is actually there.
   raw_archive:
     external: true
-    name: deep-analysis_raw_archive
+    name: ${DA_LEGACY_ARCHIVE_VOLUME:-deep-analysis_raw_archive}

@@ -35,3 +35,8 @@ docker-compose.override.yml
 # self-review pre-push gate
 .review-passed
 .claude/.review-audit.log
+
+# Default mount source for the legacy raw archive (issue #161). Docker
+# creates it empty on a fresh install; real data lives elsewhere and is
+# pointed at with DA_LEGACY_ARCHIVE_SOURCE.
+.legacy-archive/
