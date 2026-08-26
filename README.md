@@ -91,94 +91,48 @@ Every push must go through a feature branch + PR, and only merges when CI is gre
 
 ### What CI covers
 
-CI runs on the `lab` runner pool (ARC pods on the homelab Kubernetes cluster). Jobs: `lint`, `typecheck`, `test-common`, `test-integration` (real PostgreSQL 16 + Redis 7, started by `ci/start-test-services.sh`), `docker-build` (all five service images, via the shared in-cluster BuildKit), and `diagram-drift`.
+Jobs and where each one runs (issue #161 set the placement, per the `github-ci` rule that the `lab` pool exists to reach the lab, not to avoid GitHub):
+
+| Job | Runner | Why there |
+|---|---|---|
+| `lint`, `typecheck`, `test-common` | `lab` | Needs nothing but Python. Deliberately left on the lab pool. |
+| `docker-build` (all five images) | `lab` | Builds through the shared in-cluster BuildKit. |
+| `test-integration` | `ubuntu-latest` | Needs real PostgreSQL 16 and Redis 7 daemons, via Actions `services:`. |
+| `compose-smoke`, `smoke-ui` | `ubuntu-latest` | Needs a real Docker daemon for `docker compose`. |
+| `diagram-drift` | `ubuntu-latest` | The lab runner image is missing chromium's NSS libraries (sentania-labs/homelab-runner#1). |
 
 ### Pre-push smoke test (run this locally)
 
-The runner pods have no Docker daemon, so the full-stack compose smoke tests are **not** run by CI. They are a local step, and they are the only coverage of the composed stack: gateway routing, service wiring, and the built images actually starting. Run both before pushing anything that touches `docker-compose.yml`, the Caddyfile, a service Dockerfile, or a routing prefix.
+The full-stack smoke test is the only coverage of the composed stack: gateway routing, service wiring, and the built images actually starting. Run it before pushing anything that touches `docker-compose.yml`, the Caddyfile, a service Dockerfile, or a routing prefix.
 
-Both scripts need the bootstrap admin credentials in the environment, and the CI compose override bind-mounts a JWT keypair from `/tmp/ci-jwt-keys`, so the setup below is not optional. It needs `docker`, `uv`, `curl`, `python3`, and `unzip` on your PATH. Run it from a clean checkout, in order, in one shell:
+There is one definition of it, `ci/smoke.sh`, and CI runs the same script. From a clean checkout:
 
 ```bash
-# 0. once per machine: the external network the gateway attaches to
-docker network create edge-slots 2>/dev/null || true
-
-# 1. bootstrap admin credentials. Both the .env (so the auth container
-#    creates the account on first boot) and the shell (so the smoke
-#    scripts can log in as it) need them.
-export DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=admin@smoke.local
-export DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD='SmokeAdminPass2026!'
-
-# 2. compose environment. The appended URLs use the `postgres` container
-#    hostname: DATABASE_URL overrides the localhost form in .env.example,
-#    DA_DATABASE_URL is only a commented-out example there.
-cp .env.example .env
-cat >> .env <<EOF
-DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis
-DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis
-DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}
-DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}
-EOF
-
-# 3. JWT keypair at the path ci/docker-compose.ci.yml bind-mounts.
-uv sync --all-packages --dev
-mkdir -p /tmp/ci-jwt-keys
-uv run python -m auth_service.keygen --out /tmp/ci-jwt-keys
-chmod 644 /tmp/ci-jwt-keys/jwt_public.pem
-chmod 600 /tmp/ci-jwt-keys/jwt_private.pem
-
-# 4. bring the stack up. The root/auth/ingest migrate containers run
-#    Alembic automatically, so no host-side migration step is needed.
-docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
-
-# 5. wait for the stack. Two separate waits, both required. The gateway
-#    answers 502 for any service that has not finished starting, and a
-#    502 reads as a smoke failure, so do not skip the health wait.
-for i in $(seq 1 90); do
-  unhealthy=$(docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml ps \
-    --format '{{.Service}} {{.Health}}' | awk '$2 != "" && $2 != "healthy"')
-  [ -z "$unhealthy" ] && { echo "all services healthy after ${i} tries"; break; }
-  sleep 2
-done
-[ -n "$unhealthy" ] && echo "WARNING: still not healthy, smoke results below are not trustworthy:
-$unhealthy"
-
-for i in $(seq 1 60); do
-  code=$(curl -s -o /dev/null -w '%{http_code}' \
-    -X POST http://localhost:8080/auth/login \
-    -H 'Content-Type: application/json' \
-    -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}")
-  [ "$code" = "200" ] && { echo "bootstrap admin ready after ${i} tries"; break; }
-  sleep 2
-done
-[ "$code" = "200" ] || {
-  echo "STOP: the bootstrap admin never came online (last status ${code})."
-  echo "Do not read the smoke output below as regressions, the stack is not up."
-  docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml ps
-  docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml logs --tail=100
-}
-
-# 6. the smoke runs themselves
-bash ci/smoke_e2e.sh http://localhost:8080
-bash ci/smoke_ui.sh  http://localhost:8080
-
-# 7. teardown
-docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml down -v
+bash ci/smoke.sh
 ```
 
-`ci/smoke_e2e.sh` walks the auth + ingest happy path through the gateway; `ci/smoke_ui.sh` walks the browser UI (login, dashboard, profile, admin CRUD).
+That is the whole sequence. The script creates the external `edge-slots` network, writes a throwaway compose env file (it never touches your `.env`), generates the JWT keypair the compose override bind-mounts, brings the stack up, waits for container health and for the bootstrap admin to answer, runs both smoke suites, dumps logs if anything failed, and tears the stack down. It needs `docker`, `uv`, `curl` and `python3` on your PATH, and Docker Compose **v2.24.4 or newer** (the compose override uses the `!override` / `!reset` merge tags). The script checks the Compose version up front and tells you if it is too old.
 
-Both scripts are re-runnable against a live stack. `ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits, so if it dies partway through its password section the admin password is left as `ui-smoke-<original>`. Tear down with `down -v` and start again from step 2 if that happens.
+Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD, `ci/smoke_ui.sh`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
+
+Useful knobs, all optional:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DA_SMOKE_PROJECT` | `deep-analysis-smoke` | Compose project name, so a smoke stack does not collide with your dev stack. |
+| `DA_SMOKE_PORT` | `8080` | Host port for the gateway. |
+| `DA_SMOKE_JWT_DIR` | `/tmp/ci-jwt-keys` | Where the throwaway keypair is written and mounted from. |
+| `DA_SMOKE_KEEP` | unset | Set to `1` to leave the stack up for poking at. It prints the teardown command. |
+| `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` | `admin@smoke.local` / `SmokeAdminPass2026!` | The account both suites log in as. |
 
 > **Expected result:** on a healthy stack `ci/smoke_e2e.sh` ends
 > `=== Smoke result: 23 PASS, 0 FAIL ===` and exits 0. `ci/smoke_ui.sh` ends
-> `0 FAIL`; its PASS count moves between roughly 62 and 65 because a few of
+> `0 FAIL`; its PASS count moves between roughly 62 and 66 because a few of
 > its admin checks only run when the stack already has an agent row to act
 > on. Read the FAIL count, not the PASS count: any FAIL line is a real
-> regression.
->
-> If you see a `502` anywhere, a service was not up yet. Do not skip the
-> health wait in step 5.
+> regression. `ci/smoke.sh` exits non-zero if either suite reports a FAIL.
+
+`ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits. If it dies partway through its password section against a stack you kept with `DA_SMOKE_KEEP=1`, the admin password is left as `ui-smoke-<original>`; tear the stack down and start again.
 
 ## License
 

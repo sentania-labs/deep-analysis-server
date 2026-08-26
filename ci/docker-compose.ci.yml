@@ -1,48 +1,66 @@
-# ci/docker-compose.ci.yml — CI override for compose-smoke and smoke-ui.
+# ci/docker-compose.ci.yml - smoke-test override for docker-compose.yml.
 #
-# Mounts the CI Caddyfile (identical config, kept separate for clarity).
+# Applied by ci/smoke.sh, which is the only supported caller (CI and local
+# both go through it). Two jobs, and nothing else:
 #
-# JWT key handling for smoke-ui:
-# The auth service generates the RS256 keypair at container startup if the
-# private key is absent. In CI, we generate the keypair on the host before
-# docker compose up and bind-mount the key directory into every service that
-# needs JWT access (auth: both keys; all others: public key only).
-# The host-side path used in CI workflows is /tmp/ci-jwt-keys/ — set via
-# DA_JWT_KEYS_DIR in the CI environment (defaults to /tmp/ci-jwt-keys).
+#   1. Host ports. The gateway is published on DA_SMOKE_PORT so a smoke
+#      stack can run beside anything else on the host, and the postgres
+#      host publish is reset away entirely: the smoke test talks to the
+#      stack through the gateway, and 5432 is the port most likely to be
+#      already taken on a developer machine.
+#
+#   2. JWT keys. The auth service would generate its own keypair at
+#      startup, but then only auth would have the private key and the
+#      other services would be verifying against a key they never saw.
+#      ci/smoke.sh generates one keypair on the host and this file
+#      bind-mounts it into every service that needs it (auth: both keys,
+#      everyone else: the public key), at DA_SMOKE_JWT_DIR.
+#
+# Both jobs use the `!override` / `!reset` merge tags, which need Docker
+# Compose v2.24.4 or newer. ci/smoke.sh preflights that version and says so
+# plainly, because without the check an older Compose fails here with a bare
+# YAML parse error that names neither the tag nor the version.
+#
+# The gateway deliberately uses the PRODUCTION gateway/Caddyfile from the
+# base file. A separate ci/Caddyfile.ci existed here until this file
+# stopped needing one, and it drifted from production twice; a smoke test
+# routing through a different Caddyfile than production is not testing
+# production's routing.
 services:
   gateway:
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro
+    ports: !override
+      - "${DA_SMOKE_PORT:-8080}:8080"
+
+  postgres:
+    ports: !reset []
 
   auth:
     environment:
       DA_JWT_PRIVATE_KEY_PATH: /data/secrets/jwt_private.pem
       DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
-    volumes:
-      - /tmp/ci-jwt-keys:/data/secrets:ro
+    volumes: !override
+      - ${DA_SMOKE_JWT_DIR:-/tmp/ci-jwt-keys}:/data/secrets:ro
 
   ingest:
     environment:
       DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
-    volumes:
-      - /tmp/ci-jwt-keys:/data/secrets:ro
+    volumes: !override
+      - ${DA_SMOKE_JWT_DIR:-/tmp/ci-jwt-keys}:/data/secrets:ro
 
   web:
     environment:
       DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
-    volumes:
-      - /tmp/ci-jwt-keys:/data/secrets:ro
+    volumes: !override
+      - ${DA_SMOKE_JWT_DIR:-/tmp/ci-jwt-keys}:/data/secrets:ro
 
   analytics:
     environment:
       DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
-    volumes:
-      - /tmp/ci-jwt-keys:/data/secrets:ro
+    volumes: !override
+      - ${DA_SMOKE_JWT_DIR:-/tmp/ci-jwt-keys}:/data/secrets:ro
 
   parser:
     environment:
       DA_JWT_PUBLIC_KEY_PATH: /data/secrets/jwt_public.pem
-    volumes:
-      - /tmp/ci-jwt-keys:/data/secrets:ro
+    volumes: !override
+      - ${DA_SMOKE_JWT_DIR:-/tmp/ci-jwt-keys}:/data/secrets:ro
