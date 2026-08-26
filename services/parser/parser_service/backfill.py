@@ -124,8 +124,10 @@ async def scan_unparsed(
             _log.info("backfill scan found %d unparsed decklists", len(deck_rows))
             for sha256, user_id in deck_rows:
                 try:
-                    result = await consumer.handle_decklist_event(str(sha256), int(user_id))
-                    if result is not None:
+                    # handle_decklist_event returns True only when a deck
+                    # composition was persisted, so a skip or a failed
+                    # persist correctly does not count.
+                    if await consumer.handle_decklist_event(str(sha256), int(user_id)):
                         total_processed += 1
                 except Exception:  # noqa: BLE001
                     _log.exception(

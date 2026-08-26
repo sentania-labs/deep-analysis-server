@@ -128,7 +128,8 @@ async def test_scan_unparsed_processes_decklists() -> None:
 
     consumer = AsyncMock()
     consumer.handle_event = AsyncMock(return_value=MagicMock())
-    consumer.handle_decklist_event = AsyncMock()
+    # handle_decklist_event returns bool (issue #147): True == work done.
+    consumer.handle_decklist_event = AsyncMock(return_value=True)
 
     sm = _make_mock_session(
         match_rows=[("abc123", 1, None)],
@@ -151,7 +152,7 @@ async def test_scan_unparsed_only_decklists() -> None:
 
     consumer = AsyncMock()
     consumer.handle_event = AsyncMock(return_value=MagicMock())
-    consumer.handle_decklist_event = AsyncMock()
+    consumer.handle_decklist_event = AsyncMock(return_value=True)
 
     sm = _make_mock_session(
         match_rows=[],
@@ -194,17 +195,11 @@ async def test_scan_unparsed_decklist_error_does_not_stop_processing() -> None:
 
     consumer = AsyncMock()
     consumer.handle_event = AsyncMock(return_value=MagicMock())
-    # The second call is the *successful* one, so its stand-in return value has
-    # to be something scan_unparsed counts (it counts `is not None`). A bare
-    # `None` here meant "second decklist also did nothing", which is why this
-    # asserted 1 and got 0 (issue #145). Matches the mock shape used by
-    # test_scan_unparsed_processes_decklists above.
-    #
-    # Both mocks overstate reality: the real handle_decklist_event is typed
-    # `-> None`, so scan_unparsed's decklist counter is dead in production.
-    # That is issue #147; these tests assert the intended counting behavior.
+    # First call raises, second succeeds. Since #147, handle_decklist_event
+    # returns bool, so the success stand-in is True. The real contract is
+    # exercised in test_decklist_processed_count.py.
     consumer.handle_decklist_event = AsyncMock(
-        side_effect=[RuntimeError("boom"), MagicMock()],
+        side_effect=[RuntimeError("boom"), True],
     )
 
     sm = _make_mock_session(
@@ -219,3 +214,49 @@ async def test_scan_unparsed_decklist_error_does_not_stop_processing() -> None:
     # Only the second decklist succeeds.
     assert result == 1
     assert consumer.handle_decklist_event.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scan_unparsed_skips_falsey_decklist_result() -> None:
+    """A decklist handler reporting "no work done" must not be counted (#147)."""
+    from parser_service.backfill import scan_unparsed
+
+    consumer = AsyncMock()
+    consumer.handle_event = AsyncMock(return_value=MagicMock())
+    consumer.handle_decklist_event = AsyncMock(side_effect=[False, True, False])
+
+    sm = _make_mock_session(
+        match_rows=[],
+        deck_rows=[("skip_a", 1), ("ok", 2), ("skip_b", 3)],
+    )
+
+    with patch("parser_service.backfill.get_settings") as mock_settings:
+        mock_settings.return_value.backfill_batch_size = 50
+        result = await scan_unparsed(sm, consumer, batch_size=50)
+
+    assert result == 1
+    assert consumer.handle_decklist_event.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_scan_unparsed_match_log_counting_unchanged() -> None:
+    """Regression: match logs still count on ``is not None`` (#147 touched
+    only the decklist branch). A ``None`` parse result is a drop, not work."""
+    from parser_service.backfill import scan_unparsed
+
+    consumer = AsyncMock()
+    consumer.handle_event = AsyncMock(side_effect=[MagicMock(), None, MagicMock()])
+    consumer.handle_decklist_event = AsyncMock(return_value=True)
+
+    sm = _make_mock_session(
+        match_rows=[("a", 1, None), ("b", 1, "complete"), ("c", 2, None)],
+        deck_rows=[],
+    )
+
+    with patch("parser_service.backfill.get_settings") as mock_settings:
+        mock_settings.return_value.backfill_batch_size = 50
+        result = await scan_unparsed(sm, consumer, batch_size=50)
+
+    assert result == 2, "two of three match logs parsed; the None result is not counted"
+    assert consumer.handle_event.call_count == 3
+    consumer.handle_decklist_event.assert_not_called()
