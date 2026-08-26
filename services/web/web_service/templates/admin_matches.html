@@ -2,6 +2,48 @@
 
 {% block title %}Admin · Matches · Deep Analysis{% endblock %}
 
+{#
+  Review actions change what a user can see, so each visibility-changing
+  action carries a confirmation built server-side into ``data-confirm``.
+  The message is rendered by Jinja (so autoescaping handles player names
+  and emails safely) and the script at the bottom of the page only reads
+  it back out of the dataset. ``Restore`` is deliberately left without a
+  confirmation: it un-hides a match, so a misclick costs nothing and a
+  prompt there would only train admins to click through the ones that
+  matter.
+#}
+{% macro review_confirm(m, action) -%}
+{%- set who = m.user_email or ("UID " ~ m.user_id) -%}
+{%- set players = (m.players[0] ~ " vs " ~ m.players[1]) if m.players|length >= 2 else (m.players[0] if m.players else "unknown players") -%}
+{%- set played = m.played_at.strftime("%Y-%m-%d %H:%M UTC") if m.played_at else "unknown date" -%}
+{%- if m.review_status == "pending_review" -%}
+{%- set current = "Pending review (hidden from the user)" -%}
+{%- elif m.review_status == "rejected" -%}
+{%- set current = "Rejected (hidden from the user)" -%}
+{%- else -%}
+{%- set current = "Normal (visible to the user)" -%}
+{%- endif -%}
+{%- if action == "reject" -%}
+{%- set headline = "Reject this match?" -%}
+{%- set effect = "Rejecting hides this match from the user's stats and match history. The match is not deleted, and the rejection is kept even if the match is reparsed. You can Restore it later." -%}
+{%- elif action == "accept" -%}
+{%- set headline = "Accept this match?" -%}
+{%- set effect = "Accepting makes this match visible to the user and counts it in their stats, including win rate. Only accept if the parse looks correct." -%}
+{%- else -%}
+{%- set headline = "Flag this match for review?" -%}
+{%- set effect = "Flagging hides this match from the user's stats and match history until an admin accepts or rejects it." -%}
+{%- endif -%}
+{{ headline }}
+
+User: {{ who }}
+Players: {{ players }}
+Played: {{ played }}
+Current status: {{ current }}
+Review reason: {{ m.review_reason or "none recorded" }}
+
+{{ effect }}
+{%- endmacro %}
+
 {% block content %}
 <div class="mb-6">
     <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Matches</h1>
@@ -152,31 +194,32 @@
                     <td class="px-4 py-2.5 text-sm">
                         <div class="flex gap-1 items-center">
                         {% if m.review_status == "pending_review" %}
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'accept') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
-                                <button type="submit" class="border border-success/40 text-success hover:bg-success/10 rounded px-2 py-0.5 text-xs transition-colors" title="Accept this match — back to user-visible.">Accept</button>
+                                <button type="submit" class="border border-success/40 text-success hover:bg-success/10 rounded px-2 py-0.5 text-xs transition-colors" title="Accept this match: it becomes visible to the user and counts in their stats.">Accept</button>
                             </form>
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'reject') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="rejected">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
-                                <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Discard permanently.">Reject</button>
+                                <button type="submit" class="border border-danger/40 text-danger hover:bg-danger/10 rounded px-2 py-0.5 text-xs transition-colors" title="Reject this match: hidden from the user's stats and history, kept across reparses, not deleted. Restore undoes it.">Reject</button>
                             </form>
                         {% elif m.review_status == "rejected" %}
                             <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="">
+                                <input type="hidden" name="intent" value="restore">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
-                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Restore — back to user-visible.">Restore</button>
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Restore this match: it becomes visible to the user again and counts in their stats.">Restore</button>
                             </form>
                         {% else %}
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'flag') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="pending_review">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
-                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Flag this match for review — hidden from users.">Flag</button>
+                                <button type="submit" class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Flag this match for review: hidden from the user's stats and history until an admin accepts or rejects it.">Flag</button>
                             </form>
                         {% endif %}
                         </div>
@@ -216,4 +259,14 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+    document.querySelectorAll('.review-confirm-form').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+            if (!window.confirm(form.dataset.confirm || 'Change this match\'s review status?')) {
+                e.preventDefault();
+            }
+        });
+    });
+</script>
 {% endblock %}

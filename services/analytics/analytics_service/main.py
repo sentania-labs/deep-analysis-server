@@ -703,6 +703,7 @@ async def admin_list_matches(
                    m.match_result, m.winner, m.game_count,
                    COALESCE(m.played_at, m.parsed_at) AS played_at,
                    m.review_status,
+                   m.review_reason,
                    m.match_tied
             FROM parser.matches m
             LEFT JOIN auth.users u ON u.id = m.user_id
@@ -719,7 +720,7 @@ async def admin_list_matches(
     # (both players have equal nonzero game wins, or match_tied) — see issue #71.
     match_ids = [row[0] for row in rows]
     # Build a quick lookup of match_tied by match_id from the fetched rows.
-    match_tied_by_id: dict[Any, bool] = {r[0]: bool(r[10]) for r in rows}
+    match_tied_by_id: dict[Any, bool] = {r[0]: bool(r[11]) for r in rows}
     draw_match_ids: set[Any] = set()
     if match_ids:
         async with sm() as session:
@@ -763,6 +764,7 @@ async def admin_list_matches(
             game_count,
             played_at,
             row_review_status,
+            row_review_reason,
             _row_match_tied,
         ) = row
         item = AdminMatchItem(
@@ -777,6 +779,7 @@ async def admin_list_matches(
             played_at=played_at,
             is_draw=match_id in draw_match_ids,
             review_status=row_review_status,
+            review_reason=row_review_reason,
         )
         items.append(item)
 
@@ -866,6 +869,7 @@ async def admin_update_match_review_status(
                            m.match_result, m.winner, m.game_count,
                            COALESCE(m.played_at, m.parsed_at) AS played_at,
                            m.review_status,
+                           m.review_reason,
                            m.match_tied
                     FROM parser.matches m
                     LEFT JOIN auth.users u ON u.id = m.user_id
@@ -890,7 +894,7 @@ async def admin_update_match_review_status(
             )
         ).all()
     wins_by_player = {str(w): int(n) for w, n in game_win_rows}
-    is_draw_flag = _is_true_draw(wins_by_player, match_tied=bool(row[10]))
+    is_draw_flag = _is_true_draw(wins_by_player, match_tied=bool(row[11]))
     if owner_row is not None:
         try:
             redis_client = await get_redis(get_settings().redis_url)
@@ -908,6 +912,7 @@ async def admin_update_match_review_status(
         game_count=int(row[7]) if row[7] else 0,
         played_at=row[8],
         review_status=row[9],
+        review_reason=row[10],
         is_draw=is_draw_flag,
     )
 
