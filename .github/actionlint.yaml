@@ -1,0 +1,8 @@
+# Custom runner labels actionlint cannot know about.
+#   lab     the ARC scale set on the homelab Kubernetes cluster
+#           (sentania-labs/homelab-runner). Matched by exact name.
+#   docker  legacy infra.int self-hosted runners, still used by deploy.yml.
+self-hosted-runner:
+  labels:
+    - lab
+    - docker
