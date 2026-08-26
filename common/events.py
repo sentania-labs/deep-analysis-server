@@ -22,7 +22,10 @@ class FileIngestedPayload(TypedDict, total=False):
     v0.4.0 always writes ``"match-log"``. ``agent_registration_id`` is
     the UUID of the registered agent that performed the upload.
     ``file_mtime`` is the file modification time from the agent,
-    used for deck version ordering.
+    used for deck version ordering. ``agent_classification`` is the
+    agent's tail-scan verdict for a match log ("complete" or
+    "inconclusive"); it is absent when the uploading agent predates
+    the field, and subscribers must tolerate that.
     """
 
     sha256: str
@@ -31,6 +34,7 @@ class FileIngestedPayload(TypedDict, total=False):
     uploaded_at: str  # ISO-8601 UTC
     content_type: str  # "match-log" | "decklist" | "unknown"
     file_mtime: float  # file modification time from agent
+    agent_classification: str  # "complete" | "inconclusive" (match logs only)
 
 
 class MatchParsedPayload(TypedDict, total=False):

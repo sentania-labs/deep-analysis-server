@@ -200,3 +200,176 @@ async def test_upload_rejects_unknown_content_type_value(
     )
     # pydantic enum coercion → 422.
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# agent_classification (issue #125)
+#
+# Contract with the agent (deep-analysis-agent src/deep_analysis_agent/
+# shipper.py): a multipart form field named ``agent_classification``
+# whose value is the literal string "complete" or "inconclusive". The
+# agent omits the field entirely when it has no verdict.
+# ---------------------------------------------------------------------------
+
+
+async def _collect_ingested_events(
+    redis_client: Any,
+    upload: Any,
+) -> list[dict[str, Any]]:
+    """Subscribe to file.ingested, run *upload*, return decoded events."""
+    received: list[dict[str, Any]] = []
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe("file.ingested")
+
+    async def _reader() -> None:
+        try:
+            async with asyncio.timeout(1.2):
+                async for msg in pubsub.listen():
+                    if msg.get("type") != "message":
+                        continue
+                    raw = msg.get("data")
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    received.append(json.loads(raw))
+        except TimeoutError:
+            return
+
+    reader_task = asyncio.create_task(_reader())
+    await asyncio.sleep(0.05)
+    try:
+        await upload()
+    finally:
+        await reader_task
+        await pubsub.unsubscribe("file.ingested")
+        await pubsub.aclose()
+    return received
+
+
+@pytest.mark.parametrize("classification", ["complete", "inconclusive"])
+async def test_upload_persists_and_publishes_agent_classification(
+    client: AsyncClient,
+    seed_agent: dict[str, Any],
+    db_session: AsyncSession,
+    redis_client: Any,
+    classification: str,
+) -> None:
+    body = f"classified-{classification}".encode()
+    sha = hashlib.sha256(body).hexdigest()
+
+    async def _do_upload() -> None:
+        r = await client.post(
+            "/ingest/upload",
+            files={"file": ("match.dat", body)},
+            data={
+                "content_type": "match-log",
+                "agent_classification": classification,
+            },
+            headers=_auth_header(seed_agent["api_token"]),
+        )
+        assert r.status_code == 201, r.text
+
+    events = await _collect_ingested_events(redis_client, _do_upload)
+
+    # Published on file.ingested for the parser to consume.
+    assert len(events) == 1, events
+    assert events[0]["agent_classification"] == classification
+
+    # Persisted so the parser backfill can replay it on reparse.
+    stored = (
+        await db_session.execute(
+            text("SELECT agent_classification FROM ingest.user_uploads WHERE sha256 = :s"),
+            {"s": sha},
+        )
+    ).scalar_one()
+    assert stored == classification
+
+
+async def test_upload_without_agent_classification_still_succeeds(
+    client: AsyncClient,
+    seed_agent: dict[str, Any],
+    db_session: AsyncSession,
+    redis_client: Any,
+) -> None:
+    """Backward compatibility: agents predating the field send nothing."""
+    body = b"old-agent-no-classification"
+    sha = hashlib.sha256(body).hexdigest()
+
+    async def _do_upload() -> None:
+        r = await client.post(
+            "/ingest/upload",
+            files={"file": ("match.dat", body)},
+            data={"content_type": "match-log"},
+            headers=_auth_header(seed_agent["api_token"]),
+        )
+        assert r.status_code == 201, r.text
+
+    events = await _collect_ingested_events(redis_client, _do_upload)
+
+    assert len(events) == 1, events
+    # Absent, not null: subscribers see exactly the pre-#125 payload.
+    assert "agent_classification" not in events[0]
+
+    stored = (
+        await db_session.execute(
+            text("SELECT agent_classification FROM ingest.user_uploads WHERE sha256 = :s"),
+            {"s": sha},
+        )
+    ).scalar_one()
+    assert stored is None
+
+
+@pytest.mark.parametrize("bad_value", ["partial", "COMPLETE", "true", "complete "])
+async def test_upload_rejects_invalid_agent_classification(
+    client: AsyncClient,
+    seed_agent: dict[str, Any],
+    db_session: AsyncSession,
+    bad_value: str,
+) -> None:
+    """A present-but-invalid value is rejected, never silently coerced."""
+    body = f"bad-classification-{bad_value}".encode()
+    sha = hashlib.sha256(body).hexdigest()
+    r = await client.post(
+        "/ingest/upload",
+        files={"file": ("match.dat", body)},
+        data={"content_type": "match-log", "agent_classification": bad_value},
+        headers=_auth_header(seed_agent["api_token"]),
+    )
+    assert r.status_code == 422, r.text
+
+    # Nothing persisted for a rejected upload.
+    n = (
+        await db_session.execute(
+            text("SELECT count(*) FROM ingest.user_uploads WHERE sha256 = :s"),
+            {"s": sha},
+        )
+    ).scalar_one()
+    assert n == 0
+
+
+async def test_upload_treats_empty_agent_classification_as_absent(
+    client: AsyncClient,
+    seed_agent: dict[str, Any],
+    db_session: AsyncSession,
+) -> None:
+    """An empty form value is indistinguishable from an unset one.
+
+    FastAPI coerces it to None. Accepting it (rather than 422ing) means
+    a quirk in a future agent's form encoding cannot cost a match log.
+    """
+    body = b"empty-classification-value"
+    sha = hashlib.sha256(body).hexdigest()
+    r = await client.post(
+        "/ingest/upload",
+        files={"file": ("match.dat", body)},
+        data={"content_type": "match-log", "agent_classification": ""},
+        headers=_auth_header(seed_agent["api_token"]),
+    )
+    assert r.status_code == 201, r.text
+
+    stored = (
+        await db_session.execute(
+            text("SELECT agent_classification FROM ingest.user_uploads WHERE sha256 = :s"),
+            {"s": sha},
+        )
+    ).scalar_one()
+    assert stored is None

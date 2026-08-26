@@ -23,7 +23,7 @@ from common.redis_client import EventPublisher, get_redis
 from ingest_service import models as _models  # noqa: F401 — load Base.metadata
 from ingest_service.db import get_session
 from ingest_service.deps import get_current_agent
-from ingest_service.schemas import ContentType, UploadResponse
+from ingest_service.schemas import AgentClassification, ContentType, UploadResponse
 from ingest_service.settings import get_settings
 from ingest_service.storage import (
     InsufficientStorageError,
@@ -207,6 +207,11 @@ async def upload(
     original_filename: str | None = Form(default=None),
     content_type: ContentType = Form(default=ContentType.MATCH_LOG),
     file_mtime: float | None = Form(default=None),
+    # Agent tail-scan verdict, optional by contract: agents older than
+    # the field omit it, and an omitted (or empty) value behaves exactly
+    # as it did before the field existed. A present-but-unrecognized
+    # value 422s rather than being coerced.
+    agent_classification: AgentClassification | None = Form(default=None),
     agent: AuthenticatedAgent = Depends(get_current_agent),
     db: AsyncSession = Depends(get_session),
 ) -> UploadResponse:
@@ -275,8 +280,9 @@ async def upload(
     upload_row = await db.execute(
         text(
             "INSERT INTO ingest.user_uploads "
-            "(sha256, user_id, agent_registration_id, uploaded_at, original_filename) "
-            "VALUES (:sha, :uid, :aid, :at, :fn) "
+            "(sha256, user_id, agent_registration_id, uploaded_at, original_filename, "
+            "agent_classification) "
+            "VALUES (:sha, :uid, :aid, :at, :fn, :cls) "
             "RETURNING id"
         ),
         {
@@ -285,6 +291,10 @@ async def upload(
             "aid": str(agent.agent_id),
             "at": now,
             "fn": original_filename,
+            # NULL for agents that predate the field. The parser
+            # backfill reads this column back on reparse, so the
+            # verdict survives the event that carried it.
+            "cls": agent_classification.value if agent_classification is not None else None,
         },
     )
     upload_id = int(upload_row.scalar_one())
@@ -301,6 +311,8 @@ async def upload(
         }
         if file_mtime is not None:
             payload["file_mtime"] = file_mtime
+        if agent_classification is not None:
+            payload["agent_classification"] = agent_classification.value
         try:
             publisher = await _get_publisher()
             await publisher.publish(FILE_INGESTED, dict(payload))

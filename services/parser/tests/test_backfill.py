@@ -131,7 +131,7 @@ async def test_scan_unparsed_processes_decklists() -> None:
     consumer.handle_decklist_event = AsyncMock()
 
     sm = _make_mock_session(
-        match_rows=[("abc123", 1)],
+        match_rows=[("abc123", 1, None)],
         deck_rows=[("def456", 2)],
     )
 
@@ -140,7 +140,7 @@ async def test_scan_unparsed_processes_decklists() -> None:
         result = await scan_unparsed(sm, consumer, batch_size=50)
 
     assert result == 2
-    consumer.handle_event.assert_called_once_with("abc123", 1)
+    consumer.handle_event.assert_called_once_with("abc123", 1, agent_classification=None)
     consumer.handle_decklist_event.assert_called_once_with("def456", 2)
 
 

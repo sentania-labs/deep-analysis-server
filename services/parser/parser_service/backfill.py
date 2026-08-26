@@ -29,9 +29,19 @@ from parser_service.settings import REPARSE_MIN_VERSION, get_settings
 
 _log = logging.getLogger("parser.backfill")
 
+# The agent's tail-scan verdict is per-upload, but this query groups by
+# (sha256, user_id). When the same content was uploaded more than once,
+# prefer 'complete': a single upload that saw a completion signal is
+# stronger evidence than one that did not.
 _UNPARSED_SQL = text(
     """
-    SELECT u.sha256, u.user_id
+    SELECT u.sha256,
+           u.user_id,
+           CASE
+               WHEN bool_or(u.agent_classification = 'complete') THEN 'complete'
+               WHEN bool_or(u.agent_classification = 'inconclusive') THEN 'inconclusive'
+               ELSE NULL
+           END AS agent_classification
       FROM ingest.user_uploads u
       JOIN ingest.game_log_files g ON g.sha256 = u.sha256
       LEFT JOIN parser.matches m
@@ -85,9 +95,15 @@ async def scan_unparsed(
 
     if rows:
         _log.info("backfill scan found %d unparsed match logs", len(rows))
-        for sha256, user_id in rows:
+        for sha256, user_id, agent_classification in rows:
             try:
-                result = await consumer.handle_event(str(sha256), int(user_id))
+                result = await consumer.handle_event(
+                    str(sha256),
+                    int(user_id),
+                    agent_classification=(
+                        str(agent_classification) if agent_classification is not None else None
+                    ),
+                )
                 if result is not None:
                     total_processed += 1
             except Exception:  # noqa: BLE001

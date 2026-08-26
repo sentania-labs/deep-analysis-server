@@ -85,8 +85,16 @@ class UserUpload(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     original_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Agent-side tail-scan verdict, sent as the ``agent_classification``
+    # multipart form field. NULL when the uploading agent predates the
+    # field or the upload is not a match log.
+    agent_classification: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     __table_args__ = (
         Index("ix_user_uploads_user_uploaded_at", "user_id", "uploaded_at"),
         Index("ix_user_uploads_sha256", "sha256"),
+        CheckConstraint(
+            "agent_classification IS NULL OR agent_classification IN ('complete', 'inconclusive')",
+            name="ck_user_uploads_agent_classification",
+        ),
     )
