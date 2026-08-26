@@ -66,6 +66,12 @@ jobs:
         run: uv run pytest tests/common/
       - name: pytest tests/test_route_prefix_convention.py
         run: uv run pytest tests/test_route_prefix_convention.py
+      # The gate tests skip themselves without jq, so assert it is present
+      # rather than let the job go green on 41 skips.
+      - name: jq present (review gate tests need it)
+        run: jq --version
+      - name: pytest tests/test_review_gate_hook.py
+        run: uv run pytest tests/test_review_gate_hook.py
       - name: pytest services/analytics/tests
         run: uv run pytest services/analytics/tests/
 

@@ -89,6 +89,8 @@ docker compose --profile observability up -d
 
 Every push must go through a feature branch + PR, and only merges when CI is green. Direct pushes to `main` are reserved for urgent fixes with Scott's sign-off.
 
+A local PreToolUse hook also gates pushes on a `/self-review` marker that matches the HEAD of the tree being pushed. See [CONTRIBUTING.md](CONTRIBUTING.md#pre-push-review-gate).
+
 ### What CI covers
 
 CI runs on the `lab` runner pool (ARC pods on the homelab Kubernetes cluster). Jobs: `lint`, `typecheck`, `test-common`, `test-integration` (real PostgreSQL 16 + Redis 7, started by `ci/start-test-services.sh`), `docker-build` (all five service images, via the shared in-cluster BuildKit), and `diagram-drift`.
