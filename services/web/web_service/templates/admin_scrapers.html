@@ -37,7 +37,9 @@
         <div class="p-4 border-b dark:border-border border-border-light flex items-center justify-between">
             <div class="flex items-center gap-3">
                 {# Health dot #}
-                {% if s.is_broken %}
+                {% if s.is_running %}
+                <span class="w-2.5 h-2.5 rounded-full bg-accent animate-pulse" title="Running"></span>
+                {% elif s.is_broken %}
                 <span class="w-2.5 h-2.5 rounded-full bg-danger" title="Broken"></span>
                 {% elif s.consecutive_failures|default(0) > 0 %}
                 <span class="w-2.5 h-2.5 rounded-full bg-warning" title="Failing"></span>
@@ -47,6 +49,9 @@
                 <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light">{{ s.scraper_name }}</h2>
             </div>
             <div class="flex items-center gap-2">
+                {% if s.is_running %}
+                <span class="bg-accent-muted text-accent text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Running</span>
+                {% endif %}
                 {% if s.enabled %}
                 <span class="bg-success-muted text-success text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Enabled</span>
                 {% else %}
@@ -77,6 +82,12 @@
                     </div>
                 </div>
                 <div>
+                    <span class="dark:text-txt-tertiary text-txt-secondary-light">Running since</span>
+                    <div class="font-mono dark:text-txt-secondary text-txt-secondary-light mt-0.5">
+                        {% if s.is_running and s.running_since %}{{ s.running_since.strftime("%Y-%m-%d %H:%M") }}{% elif s.is_running %}just now{% else %}not running{% endif %}
+                    </div>
+                </div>
+                <div>
                     <span class="dark:text-txt-tertiary text-txt-secondary-light">Interval</span>
                     <div class="font-mono dark:text-txt-secondary text-txt-secondary-light mt-0.5">{{ s.interval_hours|default(24) }}h</div>
                 </div>
@@ -99,7 +110,14 @@
                     </button>
                 </form>
 
-                {# Run now #}
+                {# Run now, disabled while a run holds the scraper's lock, so the
+                   button never promises something the API would refuse with a 409. #}
+                {% if s.is_running %}
+                <button type="button" disabled title="A scrape is already running"
+                        class="bg-accent text-white rounded-md px-3 py-1.5 text-xs font-medium opacity-50 cursor-not-allowed">
+                    Running...
+                </button>
+                {% else %}
                 <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/trigger" class="inline"
                       onsubmit="return confirm('Trigger {{ s.scraper_name }} scrape now?');">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -107,6 +125,7 @@
                         Run Now
                     </button>
                 </form>
+                {% endif %}
 
                 {# Reset health — only when broken #}
                 {% if s.is_broken %}

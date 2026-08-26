@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
@@ -50,6 +50,16 @@ from analytics_service.schemas import (
     ScraperConfigUpdate,
     TrainResult,
 )
+from analytics_service.scraper_lock import (
+    TRIGGER_MANUAL,
+    TRIGGER_SCHEDULED,
+    ScrapeAlreadyRunning,
+    ScraperRun,
+)
+from analytics_service.scraper_lock import acquire as acquire_scraper_lock
+from analytics_service.scraper_lock import get_run as get_scraper_run
+from analytics_service.scraper_lock import run_locked as run_scrape_locked
+from analytics_service.scraper_lock import run_status_fields as scraper_run_status_fields
 from analytics_service.scryfall_sync import run_sync, should_sync
 from analytics_service.settings import get_settings
 from analytics_service.stats import router as stats_router
@@ -126,6 +136,65 @@ async def _read_scraper_config(
     return True, settings.mtgtop8_scrape_interval_hours
 
 
+_ScrapeRunner = Callable[[async_sessionmaker[AsyncSession]], Awaitable[Any]]
+
+
+async def _run_scrape_if_idle(
+    scraper_name: str,
+    runner: _ScrapeRunner,
+    sm: async_sessionmaker[AsyncSession],
+) -> None:
+    """Scheduler path: run the scrape unless a run already holds the lock.
+
+    A skipped cycle is normal, not an error: an admin kicked off a
+    manual run (or another replica got there first) and duplicating the
+    fetch would only double the load on the upstream site.
+    """
+    try:
+        await run_scrape_locked(
+            scraper_name,
+            lambda: runner(sm),
+            trigger=TRIGGER_SCHEDULED,
+        )
+    except ScrapeAlreadyRunning as exc:
+        _log.info(
+            "scheduled scrape skipped; run already in progress",
+            extra={
+                "scraper_name": scraper_name,
+                "running_since": exc.run.started_at.isoformat() if exc.run else None,
+                "run_trigger": exc.run.trigger if exc.run else None,
+            },
+        )
+
+
+async def _run_scrape_holding(
+    scraper_name: str,
+    runner: _ScrapeRunner,
+    sm: async_sessionmaker[AsyncSession],
+    run: ScraperRun,
+) -> None:
+    """Background-task path: the lock was acquired by the HTTP handler."""
+    await run_scrape_locked(
+        scraper_name,
+        lambda: runner(sm),
+        trigger=run.trigger,
+        run=run,
+    )
+
+
+def _already_running_response(exc: ScrapeAlreadyRunning) -> JSONResponse:
+    """409 body for a duplicate trigger. Machine-readable on purpose."""
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "error": "scrape_already_running",
+            "scraper_name": exc.scraper_name,
+            "running_since": exc.run.started_at.isoformat() if exc.run else None,
+            "run_trigger": exc.run.trigger if exc.run else None,
+        },
+    )
+
+
 _mtgo_interval_hours: int = 24  # updated each tick from scraper_config
 
 
@@ -139,7 +208,7 @@ async def _mtgo_tick() -> None:
         async with sm() as session:
             health = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
         if _mtgo_scrape_due(health, interval_hours):
-            await run_mtgo_scrape(sm)
+            await _run_scrape_if_idle(MTGO_SCRAPER_NAME, run_mtgo_scrape, sm)
     else:
         _log.debug("mtgo scraper disabled via config; skipping cycle")
 
@@ -178,7 +247,7 @@ async def _mtgtop8_tick() -> None:
         async with sm() as session:
             health = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
         if _mtgo_scrape_due(health, interval_hours):
-            await run_mtgtop8_scrape(sm)
+            await _run_scrape_if_idle(MTGTOP8_SCRAPER_NAME, run_mtgtop8_scrape, sm)
     else:
         _log.debug("mtgtop8 scraper disabled via config; skipping cycle")
 
@@ -405,20 +474,36 @@ async def sync_cards(
 async def scrape_mtgo(
     background_tasks: BackgroundTasks,
     _admin: AuthenticatedUser = Depends(require_admin),
-) -> dict[str, str]:
-    """Trigger an MTGO results scrape in the background."""
-    background_tasks.add_task(run_mtgo_scrape, get_sessionmaker())
-    return {"status": "scrape_started"}
+) -> Any:
+    """Trigger an MTGO results scrape in the background.
+
+    The lock is taken here, before the 202, so a second click gets an
+    honest 409 instead of silently starting a duplicate fetch.
+    """
+    try:
+        run = await acquire_scraper_lock(MTGO_SCRAPER_NAME, trigger=TRIGGER_MANUAL)
+    except ScrapeAlreadyRunning as exc:
+        return _already_running_response(exc)
+    background_tasks.add_task(
+        _run_scrape_holding, MTGO_SCRAPER_NAME, run_mtgo_scrape, get_sessionmaker(), run
+    )
+    return {"status": "scrape_started", "run_id": run.run_id}
 
 
 @admin_router.post("/scrape-mtgtop8", status_code=202)
 async def scrape_mtgtop8(
     background_tasks: BackgroundTasks,
     _admin: AuthenticatedUser = Depends(require_admin),
-) -> dict[str, str]:
+) -> Any:
     """Trigger an mtgtop8.com results scrape in the background."""
-    background_tasks.add_task(run_mtgtop8_scrape, get_sessionmaker())
-    return {"status": "scrape_started"}
+    try:
+        run = await acquire_scraper_lock(MTGTOP8_SCRAPER_NAME, trigger=TRIGGER_MANUAL)
+    except ScrapeAlreadyRunning as exc:
+        return _already_running_response(exc)
+    background_tasks.add_task(
+        _run_scrape_holding, MTGTOP8_SCRAPER_NAME, run_mtgtop8_scrape, get_sessionmaker(), run
+    )
+    return {"status": "scrape_started", "run_id": run.run_id}
 
 
 @admin_router.post("/scraper-health/reset")
@@ -442,6 +527,13 @@ async def scraper_health_reset(
         return await reset_scraper_health_row(session, scraper_name)
 
 
+async def _with_run_status(health: dict[str, Any]) -> dict[str, Any]:
+    """Merge live-run state into a scraper health dict."""
+    name = str(health.get("scraper_name") or "")
+    run = await get_scraper_run(name)
+    return {**health, **scraper_run_status_fields(run)}
+
+
 @admin_router.get("/scraper-health")
 async def scraper_health(
     _admin: AuthenticatedUser = Depends(require_admin),
@@ -456,11 +548,17 @@ async def scraper_health(
     sm = get_sessionmaker()
     if scraper_name is not None:
         async with sm() as session:
-            return await get_scraper_health_row(session, scraper_name)
+            health = await get_scraper_health_row(session, scraper_name)
+        return await _with_run_status(health)
     async with sm() as session:
         mtgo = await get_scraper_health_row(session, MTGO_SCRAPER_NAME)
         mtgtop8 = await get_scraper_health_row(session, MTGTOP8_SCRAPER_NAME)
-    return {"scrapers": [mtgo, mtgtop8]}
+    return {
+        "scrapers": [
+            await _with_run_status(mtgo),
+            await _with_run_status(mtgtop8),
+        ]
+    }
 
 
 @admin_router.get("/cards-status")
@@ -815,6 +913,12 @@ async def list_scrapers(
     """List all scrapers with merged config + health data."""
     sm = get_sessionmaker()
     scrapers: list[ScraperConfigResponse] = []
+    # Read the run rows first: get_scraper_run opens its own pooled
+    # connection, so calling it inside the session below would hold two
+    # connections per scraper for the length of an admin page load.
+    runs = {
+        name: scraper_run_status_fields(await get_scraper_run(name)) for name in _KNOWN_SCRAPERS
+    }
     async with sm() as session:
         for name in sorted(_KNOWN_SCRAPERS):
             config_row = (
@@ -828,6 +932,7 @@ async def list_scrapers(
                 )
             ).one_or_none()
             health = await get_scraper_health_row(session, name)
+            run = runs[name]
             scrapers.append(
                 ScraperConfigResponse(
                     scraper_name=name,
@@ -838,6 +943,9 @@ async def list_scrapers(
                     consecutive_failures=health.get("consecutive_failures", 0),
                     is_broken=health.get("is_broken", False),
                     last_error=health.get("last_error"),
+                    is_running=bool(run["is_running"]),
+                    running_since=run["running_since"],
+                    run_trigger=run["run_trigger"],
                 )
             )
     return ScraperConfigListResponse(scrapers=scrapers)
@@ -901,6 +1009,7 @@ async def update_scraper_config(
             )
         ).one()
         health = await get_scraper_health_row(session, name)
+    run = scraper_run_status_fields(await get_scraper_run(name))
     return ScraperConfigResponse(
         scraper_name=name,
         enabled=bool(config_row[0]),
@@ -910,6 +1019,9 @@ async def update_scraper_config(
         consecutive_failures=health.get("consecutive_failures", 0),
         is_broken=health.get("is_broken", False),
         last_error=health.get("last_error"),
+        is_running=bool(run["is_running"]),
+        running_since=run["running_since"],
+        run_trigger=run["run_trigger"],
     )
 
 
