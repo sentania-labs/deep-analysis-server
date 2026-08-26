@@ -1815,7 +1815,7 @@ async def admin_user_reset_password(
         return blocked
 
     try:
-        temp, err = await auth_client.admin_reset_password(
+        reset, err = await auth_client.admin_reset_password(
             settings.auth_service_url, user.token, user_id
         )
     except auth_client.AuthForbidden:
@@ -1830,8 +1830,13 @@ async def admin_user_reset_password(
 
     users, total = await _refetch_admin_users(settings, user, page=page, per_page=per_page)
 
-    if temp is not None:
-        result = {"user_id": user_id, "temporary_password": temp}
+    if reset is not None:
+        temp, revoked = reset
+        result = {
+            "user_id": user_id,
+            "temporary_password": temp,
+            "revoked_sessions": revoked,
+        }
         return _render_admin_users_sync(
             request,
             user,

@@ -58,6 +58,14 @@ class User(Base):
     )
     mtgo_usernames: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Credential version. Stamped every time password_hash is written.
+    # NULL means "password has never been changed since this column
+    # shipped" and is a legitimate, non-constraining value: sessions
+    # that predate the column carry a NULL password_epoch and still
+    # match. See Session.password_epoch.
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -92,6 +100,20 @@ class Session(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The value of User.password_changed_at that this session was issued
+    # against, copied from the user row the issuing request read. Session
+    # resolution rejects the session when it no longer equals the user's
+    # current password_changed_at.
+    #
+    # This is an equality check on a credential version, not a timestamp
+    # comparison, and that is deliberate: it closes the reset/issuance
+    # race by construction. A login that reads the pre-reset user row
+    # stamps the pre-reset epoch here, so it is rejected once the reset
+    # commits, no matter which transaction committed first or how the
+    # two clocks compare. Comparing issued_at against password_changed_at
+    # would not close that race, because a login can read the old
+    # password hash and still stamp a later timestamp than the reset's.
+    password_epoch: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("refresh_token_hash", name="uq_sessions_refresh_token_hash"),

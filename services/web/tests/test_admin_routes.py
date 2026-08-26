@@ -128,6 +128,10 @@ async def test_get_admin_users_lists_users_for_admin(
     # Both delete and reset-password actions surfaced for testuser.
     assert "/admin/users/2/delete" in r.text
     assert "/admin/users/2/reset-password" in r.text
+    # The reset button must not read as password-only: it also signs the
+    # user out everywhere, and the label/confirm text has to say so.
+    assert "Reset pw + sign out" in r.text
+    assert "also revokes all of their active sessions" in r.text
 
 
 @pytest.mark.asyncio
@@ -357,9 +361,11 @@ async def test_post_reset_password_renders_temp(
     from web_service import deps as _deps
     from web_service import main as _main
 
-    async def fake_reset(_url: str, _token: str, user_id: int) -> tuple[str | None, str | None]:
+    async def fake_reset(
+        _url: str, _token: str, user_id: int
+    ) -> tuple[tuple[str, int] | None, str | None]:
         assert user_id == 2
-        return "TempStrongPwGoesHere1234", None
+        return ("TempStrongPwGoesHere1234", 2), None
 
     monkeypatch.setattr(auth_client, "admin_reset_password", fake_reset)
     dep, _ = _override_admin()
@@ -375,6 +381,9 @@ async def test_post_reset_password_renders_temp(
     # It is also presented in a code/strong block (we expect the
     # template to wrap it visibly — assert one of the common markers).
     assert "<code>" in r.text or "monospace" in r.text.lower() or 'class="temp-password"' in r.text
+    # The page must say the sessions were revoked, otherwise the admin
+    # cannot tell whether they still need to click "Revoke sessions".
+    assert "2 active sessions revoked" in r.text
 
 
 @pytest.mark.asyncio
@@ -391,7 +400,7 @@ async def test_post_reset_password_user_not_found_propagates(
     ) -> tuple[list[auth_client.UserItem], int]:
         return _sample_users(), 2
 
-    async def fake_reset(*_a: Any, **_kw: Any) -> tuple[str | None, str | None]:
+    async def fake_reset(*_a: Any, **_kw: Any) -> tuple[tuple[str, int] | None, str | None]:
         return None, "user_not_found"
 
     monkeypatch.setattr(auth_client, "admin_list_users", fake_list)

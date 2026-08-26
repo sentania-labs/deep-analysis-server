@@ -93,6 +93,8 @@ async def _resolve_current_user(
         raise _unauthorized()
     if user.id != user_id or user.disabled:
         raise _unauthorized()
+    if not session_matches_password_epoch(session_row, user):
+        raise _unauthorized()
 
     raw_scope = claims.get("scope")
     scope = raw_scope if isinstance(raw_scope, str) else None
@@ -105,6 +107,22 @@ async def _resolve_current_user(
         must_change_password=user.must_change_password,
         scope=scope,
     )
+
+
+def session_matches_password_epoch(session_row: SessionRow, user: User) -> bool:
+    """True when ``session_row`` was issued against the user's current password.
+
+    Every write to ``users.password_hash`` stamps
+    ``users.password_changed_at``; every login/refresh copies the value
+    it read into ``sessions.password_epoch``. A mismatch means the
+    password changed after this session was issued, so the session dies
+    with the credential it was minted against.
+
+    Both sides are NULL for users who have not changed their password
+    since the column shipped, which is why the migration backfills NULL:
+    NULL == NULL here, so an existing session survives the deploy.
+    """
+    return session_row.password_epoch == user.password_changed_at
 
 
 def _password_change_required() -> HTTPException:

@@ -106,6 +106,14 @@ The response body carries a fresh 24-char temporary password and
 `must_change_password` is set back to `true` on the target user — they
 are forced through the same password-change flow on next login.
 
+The reset also revokes every active session that user has, in the same
+transaction as the password change, so an already-open browser stops
+working immediately instead of running until its session expires. The
+count is returned as `revoked_sessions`. The one exception: if an admin
+resets their own password over the API, the session making the call
+stays alive (otherwise the response carrying the temporary password
+would sign them out); all of their other sessions are still revoked.
+
 ### Auth JWT flow (summary)
 
 ```
@@ -212,7 +220,8 @@ curl -k -X DELETE https://deepanalysis.local/admin/users/42 \
 ```
 
 Reset a user's password. Returns a fresh 24-char temporary
-password and sets `must_change_password=true`. The plaintext is
+password, sets `must_change_password=true`, and revokes the user's
+active sessions (`revoked_sessions` in the response). The plaintext is
 shown **once** — capture it:
 
 ```bash
@@ -220,8 +229,9 @@ curl -k -X POST https://deepanalysis.local/admin/users/42/reset-password \
   -H "Authorization: Bearer ${ADMIN_JWT}"
 ```
 
-Revoke all active sessions for a user (forces them to re-login on
-every active device). Returns `{revoked_count: N}`:
+Revoke all active sessions for a user without changing their password
+(forces them to re-login on every active device with their existing
+password). Returns `{revoked_count: N}`:
 
 ```bash
 curl -k -X POST https://deepanalysis.local/admin/users/42/revoke-sessions \

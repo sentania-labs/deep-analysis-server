@@ -120,6 +120,7 @@ async def create_user(
         password_hash=hash_password(body.password),
         role=body.role,
         must_change_password=body.must_change_password,
+        password_changed_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()
@@ -179,6 +180,41 @@ async def delete_user(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+async def _revoke_user_sessions(
+    db: AsyncSession,
+    user_id: int,
+    now: datetime,
+) -> int:
+    """Mark every *usable* session of ``user_id`` revoked as of ``now``.
+
+    Usable means unrevoked and not yet expired. Rows past ``expires_at``
+    are already rejected at authentication, so counting them would make
+    the API response and the admin UI claim browsers were signed out
+    when no live session existed. The returned number is what the admin
+    is shown, so it has to mean "sessions that were actually usable".
+
+    Does not commit: the caller owns the transaction so a revocation can
+    be bundled atomically with whatever else it accompanies (see
+    :func:`reset_password`). Returns the number of sessions revoked.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(SessionRow).where(
+                    SessionRow.user_id == user_id,
+                    SessionRow.revoked_at.is_(None),
+                    SessionRow.expires_at > now,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for r in rows:
+        r.revoked_at = now
+    return len(rows)
+
+
 @router.post("/users/{user_id}/reset-password", response_model=ResetPasswordResponse)
 async def reset_password(
     user_id: int,
@@ -189,12 +225,36 @@ async def reset_password(
     if target is None:
         raise _error(status.HTTP_404_NOT_FOUND, "user_not_found")
 
+    now = datetime.now(UTC)
     temp = secrets.token_urlsafe(18)
     target.password_hash = hash_password(temp)
     target.must_change_password = True
-    target.updated_at = datetime.now(UTC)
+    target.updated_at = now
+    # Move the credential version. This is the part that actually holds:
+    # the explicit revocation below only sees session rows visible in
+    # this transaction's snapshot, so a login or refresh that
+    # authenticated against the old password just before us and commits
+    # just after us would slip through it. That session carries the old
+    # password_epoch, and resolution rejects it. See
+    # Session.password_epoch and deps.session_matches_password_epoch.
+    target.password_changed_at = now
+
+    # A reset that leaves prior sessions alive only does half the job:
+    # the old password stops working but an already-open browser keeps
+    # going until its session expires. Revoke in the same transaction so
+    # the two either both land or neither does.
+    #
+    # No exemption for a self-reset. An admin resetting their own
+    # password is usually responding to suspected credential or session
+    # theft, and sparing the calling session would preserve every stolen
+    # copy of that token, including its ability to keep minting
+    # full-scope access tokens through /auth/refresh. Revoking it costs
+    # nothing here: this handler is already past authentication, so it
+    # still returns the temporary password in its own response.
+    revoked = await _revoke_user_sessions(db, user_id, now)
+
     await db.commit()
-    return ResetPasswordResponse(temporary_password=temp)
+    return ResetPasswordResponse(temporary_password=temp, revoked_sessions=revoked)
 
 
 @router.post("/users/{user_id}/revoke-sessions", response_model=RevokeSessionsResponse)
@@ -207,23 +267,9 @@ async def revoke_sessions(
     if target is None:
         raise _error(status.HTTP_404_NOT_FOUND, "user_not_found")
 
-    rows = (
-        (
-            await db.execute(
-                select(SessionRow).where(
-                    SessionRow.user_id == user_id,
-                    SessionRow.revoked_at.is_(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    now = datetime.now(UTC)
-    for r in rows:
-        r.revoked_at = now
+    revoked = await _revoke_user_sessions(db, user_id, datetime.now(UTC))
     await db.commit()
-    return RevokeSessionsResponse(revoked_count=len(rows))
+    return RevokeSessionsResponse(revoked_count=revoked)
 
 
 @router.get("/agents", response_model=AgentListView)
