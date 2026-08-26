@@ -87,7 +87,32 @@ docker compose --profile observability up -d
 
 ## Contributing
 
-Post-v0.4.2 the `main` branch is protected by an end-to-end compose-smoke gate: every push must go through a feature branch + PR, CI builds the full stack, runs `ci/smoke_e2e.sh` (auth + ingest happy path via the gateway), and only merges when green. Direct pushes to `main` are reserved for urgent fixes with Scott's sign-off.
+Every push must go through a feature branch + PR, and only merges when CI is green. Direct pushes to `main` are reserved for urgent fixes with Scott's sign-off.
+
+### What CI covers
+
+CI runs on the `lab` runner pool (ARC pods on the homelab Kubernetes cluster). Jobs: `lint`, `typecheck`, `test-common`, `test-integration` (real PostgreSQL 16 + Redis 7, started by `ci/start-test-services.sh`), `docker-build` (all five service images, via the shared in-cluster BuildKit), and `diagram-drift`.
+
+### Pre-push smoke test (run this locally)
+
+The runner pods have no Docker daemon, so the full-stack compose smoke tests are **not** run by CI. They are a local step, and they are the only coverage of the composed stack: gateway routing, service wiring, and the built images actually starting. Run both before pushing anything that touches `docker-compose.yml`, the Caddyfile, a service Dockerfile, or a routing prefix:
+
+```bash
+cp .env.example .env
+echo 'DA_DATABASE_URL=postgresql+asyncpg://da:changeme@postgres:5432/deep_analysis' >> .env
+echo 'DATABASE_URL=postgresql+psycopg://da:changeme@postgres:5432/deep_analysis' >> .env
+docker network create edge-slots   # once per machine
+
+docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml up -d --build
+
+# then, against the running stack:
+bash ci/smoke_e2e.sh http://localhost:8080
+bash ci/smoke_ui.sh  http://localhost:8080
+
+docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml down -v
+```
+
+`ci/smoke_e2e.sh` walks the auth + ingest happy path through the gateway; `ci/smoke_ui.sh` walks the browser UI (login, dashboard, profile, admin CRUD). Note the compose stack does not run Alembic on startup, so run the three `alembic upgrade head` invocations (root, auth, ingest) against the published Postgres port before the UI smoke.
 
 ## License
 

@@ -83,7 +83,9 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 - **Terse conventions.** Prefer explicit over magic. No clever metaclass tricks.
 - **Tests per service.** Each service has its own `tests/` directory. Integration tests use a real Postgres + Redis (not mocks).
 - **Self-review protocol.** For non-trivial changes, spawn a subagent to review before committing. Catch your own bugs.
-- **Post-v0.4.2 PR discipline.** `main` is protected by the compose-smoke E2E gate (full stack + `ci/smoke_e2e.sh`). Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are for urgent fixes only and still need CI green on the follow-up run.
+- **PR discipline.** Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are for urgent fixes only and still need CI green on the follow-up run.
+- **CI runs on the `lab` ARC pool.** `runs-on: lab` is an exact scale-set name, not a label array. Runner pods are ephemeral, have no Docker daemon, and run as a non-root user with no sudo; image builds go to the shared in-cluster BuildKit via `driver: remote`. See `sentania-labs/homelab-runner` `docs/ci-consumer-contract.md`.
+- **Compose smoke is a local pre-push step, not CI.** `ci/smoke_e2e.sh` (auth + ingest happy path via the gateway) and `ci/smoke_ui.sh` (browser UI) need a real Docker daemon, which the runner pods do not have. They are the only coverage of image builds composing into a working stack, so run them locally before pushing anything touching compose, the Caddyfile, a service Dockerfile, or a route prefix. See README "Pre-push smoke test".
 - **Releases are tag-based.** To cut a release, merge work to `main` via PR (CI green), then `git tag vX.Y.Z && git push origin vX.Y.Z` from `main`. The release workflow builds the 5 service images, publishes them to GHCR (tagged with the semver and `:latest`), and creates a GitHub Release. The version is baked into the images at build time as the `VERSION` build arg. No version-bump commit is required — the tag is the source of truth.
 
 ## Directory layout
