@@ -22,6 +22,7 @@ from auth_service.deps import (
     get_current_user,
     get_current_user_any_scope,
     require_user_role,
+    session_matches_password_epoch,
 )
 from auth_service.jwt_issue import (
     hash_refresh_token,
@@ -188,6 +189,11 @@ async def login(
             expires_at=now + timedelta(seconds=settings.refresh_token_ttl_seconds),
             user_agent=(request.headers.get("user-agent") or None),
             ip=_client_ip(request),
+            # Stamp the credential version we just authenticated against.
+            # If a password reset commits after this read, the user row's
+            # password_changed_at moves on and this session stops
+            # resolving, which is what closes the reset/issuance race.
+            password_epoch=user.password_changed_at,
         )
         db.add(session_row)
         await db.commit()
@@ -256,6 +262,11 @@ async def refresh(
         raise _INVALID_CREDENTIALS
     if user.disabled:
         raise _INVALID_CREDENTIALS
+    # Without this, refresh is a hole straight through the reset: a
+    # pre-reset session could keep minting full-scope access tokens for
+    # the whole refresh-token lifetime.
+    if not session_matches_password_epoch(old_session, user):
+        raise _INVALID_CREDENTIALS
 
     old_session.revoked_at = now
 
@@ -267,6 +278,7 @@ async def refresh(
         expires_at=now + timedelta(seconds=settings.refresh_token_ttl_seconds),
         user_agent=(request.headers.get("user-agent") or None),
         ip=_client_ip(request),
+        password_epoch=user.password_changed_at,
     )
     db.add(new_session)
     await db.commit()
@@ -521,11 +533,15 @@ async def change_password(
     if not verify_password(body.current_password, user.password_hash):
         raise _INVALID_CREDENTIALS
 
+    now = datetime.now(UTC)
     user.password_hash = hash_password(body.new_password)
     user.must_change_password = False
-    user.updated_at = datetime.now(UTC)
+    user.updated_at = now
+    # Moves the credential version, which invalidates every session
+    # issued against the old password even if one commits after this
+    # transaction's snapshot was taken.
+    user.password_changed_at = now
 
-    now = datetime.now(UTC)
     active_sessions = (
         (
             await db.execute(
@@ -847,6 +863,7 @@ async def register(
         password_hash=hash_password(body.password),
         role=assigned_role,
         must_change_password=False,
+        password_changed_at=datetime.now(UTC),
     )
     db.add(user)
     # Flush to get user.id before stamping the invite consumption.

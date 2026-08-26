@@ -120,6 +120,7 @@ async def create_user(
         password_hash=hash_password(body.password),
         role=body.role,
         must_change_password=body.must_change_password,
+        password_changed_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()
@@ -183,22 +184,32 @@ async def _revoke_user_sessions(
     db: AsyncSession,
     user_id: int,
     now: datetime,
-    *,
-    exclude_session_id: uuid.UUID | None = None,
 ) -> int:
-    """Mark every active session of ``user_id`` revoked as of ``now``.
+    """Mark every *usable* session of ``user_id`` revoked as of ``now``.
+
+    Usable means unrevoked and not yet expired. Rows past ``expires_at``
+    are already rejected at authentication, so counting them would make
+    the API response and the admin UI claim browsers were signed out
+    when no live session existed. The returned number is what the admin
+    is shown, so it has to mean "sessions that were actually usable".
 
     Does not commit: the caller owns the transaction so a revocation can
     be bundled atomically with whatever else it accompanies (see
     :func:`reset_password`). Returns the number of sessions revoked.
     """
-    stmt = select(SessionRow).where(
-        SessionRow.user_id == user_id,
-        SessionRow.revoked_at.is_(None),
+    rows = (
+        (
+            await db.execute(
+                select(SessionRow).where(
+                    SessionRow.user_id == user_id,
+                    SessionRow.revoked_at.is_(None),
+                    SessionRow.expires_at > now,
+                )
+            )
+        )
+        .scalars()
+        .all()
     )
-    if exclude_session_id is not None:
-        stmt = stmt.where(SessionRow.id != exclude_session_id)
-    rows = (await db.execute(stmt)).scalars().all()
     for r in rows:
         r.revoked_at = now
     return len(rows)
@@ -207,7 +218,7 @@ async def _revoke_user_sessions(
 @router.post("/users/{user_id}/reset-password", response_model=ResetPasswordResponse)
 async def reset_password(
     user_id: int,
-    admin: AuthenticatedUser = Depends(require_admin),
+    _admin: AuthenticatedUser = Depends(require_admin),
     db: AsyncSession = Depends(get_session),
 ) -> ResetPasswordResponse:
     target = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
@@ -219,19 +230,28 @@ async def reset_password(
     target.password_hash = hash_password(temp)
     target.must_change_password = True
     target.updated_at = now
+    # Move the credential version. This is the part that actually holds:
+    # the explicit revocation below only sees session rows visible in
+    # this transaction's snapshot, so a login or refresh that
+    # authenticated against the old password just before us and commits
+    # just after us would slip through it. That session carries the old
+    # password_epoch, and resolution rejects it. See
+    # Session.password_epoch and deps.session_matches_password_epoch.
+    target.password_changed_at = now
 
     # A reset that leaves prior sessions alive only does half the job:
     # the old password stops working but an already-open browser keeps
     # going until its session expires. Revoke in the same transaction so
     # the two either both land or neither does.
     #
-    # Self-reset (admin resetting their own password over the API; the
-    # admin UI hides the action on your own row) keeps the calling
-    # session alive. The caller is the one who just received the new
-    # password, so nothing is gained by signing them out, and it would
-    # invalidate the very response carrying the temporary password.
-    exclude = admin.session_id if admin.user_id == user_id else None
-    revoked = await _revoke_user_sessions(db, user_id, now, exclude_session_id=exclude)
+    # No exemption for a self-reset. An admin resetting their own
+    # password is usually responding to suspected credential or session
+    # theft, and sparing the calling session would preserve every stolen
+    # copy of that token, including its ability to keep minting
+    # full-scope access tokens through /auth/refresh. Revoking it costs
+    # nothing here: this handler is already past authentication, so it
+    # still returns the temporary password in its own response.
+    revoked = await _revoke_user_sessions(db, user_id, now)
 
     await db.commit()
     return ResetPasswordResponse(temporary_password=temp, revoked_sessions=revoked)

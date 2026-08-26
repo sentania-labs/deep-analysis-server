@@ -213,20 +213,28 @@ async def test_reset_password_revokes_existing_sessions(
 
 
 @pytest.mark.asyncio
-async def test_reset_password_self_keeps_calling_session(
+async def test_reset_password_self_revokes_calling_session(
     client: Any, db_session: AsyncSession
 ) -> None:
-    """An admin resetting their own password stays signed in on the calling session."""
+    """A self-reset signs the calling admin out too (Codex PR #143, finding 1).
+
+    The reason an admin resets their own password is usually suspected
+    credential or session theft. Sparing the calling session would spare
+    every stolen copy of that token as well.
+    """
     admin_id, token = await _seed_admin(
         client, db_session, email="selfreset@example.com", password="pw"
     )
     other_session = await _login(client, "selfreset@example.com", "pw")
 
     r = await client.post(f"/admin/users/{admin_id}/reset-password", headers=_h(token))
+    # The handler is already past authentication, so it still hands back
+    # the temporary password even though it just killed its own session.
     assert r.status_code == 200, r.text
-    assert r.json()["revoked_sessions"] == 1
+    assert r.json()["temporary_password"]
+    assert r.json()["revoked_sessions"] == 2
 
-    assert (await client.get("/auth/me", headers=_h(token))).status_code == 200
+    assert (await client.get("/auth/me", headers=_h(token))).status_code == 401
     assert (await client.get("/auth/me", headers=_h(other_session))).status_code == 401
 
 

@@ -12,6 +12,7 @@ import contextlib
 import logging
 import os
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -113,6 +114,9 @@ async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
         existing.role = "admin"
         existing.must_change_password = False
         existing.disabled = False
+        # A forced admin reset is a credential change: move the version
+        # so any session issued against the old password stops working.
+        existing.password_changed_at = datetime.now(UTC)
         await db.commit()
     else:
         user = User(
@@ -121,6 +125,7 @@ async def force_reset_admin(db: AsyncSession, settings: AuthSettings) -> bool:
             role="admin",
             must_change_password=False,
             disabled=False,
+            password_changed_at=datetime.now(UTC),
         )
         db.add(user)
         await db.commit()
@@ -171,6 +176,7 @@ async def bootstrap_admin(db: AsyncSession, settings: AuthSettings) -> None:
         role="admin",
         must_change_password=must_change,
         disabled=False,
+        password_changed_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()

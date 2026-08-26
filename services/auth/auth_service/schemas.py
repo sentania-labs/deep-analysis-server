@@ -122,8 +122,10 @@ class UpdateUserRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     temporary_password: str
-    # Sessions killed as part of the reset. The caller's own session is
-    # not counted when an admin resets their own password.
+    # Sessions killed as part of the reset: unrevoked and not yet
+    # expired at the moment of the reset. Already-expired rows are not
+    # counted, since authentication rejects them anyway. No session is
+    # exempt, including the caller's own on a self-reset.
     revoked_sessions: int = 0
 
 
