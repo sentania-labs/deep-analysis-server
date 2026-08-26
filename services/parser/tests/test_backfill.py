@@ -194,8 +194,17 @@ async def test_scan_unparsed_decklist_error_does_not_stop_processing() -> None:
 
     consumer = AsyncMock()
     consumer.handle_event = AsyncMock(return_value=MagicMock())
+    # The second call is the *successful* one, so its stand-in return value has
+    # to be something scan_unparsed counts (it counts `is not None`). A bare
+    # `None` here meant "second decklist also did nothing", which is why this
+    # asserted 1 and got 0 (issue #145). Matches the mock shape used by
+    # test_scan_unparsed_processes_decklists above.
+    #
+    # Both mocks overstate reality: the real handle_decklist_event is typed
+    # `-> None`, so scan_unparsed's decklist counter is dead in production.
+    # That is issue #147; these tests assert the intended counting behavior.
     consumer.handle_decklist_event = AsyncMock(
-        side_effect=[RuntimeError("boom"), None],
+        side_effect=[RuntimeError("boom"), MagicMock()],
     )
 
     sm = _make_mock_session(
