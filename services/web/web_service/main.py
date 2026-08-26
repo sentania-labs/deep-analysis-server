@@ -37,6 +37,7 @@ from web_service.deps import (
     get_verifier,
 )
 from web_service.settings import WebSettings, get_settings
+from web_service.urls import filter_url
 
 SERVICE_NAME = "web"
 configure_logging(SERVICE_NAME)
@@ -57,6 +58,7 @@ app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
+templates.env.globals["filter_url"] = filter_url
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # Browser-auth redirect handler — converts BrowserAuthRedirect into a
@@ -3824,6 +3826,9 @@ async def admin_matches_list(
         "review_status": review_status_clean,
     }
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
+    # Only carry a non-default page size on the chips, so an unfiltered view
+    # keeps a clean /admin/matches URL.
+    chip_per_page = per_page if per_page != _ADMIN_MATCHES_DEFAULT_PER_PAGE else None
 
     try:
         match_list = await analytics_client.admin_list_matches(
@@ -3851,6 +3856,7 @@ async def admin_matches_list(
                 "match_list": None,
                 "filters": filters,
                 "filter_qs": filter_qs,
+                "chip_per_page": chip_per_page,
                 "format_options": _MATCH_FORMAT_OPTIONS,
                 "error": "Analytics service unavailable. Please try again.",
                 "msg": msg,
@@ -3865,6 +3871,7 @@ async def admin_matches_list(
             "match_list": match_list,
             "filters": filters,
             "filter_qs": filter_qs,
+            "chip_per_page": chip_per_page,
             "format_options": _MATCH_FORMAT_OPTIONS,
             "error": None,
             "msg": msg,
