@@ -1,63 +1,70 @@
-"""Tests for raw-file resolution under the sharded archive layout."""
+"""Parser-side archive reads go through the object store adapter."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 from parser_service.storage import (
     RawFileNotFoundError,
     RawFileTooLargeError,
+    raw_key,
     read_raw,
-    resolve_path,
 )
 
-
-def _write_shard(root: Path, sha: str, ext: str, content: bytes) -> Path:
-    shard = root / sha[0:2] / sha[2:4]
-    shard.mkdir(parents=True, exist_ok=True)
-    target = shard / f"{sha}{ext}"
-    target.write_bytes(content)
-    return target
+from common.storage import MemoryObjectStore, object_key
 
 
-def test_resolve_finds_dat_first(tmp_path: Path) -> None:
+def _store_with(sha: str, body: bytes) -> MemoryObjectStore:
+    store = MemoryObjectStore()
+    store.seed(object_key(sha), body)
+    return store
+
+
+def test_raw_key_matches_the_ingest_key() -> None:
+    sha = "ab" + "0" * 62
+    assert raw_key(sha) == object_key(sha) == f"raw/ab/00/{sha}"
+
+
+def test_raw_key_honours_prefix() -> None:
+    sha = "cd" + "0" * 62
+    assert raw_key(sha, "archive") == f"archive/cd/00/{sha}"
+
+
+async def test_read_raw_returns_bytes() -> None:
     sha = "a" * 64
-    expected = _write_shard(tmp_path, sha, ".dat", b"payload")
-    assert resolve_path(sha, tmp_path) == expected
+    store = _store_with(sha, b"hello")
+    assert await read_raw(store, sha) == b"hello"
 
 
-def test_resolve_falls_back_to_log(tmp_path: Path) -> None:
+async def test_read_raw_under_ceiling() -> None:
     sha = "b" * 64
-    expected = _write_shard(tmp_path, sha, ".log", b"payload")
-    assert resolve_path(sha, tmp_path) == expected
+    store = _store_with(sha, b"hello")
+    assert await read_raw(store, sha, max_bytes=1024) == b"hello"
 
 
-def test_resolve_honours_hint_ext(tmp_path: Path) -> None:
+async def test_read_raw_rejects_oversize_without_downloading() -> None:
     sha = "c" * 64
-    expected = _write_shard(tmp_path, sha, ".log", b"payload")
-    assert resolve_path(sha, tmp_path, hint_ext=".log") == expected
-
-
-def test_resolve_missing_raises(tmp_path: Path) -> None:
-    with pytest.raises(RawFileNotFoundError):
-        resolve_path("d" * 64, tmp_path)
-
-
-def test_read_raw_returns_bytes(tmp_path: Path) -> None:
-    sha = "e" * 64
-    _write_shard(tmp_path, sha, ".dat", b"hello")
-    assert read_raw(sha, tmp_path) == b"hello"
-
-
-def test_read_raw_under_ceiling(tmp_path: Path) -> None:
-    sha = "f" * 64
-    _write_shard(tmp_path, sha, ".dat", b"hello")
-    assert read_raw(sha, tmp_path, max_bytes=1024) == b"hello"
-
-
-def test_read_raw_rejects_oversize(tmp_path: Path) -> None:
-    sha = "0" * 64
-    _write_shard(tmp_path, sha, ".dat", b"x" * 1024)
+    store = _store_with(sha, b"x" * 1024)
     with pytest.raises(RawFileTooLargeError):
-        read_raw(sha, tmp_path, max_bytes=512)
+        await read_raw(store, sha, max_bytes=512)
+
+
+async def test_read_raw_missing_object_raises() -> None:
+    with pytest.raises(RawFileNotFoundError):
+        await read_raw(MemoryObjectStore(), "d" * 64)
+
+
+async def test_read_raw_surfaces_store_outage_distinctly() -> None:
+    """An unreachable store is not the same as a missing object.
+
+    The consumer skips a missing object permanently but leaves an
+    unreadable one for the backfill scan to retry, so the two cannot
+    collapse into one error.
+    """
+    from common.storage import ObjectStorageError
+
+    sha = "e" * 64
+    store = _store_with(sha, b"payload")
+    store.available = False
+    with pytest.raises(ObjectStorageError) as exc:
+        await read_raw(store, sha)
+    assert not isinstance(exc.value, RawFileNotFoundError)

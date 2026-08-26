@@ -36,7 +36,9 @@ def _stub_env() -> None:
     os.environ.setdefault("DA_DATABASE_URL", "postgresql+asyncpg://stub:stub@localhost/stub")
     os.environ.setdefault("DA_REDIS_URL", "redis://localhost:6379/0")
     os.environ.setdefault("DA_JWT_PUBLIC_KEY_PATH", str(repo_root / ".nonexistent-jwt-pub"))
-    os.environ.setdefault("DA_PARSER_RAW_PATH", str(repo_root / ".nonexistent-raw"))
+    # A closed port, so any real object-store probe fails fast instead
+    # of waiting on DNS for the compose-default endpoint.
+    os.environ.setdefault("DA_S3_ENDPOINT_URL", "http://127.0.0.1:1")
 
 
 @pytest_asyncio.fixture

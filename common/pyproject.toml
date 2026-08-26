@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.3",
     "sqlalchemy>=2.0",
     "httpx>=0.27",
+    "boto3>=1.34",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -34,3 +35,4 @@ bypass-selection = true
 "cache.py" = "common/cache.py"
 "health.py" = "common/health.py"
 "background_loop.py" = "common/background_loop.py"
+"storage.py" = "common/storage.py"

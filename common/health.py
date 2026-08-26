@@ -1,8 +1,8 @@
 """Shared dependency health-check helpers.
 
 Every service's ``/healthz`` endpoint uses these to verify that its
-backing stores (Postgres, Redis) are actually reachable, rather than
-unconditionally returning ``{"status": "ok"}``.
+backing stores (Postgres, Redis, the object archive) are actually
+reachable, rather than unconditionally returning ``{"status": "ok"}``.
 
 Each probe has a **2-second timeout** so a hung backend doesn't make
 the health endpoint hang indefinitely.
@@ -19,6 +19,8 @@ import httpx
 import redis.asyncio as aioredis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from common.storage import ObjectStore
 
 _log = logging.getLogger("common.health")
 
@@ -121,3 +123,20 @@ async def evaluate(checks: list[Any]) -> HealthReport:
             # A check raised unexpectedly — treat as failure.
             report.checks.append(CheckResult(name="unknown", ok=False, detail="error"))
     return report
+
+
+async def check_object_store(store: ObjectStore) -> CheckResult:
+    """Head the archive bucket; 2-second timeout.
+
+    The failure this exists for: the archive backend goes away and the
+    service keeps answering 200 on /healthz while every upload or
+    parse silently fails. The probe uses the store's short-budget
+    client, so it answers in about a second when the store is gone.
+    """
+    try:
+        async with asyncio.timeout(_TIMEOUT_SECONDS):
+            await store.ping()
+        return CheckResult(name="object_store", ok=True)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("healthz object_store check failed: %s", exc)
+        return CheckResult(name="object_store", ok=False, detail="error")

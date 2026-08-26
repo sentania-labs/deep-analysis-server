@@ -22,7 +22,7 @@ Algorithm (Codex P1):
 
 * **Discover (read-only).** For every ``parser.matches`` row we
   compute the *would-be* ``raw_match_id``: the stored value if set,
-  otherwise the ``$<uuid>`` extracted from the archived ``.dat`` body.
+  otherwise the ``$<uuid>`` extracted from the archived object body.
   Rows whose source bytes are pruned or whose header doesn't contain
   a parseable UUID are reported and skipped (we can't identify what
   logical match they belong to).
@@ -57,12 +57,12 @@ import logging
 import re
 import sys
 from collections import defaultdict
-from pathlib import Path
 from typing import Any, NamedTuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from common.storage import ObjectStorageError, ObjectStore, get_object_store
 from parser_service.db import get_sessionmaker
 from parser_service.settings import get_settings
 from parser_service.storage import RawFileNotFoundError, read_raw
@@ -123,15 +123,15 @@ class _MatchRow(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-def compute_groups(
+async def compute_groups(
     rows: list[_MatchRow],
     *,
     extract_uuid: Any,
 ) -> tuple[dict[tuple[int, str], list[_MatchRow]], int]:
     """Group rows by ``(user_id, computed_raw_match_id)``.
 
-    Pure function — accepts an ``extract_uuid(sha256) -> str | None``
-    callable so the test suite can drive it without a filesystem.
+    Accepts an async ``extract_uuid(sha256) -> str | None`` callable so
+    the test suite can drive it without an object store.
 
     Returns ``(groups, unidentifiable_count)``. ``unidentifiable_count``
     is the number of rows we had to skip because they had no
@@ -143,7 +143,7 @@ def compute_groups(
         if row.raw_match_id is not None:
             computed = row.raw_match_id
         else:
-            computed = extract_uuid(row.sha256)
+            computed = await extract_uuid(row.sha256)
             if computed is None:
                 unidentifiable += 1
                 continue
@@ -177,13 +177,13 @@ async def _load_match_rows(sm: async_sessionmaker[AsyncSession]) -> list[_MatchR
         ]
 
 
-def _make_uuid_extractor(raw_root: Path, max_log_bytes: int | None):
+def _make_uuid_extractor(store: ObjectStore, key_prefix: str, max_log_bytes: int | None):
     """Build the ``extract_uuid`` callable used during discovery."""
 
-    def _extract(sha256: str) -> str | None:
+    async def _extract(sha256: str) -> str | None:
         try:
-            content = read_raw(sha256, raw_root, max_bytes=max_log_bytes)
-        except (RawFileNotFoundError, OSError):
+            content = await read_raw(store, sha256, key_prefix=key_prefix, max_bytes=max_log_bytes)
+        except (RawFileNotFoundError, ObjectStorageError, OSError):
             return None
         try:
             text_payload = content.decode("utf-8", errors="replace")
@@ -311,10 +311,11 @@ async def _apply_backfills(
 
 async def _run_cleanup(
     sm: async_sessionmaker[AsyncSession],
-    raw_root: Path,
+    store: ObjectStore,
     *,
     apply: bool,
     max_log_bytes: int | None,
+    key_prefix: str = "raw",
 ) -> tuple[int, int, int, dict[int, dict[str, int]]]:
     """End-to-end discover + plan + apply. Returns telemetry.
 
@@ -322,8 +323,8 @@ async def _run_cleanup(
     """
     rows = await _load_match_rows(sm)
     scanned = len(rows)
-    extractor = _make_uuid_extractor(raw_root, max_log_bytes)
-    groups, unidentifiable = compute_groups(rows, extract_uuid=extractor)
+    extractor = _make_uuid_extractor(store, key_prefix, max_log_bytes)
+    groups, unidentifiable = await compute_groups(rows, extract_uuid=extractor)
     plan = plan_actions(groups)
 
     delete_ids = [row_id for _uid, row_id in plan.deletes]
@@ -468,9 +469,10 @@ async def _run(apply: bool) -> int:
 
     scanned, unidentifiable, deleted, per_user = await _run_cleanup(
         sm,
-        settings.parser_raw_path,
+        get_object_store(settings.s3_config()),
         apply=apply,
         max_log_bytes=settings.parser_max_log_bytes,
+        key_prefix=settings.s3_key_prefix,
     )
 
     affected_users = sorted(uid for uid, stats in per_user.items() if stats.get("deleted", 0) > 0)

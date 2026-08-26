@@ -1,53 +1,86 @@
-"""Storage-layer assertions."""
+"""Ingest storage helpers: keys, MIME mapping, adapter writes."""
 
 from __future__ import annotations
 
-import errno
 import hashlib
-from pathlib import Path
 
 import pytest
-from ingest_service import storage as storage_mod
 from ingest_service.storage import (
-    InsufficientStorageError,
-    extension_for,
+    legacy_extension_for,
+    mime_for,
     storage_path_for,
     store_file,
 )
 
-
-def test_storage_path_sharding() -> None:
-    sha = "abcd1234" + "0" * 56
-    assert storage_path_for(sha, ".dat") == f"ab/cd/{sha}.dat"
-
-
-def test_extension_for_known_and_unknown() -> None:
-    assert extension_for("match-log") == ".dat"
-    assert extension_for("decklist") == ".xml"
-    assert extension_for("unknown") == ".bin"
-    assert extension_for("unknown", "game.log") == ".log"
+from common.storage import (
+    MemoryObjectStore,
+    ObjectStoreFullError,
+    ObjectStoreUnavailableError,
+    object_key,
+)
 
 
-async def test_store_file_writes_and_is_idempotent(tmp_path: Path) -> None:
-    data = b"hello world"
+def test_storage_path_is_the_object_key() -> None:
+    sha = "ab" + "0" * 62
+    assert storage_path_for(sha) == f"raw/ab/00/{sha}"
+    assert storage_path_for(sha) == object_key(sha)
+
+
+def test_storage_path_honours_prefix() -> None:
+    sha = "cd" + "1" * 62
+    assert storage_path_for(sha, "archive") == f"archive/cd/11/{sha}"
+
+
+def test_mime_for_known_and_unknown() -> None:
+    assert mime_for("match-log") == "application/octet-stream"
+    assert mime_for("decklist") == "application/xml"
+    assert mime_for("reference-data") == "application/xml"
+    assert mime_for("unknown") == "application/octet-stream"
+    assert mime_for("something-else") == "application/octet-stream"
+
+
+def test_legacy_extension_for_backfill_lookups() -> None:
+    assert legacy_extension_for("match-log") == ".dat"
+    assert legacy_extension_for("decklist") == ".xml"
+    assert legacy_extension_for("unknown") == ".bin"
+    assert legacy_extension_for("unknown", "game.log") == ".log"
+
+
+async def test_store_file_writes_through_the_adapter() -> None:
+    store = MemoryObjectStore()
+    data = b"payload bytes"
     sha = hashlib.sha256(data).hexdigest()
-    path = await store_file(data, sha, ".dat", tmp_path)
-    assert path.read_bytes() == data
-    assert path.parent.parent.parent == tmp_path  # two shard levels
 
-    # Re-store is a no-op and returns the same path.
-    path2 = await store_file(b"different content", sha, ".dat", tmp_path)
-    assert path2 == path
-    assert path.read_bytes() == data
+    info = await store_file(store, data, sha, "match-log")
+
+    assert info.key == object_key(sha)
+    assert await store.get(object_key(sha)) == data
+    assert (await store.head(object_key(sha))).content_type == "application/octet-stream"
 
 
-async def test_store_file_surfaces_enospc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data = b"x" * 128
+async def test_store_file_is_idempotent() -> None:
+    store = MemoryObjectStore()
+    data = b"payload bytes"
     sha = hashlib.sha256(data).hexdigest()
 
-    def _boom(src, dst):  # noqa: ANN001 — mimicking os.rename signature
-        raise OSError(errno.ENOSPC, "no space left")
+    await store_file(store, data, sha, "match-log")
+    await store_file(store, data, sha, "match-log")
 
-    monkeypatch.setattr(storage_mod.os, "rename", _boom)
-    with pytest.raises(InsufficientStorageError):
-        await store_file(data, sha, ".dat", tmp_path)
+    assert store.put_calls == 1
+
+
+async def test_store_file_surfaces_storage_failure() -> None:
+    store = MemoryObjectStore()
+    store.available = False
+    data = b"payload"
+    sha = hashlib.sha256(data).hexdigest()
+
+    with pytest.raises(ObjectStoreUnavailableError):
+        await store_file(store, data, sha, "match-log")
+
+
+def test_store_full_is_its_own_error() -> None:
+    # The upload path maps this one to 507 and everything else to 503,
+    # so the distinction has to survive.
+    assert issubclass(ObjectStoreFullError, Exception)
+    assert not issubclass(ObjectStoreFullError, ObjectStoreUnavailableError)

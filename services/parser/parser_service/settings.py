@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic_settings import SettingsConfigDict
 
-from common.settings import BaseServiceSettings
+from common.settings import S3StorageSettings
 
 # Stamped on every match row at parse time so we can detect matches
 # parsed by an older version and queue them for reparse.
@@ -19,18 +17,18 @@ PARSER_VERSION = "0.9.6"
 REPARSE_MIN_VERSION = "0.9.6"
 
 
-class ParserSettings(BaseServiceSettings):
+class ParserSettings(S3StorageSettings):
     model_config = SettingsConfigDict(
         env_prefix="DA_",
         env_nested_delimiter="__",
         populate_by_name=True,
     )
 
-    # Root of the raw-file archive — same volume the ingest service writes to,
-    # mounted read-only here. Parser reads files at the sharded
-    # ``<root>/<sha[0:2]>/<sha[2:4]>/<sha>.<ext>`` path published in
-    # ``ingest.game_log_files.storage_path``.
-    parser_raw_path: Path = Path("/data/raw/")
+    # The raw archive is the S3-compatible object store ingest writes
+    # to; bucket, endpoint and credentials come from S3StorageSettings.
+    # Parser reads each object at the content-addressed key published
+    # in ``ingest.game_log_files.storage_path``.
+    #
     # Hard ceiling on log size we'll buffer in memory while parsing.
     parser_max_log_bytes: int = 50 * 1024 * 1024
     # Base URL for the analytics service (archetype classifier).

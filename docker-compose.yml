@@ -130,6 +130,82 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # Object storage for the raw game-log archive. App-scoped on purpose:
+  # this stack provides what it needs, the same way it runs its own
+  # Postgres and Redis. Moving to a shared object store later is an
+  # endpoint/credential change, not application work.
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${DA_S3_ACCESS_KEY:-deep-analysis}
+      MINIO_ROOT_PASSWORD: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+    volumes:
+      - minio_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # One-shot bucket bootstrap, in the same shape as the *-migrate jobs:
+  # runs on `compose up`, creates the bucket if it is missing, exits 0.
+  # An init container rather than create-if-missing inside the services,
+  # because bucket creation is an administrative privilege that only one
+  # short-lived job should hold, and because two services racing to
+  # create the same bucket on startup is a failure mode worth not having.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    restart: "no"
+    networks:
+      - backend
+    environment:
+      MC_HOST_da: http://${DA_S3_ACCESS_KEY:-deep-analysis}:${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}@minio:9000
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        mc mb --ignore-existing "da/${DA_S3_BUCKET:-deep-analysis-raw}"
+        echo "bucket ready: ${DA_S3_BUCKET:-deep-analysis-raw}"
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # Backfill of the pre-object-store archive. Not part of `up`: it only
+  # runs when an operator asks for it, and it never deletes the source.
+  #   docker compose --profile backfill run --rm raw-backfill
+  raw-backfill:
+    profiles: ["backfill"]
+    build:
+      context: .
+      dockerfile: services/ingest/Dockerfile
+    command: ["python", "-m", "ingest_service.backfill_s3", "--source", "/data/raw"]
+    environment:
+      DA_SERVICE_NAME: ingest
+      DA_DATABASE_URL: ${DA_DATABASE_URL:-}
+      DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
+      DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
+      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
+      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
+      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
+      DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+    volumes:
+      - raw_archive:/data/raw:ro
+      - ./.secrets:/data/secrets:ro
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   gateway:
     image: caddy:2.9-alpine
     restart: unless-stopped
@@ -202,13 +278,15 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
-      DA_INGEST_RAW_PATH: /data/raw
+      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
+      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
+      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
       - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
-      - raw_archive:/data/raw
       - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
@@ -216,6 +294,8 @@ services:
       redis:
         condition: service_healthy
       ingest-migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
@@ -237,19 +317,23 @@ services:
       DA_DATABASE_URL: ${DA_DATABASE_URL:-}
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
-      DA_PARSER_RAW_PATH: /data/raw
+      DA_S3_ENDPOINT_URL: ${DA_S3_ENDPOINT_URL:-http://minio:9000}
+      DA_S3_ACCESS_KEY: ${DA_S3_ACCESS_KEY:-deep-analysis}
+      DA_S3_SECRET_KEY: ${DA_S3_SECRET_KEY:-deep-analysis-dev-secret}
+      DA_S3_BUCKET: ${DA_S3_BUCKET:-deep-analysis-raw}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
       - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
-      - raw_archive:/data/raw:ro
       - ./.secrets:/data/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
       interval: 15s
@@ -328,4 +412,10 @@ networks:
 
 volumes:
   postgres_data:
+  minio_data:
+  # Pre-object-store archive. Nothing writes to it any more and no
+  # running service mounts it: it stays declared so the backfill job can
+  # read it and so `compose down -v` on an upgraded host does not take
+  # the old copy with it. Reclaim it deliberately, after verifying the
+  # backfill: `docker volume rm deep-analysis_raw_archive`.
   raw_archive:

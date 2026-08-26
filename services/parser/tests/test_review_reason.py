@@ -32,6 +32,8 @@ from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.persistence import persist_match
 from sqlalchemy import select
 
+from common.storage import MemoryObjectStore, object_key
+
 # ---------------------------------------------------------------------------
 # Pure unit tests — _build_review_reason
 # ---------------------------------------------------------------------------
@@ -110,13 +112,14 @@ def _session_maker_returning(session: Any) -> Any:
     return _Wrapper()
 
 
-def _write_raw(raw_root: Path, sha: str) -> None:
-    shard = raw_root / sha[0:2] / sha[2:4]
-    shard.mkdir(parents=True, exist_ok=True)
-    (shard / f"{sha}.dat").write_bytes(b"unused-by-stub-parser")
+def _store_with(sha: str, body: bytes = b"unused-by-stub-parser") -> MemoryObjectStore:
+    """A raw archive holding one object at the key ingest would use."""
+    store = MemoryObjectStore()
+    store.seed(object_key(sha), body)
+    return store
 
 
-def _consumer_with(parsed: ParsedMatch, sm: Any, raw_root: Path) -> ParserConsumer:
+def _consumer_with(parsed: ParsedMatch, sm: Any, store: MemoryObjectStore) -> ParserConsumer:
     class _DummyRedis:
         def pubsub(self) -> Any:
             raise NotImplementedError
@@ -124,7 +127,7 @@ def _consumer_with(parsed: ParsedMatch, sm: Any, raw_root: Path) -> ParserConsum
     consumer = ParserConsumer(
         redis_client=_DummyRedis(),
         sessionmaker=sm,
-        raw_root=raw_root,
+        store=store,
         parser=_StubParser(parsed),
         publisher=_NoopPublisher(),
     )
@@ -139,7 +142,7 @@ def _consumer_with(parsed: ParsedMatch, sm: Any, raw_root: Path) -> ParserConsum
 @pytest.mark.asyncio
 async def test_consumer_sets_review_reason_on_partial(parser_session: Any, tmp_path: Path) -> None:
     sha = "d" * 64
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     partial = ParsedMatch(
         raw_match_id="reason-uuid-1",
         players=["alice", "bob"],
@@ -149,7 +152,7 @@ async def test_consumer_sets_review_reason_on_partial(parser_session: Any, tmp_p
         ],
     )
     sm = _session_maker_returning(parser_session)
-    consumer = _consumer_with(partial, sm, tmp_path)
+    consumer = _consumer_with(partial, sm, store)
 
     await consumer.handle_event(sha, user_id=1)
     parser_session.expire_all()
@@ -164,7 +167,7 @@ async def test_consumer_sets_review_reason_on_partial(parser_session: Any, tmp_p
 @pytest.mark.asyncio
 async def test_consumer_no_review_reason_on_conclusive(parser_session: Any, tmp_path: Path) -> None:
     sha = "c" * 64
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     conclusive = ParsedMatch(
         raw_match_id="reason-uuid-2",
         players=["alice", "bob"],
@@ -176,7 +179,7 @@ async def test_consumer_no_review_reason_on_conclusive(parser_session: Any, tmp_
         ],
     )
     sm = _session_maker_returning(parser_session)
-    consumer = _consumer_with(conclusive, sm, tmp_path)
+    consumer = _consumer_with(conclusive, sm, store)
 
     await consumer.handle_event(sha, user_id=1)
     parser_session.expire_all()
@@ -358,7 +361,7 @@ async def test_consumer_records_agent_verdict_on_partial(
     parser_session: Any, tmp_path: Path
 ) -> None:
     sha = "a1" + "0" * 62
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     sm = _session_maker_returning(parser_session)
     consumer = _consumer_with(
         ParsedMatch(
@@ -367,7 +370,7 @@ async def test_consumer_records_agent_verdict_on_partial(
             games=[ParsedGame(game_number=1, winner=None)],
         ),
         sm,
-        tmp_path,
+        store,
     )
 
     await consumer.handle_event(sha, user_id=1, agent_classification="inconclusive")
@@ -387,7 +390,7 @@ async def test_consumer_partial_without_agent_verdict_unchanged(
 ) -> None:
     """A parser-derived hold with no agent verdict says nothing about one."""
     sha = "a2" + "0" * 62
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     sm = _session_maker_returning(parser_session)
     consumer = _consumer_with(
         ParsedMatch(
@@ -396,7 +399,7 @@ async def test_consumer_partial_without_agent_verdict_unchanged(
             games=[ParsedGame(game_number=1, winner=None)],
         ),
         sm,
-        tmp_path,
+        store,
     )
 
     await consumer.handle_event(sha, user_id=1)
@@ -413,8 +416,9 @@ async def test_handle_routes_agent_classification_from_event(tmp_path: Path) -> 
     """The file.ingested decode path forwards the verdict to handle_event."""
     import json as _json
 
+    store = _store_with("f" * 64)
     sm = _session_maker_returning(None)
-    consumer = _consumer_with(ParsedMatch(games=[]), sm, tmp_path)
+    consumer = _consumer_with(ParsedMatch(games=[]), sm, store)
 
     seen: list[tuple[str, int, str | None]] = []
 

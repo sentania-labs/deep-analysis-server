@@ -23,7 +23,9 @@ def _stub_env(repo_root: Path) -> None:
     os.environ.setdefault("DA_DATABASE_URL", "postgresql+asyncpg://stub:stub@localhost/stub")
     os.environ.setdefault("DA_REDIS_URL", "redis://localhost:6379/0")
     os.environ.setdefault("DA_JWT_PUBLIC_KEY_PATH", str(repo_root / ".nonexistent-jwt-pub"))
-    os.environ.setdefault("DA_PARSER_RAW_PATH", str(repo_root / ".nonexistent-raw"))
+    # A closed port, so any real object-store probe fails fast instead
+    # of waiting on DNS for the compose-default endpoint.
+    os.environ.setdefault("DA_S3_ENDPOINT_URL", "http://127.0.0.1:1")
 
 
 @pytest_asyncio.fixture
@@ -36,6 +38,7 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
 
     _settings.reset_settings()
     _main.reset_consumer()
+    _main.reset_store()
 
     async def _noop() -> None:
         return None
@@ -115,3 +118,21 @@ async def test_healthz_redis_failure(client: AsyncClient) -> None:
     assert body["status"] == "degraded"
     assert body["db"] == "ok"
     assert body["redis"] == "error"
+
+
+async def test_healthz_reports_object_store_when_unreachable(client: AsyncClient) -> None:
+    """The real check path includes the archive, and answers quickly.
+
+    No mocking here on purpose: the point of the check is that a
+    service whose storage is gone stops claiming to be healthy.
+    """
+    import time
+
+    started = time.monotonic()
+    r = await client.get("/healthz")
+    elapsed = time.monotonic() - started
+
+    body = r.json()
+    assert body["object_store"] == "error"
+    assert r.status_code == 503
+    assert elapsed < 10, f"healthz took {elapsed:.1f}s with storage unreachable"

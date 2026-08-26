@@ -2,7 +2,7 @@
 
 One worker per process. On each event:
 
-1. Read the raw bytes from the shared archive at the published sha.
+1. Read the raw bytes from the object archive at the published sha.
 2. Route by ``content_type``:
    - ``match-log``: parse with :class:`LogParser`, persist match data,
      publish ``match.parsed``.
@@ -19,7 +19,6 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import redis.asyncio as redis
@@ -30,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from common.events import FILE_INGESTED, MATCH_PARSED, FileIngestedPayload, MatchParsedPayload
 from common.format_inference import collect_card_names, infer_format_for_match
 from common.redis_client import EventPublisher
+from common.storage import ObjectStorageError, ObjectStore
 from parser_service import analytics_client
 from parser_service.models import MatchArchetype
 from parser_service.parsing import LogParser, ParsedMatch
@@ -46,14 +46,16 @@ class ParserConsumer:
         self,
         redis_client: redis.Redis,
         sessionmaker: async_sessionmaker[Any],
-        raw_root: Path,
+        store: ObjectStore,
         parser: LogParser | None = None,
         publisher: EventPublisher | None = None,
         max_log_bytes: int | None = None,
+        key_prefix: str = "raw",
     ) -> None:
         self._redis = redis_client
         self._sessionmaker = sessionmaker
-        self._raw_root = raw_root
+        self._store = store
+        self._key_prefix = key_prefix
         self._parser = parser or LogParser()
         self._publisher = publisher or EventPublisher(redis_client)
         self._max_log_bytes = max_log_bytes
@@ -187,17 +189,22 @@ class ParserConsumer:
         the server parse stays authoritative.
         """
         try:
-            content = await asyncio.to_thread(
-                read_raw, sha256, self._raw_root, max_bytes=self._max_log_bytes
+            content = await read_raw(
+                self._store,
+                sha256,
+                key_prefix=self._key_prefix,
+                max_bytes=self._max_log_bytes,
             )
         except RawFileNotFoundError:
-            _log.warning("raw file missing for sha=%s; skipping", sha256)
+            _log.warning("raw object missing for sha=%s; skipping", sha256)
             return None
         except RawFileTooLargeError:
-            _log.warning("raw file exceeds size ceiling sha=%s; skipping", sha256)
+            _log.warning("raw object exceeds size ceiling sha=%s; skipping", sha256)
             return None
-        except OSError:
-            _log.exception("failed to read raw file sha=%s", sha256)
+        except (ObjectStorageError, OSError):
+            # Store unreachable. Leave the file unparsed: the backfill
+            # scan retries it once storage is back.
+            _log.exception("failed to read raw object sha=%s", sha256)
             return None
 
         parsed = self._parser.parse(content)
@@ -401,17 +408,20 @@ class ParserConsumer:
     ) -> None:
         """Handle a decklist (grouping XML) upload — parse and persist."""
         try:
-            content = await asyncio.to_thread(
-                read_raw, sha256, self._raw_root, hint_ext=".xml", max_bytes=self._max_log_bytes
+            content = await read_raw(
+                self._store,
+                sha256,
+                key_prefix=self._key_prefix,
+                max_bytes=self._max_log_bytes,
             )
         except RawFileNotFoundError:
-            _log.warning("raw grouping file missing for sha=%s; skipping", sha256)
+            _log.warning("raw grouping object missing for sha=%s; skipping", sha256)
             return
         except RawFileTooLargeError:
-            _log.warning("raw grouping file exceeds size ceiling sha=%s; skipping", sha256)
+            _log.warning("raw grouping object exceeds size ceiling sha=%s; skipping", sha256)
             return
-        except OSError:
-            _log.exception("failed to read raw grouping file sha=%s", sha256)
+        except (ObjectStorageError, OSError):
+            _log.exception("failed to read raw grouping object sha=%s", sha256)
             return
 
         parsed = parse_grouping_xml(content)
