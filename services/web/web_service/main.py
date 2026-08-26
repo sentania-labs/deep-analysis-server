@@ -3985,12 +3985,19 @@ async def admin_match_set_review_status(
     # working without making the field optional in the template.
     verdict: Annotated[str, Form()] = "",
     return_to: Annotated[str, Form()] = "",
+    # ``intent`` only picks the flash wording. Accept and Restore are the
+    # same state change (back to NULL), but they are different admin
+    # decisions and the confirmation message should not call a restore an
+    # "accept". It has no effect on what is written.
+    intent: Annotated[str, Form()] = "",
 ) -> Response:
-    """Accept, reject, or flag a match.
+    """Accept, restore, reject, or flag a match.
 
-    ``verdict`` is one of ``""`` (accept → back to NULL),
+    ``verdict`` is one of ``""`` (back to NULL, so user-visible),
     ``"pending_review"`` (flag for admin review), or ``"rejected"``
-    (permanently discard). Anything else 422s.
+    (hide from the user; the verdict is kept through an in-place
+    reparse, but a force-reparse deletes the row and loses it, see
+    issue #154). Anything else 422s.
     """
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -4024,7 +4031,7 @@ async def admin_match_set_review_status(
     elif item is None:
         msg = "Could not update match."
     elif new_review_status is None:
-        msg = "Match accepted."
+        msg = "Match restored." if intent == "restore" else "Match accepted."
     elif new_review_status == "rejected":
         msg = "Match rejected."
     else:

@@ -337,6 +337,10 @@ class AdminMatchItem(BaseModel):
     # ``'rejected'`` is admin-discarded. Admin endpoints surface all
     # three; user-facing endpoints only return None rows.
     review_status: str | None = None
+    # Free-text note recorded alongside a non-normal review_status (the
+    # parser writes one when it flags a match). Admin UIs show it so a
+    # reviewer can see why a row is in the holding pen before acting.
+    review_reason: str | None = None
 
 
 class AdminMatchListResponse(BaseModel):
