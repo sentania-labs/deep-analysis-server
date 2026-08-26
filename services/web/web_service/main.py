@@ -507,6 +507,9 @@ async def match_history_page(
         "date_to": date_to,
     }
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
+    # Only carry a non-default page size on the opponent drill-down links, so an
+    # unfiltered view keeps a clean /matches URL.
+    link_per_page = per_page if per_page != _DASHBOARD_DEFAULT_PER_PAGE else None
 
     opp_per_page = _OPPONENT_DEFAULT_PER_PAGE
     opp_offset = (opp_page - 1) * opp_per_page
@@ -527,6 +530,7 @@ async def match_history_page(
             "per_page": per_page,
             "filters": filters,
             "filter_qs": filter_qs,
+            "link_per_page": link_per_page,
         },
     )
 
