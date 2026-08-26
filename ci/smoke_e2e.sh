@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # ci/smoke_e2e.sh — End-to-end smoke test against the running compose stack.
 #
-# Verifies the full happy path: bootstrap admin login → create user →
-# user login → mint agent reg code → agent register → heartbeat →
-# ingest upload (POST /ingest/upload → 201).
+# Verifies the full happy path: bootstrap admin login → provision a CI
+# test user through the web admin UI → user login → mint agent reg code
+# → agent register → heartbeat → ingest upload (POST /ingest/upload →
+# 201).
 #
-# Also probes auth gates for unauthenticated access (expect 401) and
-# handler reachability for validation errors (expect 422).
+# Also probes auth gates for unauthenticated access. Note the split:
+# auth's JSON API answers a bare 401, while /admin/* (the web admin UI
+# since W3.5-C) answers a 302 to /login and ignores bearer headers.
 #
 # Requires DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL and
 # DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD to be set in the environment.
@@ -25,8 +27,24 @@ set -euo pipefail
 
 BASE_URL="${1:-http://localhost:8080}"
 
+# The CI test user the agent + ingest path runs as. Provisioned below
+# through the admin UI; re-runs against a live stack reuse it.
+CI_USER_EMAIL="ci-smoke@test.local"
+CI_USER_PASSWORD="CIsmokePass2024!"
+
+# Client version the simulated agent reports. Ingest enforces the
+# `min_agent_version` tunable (default 0.5.0) and answers 426 Upgrade
+# Required below it, so this has to track a shipping agent release.
+CI_AGENT_VERSION="0.6.2"
+
 PASS=0
 FAIL=0
+
+# One trap for every temp file the run creates: a later trap would
+# silently replace an earlier one and leak the cookie jar.
+ADMIN_JAR=$(mktemp)
+TEST_FILE=$(mktemp --suffix=.dat)
+trap 'rm -f "$ADMIN_JAR" "$TEST_FILE"' EXIT
 
 check() {
     local label="$1"
@@ -41,13 +59,22 @@ check() {
     fi
 }
 
+# NOTE on `|| true` throughout this script: `set -euo pipefail` is on, so
+# any command substitution whose command (or pipeline) exits non-zero kills
+# the run AT THE ASSIGNMENT. For extractions where "no match" or "no answer"
+# is a MEANINGFUL result the script is supposed to report, that turns a clean
+# FAIL line plus the final summary into a silent abort. `|| true` keeps the
+# empty/000 value flowing to the explicit `check` below it. It is never used
+# to paper over a status code: `check` still does the asserting.
+
 http_status() {
     # Returns just the HTTP status code; -k skips TLS verify (self-signed in CI).
-    curl -s -o /dev/null -w "%{http_code}" "$@"
+    # A connection failure yields 000, which the caller's `check` reports.
+    curl -s -o /dev/null -w "%{http_code}" "$@" || true
 }
 
 http_body() {
-    curl -s "$@"
+    curl -s "$@" || true
 }
 
 echo "=== Deep Analysis E2E smoke — $BASE_URL ==="
@@ -94,9 +121,23 @@ status=$(http_status -X POST "$BASE_URL/auth/login" \
     -d '{}')
 check "POST /auth/login empty body → 422" "422" "$status"
 
+# W3.5-C: /admin/* is the web admin UI now, not auth's JSON API, so
+# browser-redirect semantics apply. No session cookie gives a 302 to
+# /login, and an Authorization bearer header is ignored entirely (it is
+# a cookie session or nothing).
+noauth_admin=$(curl -s -D - -o /dev/null "$BASE_URL/admin/users" | tr -d "\r" || true)
+status=$(echo "$noauth_admin" | awk 'NR == 1 { print $2 }')
+check "GET /admin/users no cookie → 302" "302" "$status"
+
+location=$(echo "$noauth_admin" | grep -i "^location:" || true)
+case "$location" in
+    *"/login"*) check "GET /admin/users no cookie redirects to /login" "ok" "ok" ;;
+    *) check "GET /admin/users no cookie redirects to /login" "ok" "FAILED: $location" ;;
+esac
+
 status=$(http_status "$BASE_URL/admin/users" \
     -H "Authorization: Bearer fakejwt")
-check "GET /admin/users no real auth → 401" "401" "$status"
+check "GET /admin/users bearer header ignored → 302" "302" "$status"
 
 status=$(http_status -X POST "$BASE_URL/ingest/upload" \
     -H "Authorization: Bearer fakejwt" \
@@ -158,28 +199,61 @@ else
 fi
 
 # --------------------------------------------------------------------------
-# 3. Admin operations
+# 3. CI test user provisioning (web admin UI, cookie session)
 # --------------------------------------------------------------------------
+#
+# The gateway routes /admin/* to the web service, and auth's JSON admin
+# API is not exposed through the gateway at all, so the only supported
+# programmatic way to create a user is the web admin UI: a cookie
+# session plus the double-submit CSRF token. Bearer JWTs are ignored on
+# these routes.
+#
+# The bootstrap admin cannot stand in for the test user: the W3.6 role
+# split bars admins from POST /auth/agent/registration-code (403
+# admin_self_service_disabled), so the agent + ingest path below needs a
+# real role=user account.
 echo ""
-echo "--- Admin operations ---"
+echo "--- CI test user provisioning (web admin UI) ---"
 
-status=$(http_status "$BASE_URL/admin/users" \
-    -H "Authorization: Bearer $admin_token")
-check "GET /admin/users (admin JWT) → 200" "200" "$status"
+login_page=$(curl -s -c "$ADMIN_JAR" -b "$ADMIN_JAR" "$BASE_URL/login" || true)
+csrf_token=$(echo "$login_page" | grep -o 'name="csrf_token" value="[^"]*"' \
+    | head -1 | sed 's/.*value="//;s/"//' || true)
 
-# Create a CI test user (idempotent: if email already exists from a prior run, 409 is acceptable)
-create_status=$(http_status -X POST "$BASE_URL/admin/users" \
-    -H "Authorization: Bearer $admin_token" \
-    -H "Content-Type: application/json" \
-    -d '{"email": "ci-smoke@test.local", "password": "CIsmokePass2024!", "role": "user", "must_change_password": false}')
-
-if [ "$create_status" = "201" ] || [ "$create_status" = "409" ]; then
-    check "POST /admin/users → 201 or 409 (idempotent)" "ok" "ok"
+if [ -n "$csrf_token" ]; then
+    check "GET /login (csrf_token present)" "ok" "ok"
 else
-    check "POST /admin/users → 201 or 409 (idempotent)" "ok" "FAILED: $create_status"
+    check "GET /login (csrf_token present)" "ok" "FAILED: no csrf_token in form"
 fi
 
-# --------------------------------------------------------------------------
+session_status=$(http_status -c "$ADMIN_JAR" -b "$ADMIN_JAR" \
+    -X POST "$BASE_URL/login" \
+    --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
+    --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
+    --data-urlencode "csrf_token=${csrf_token}")
+check "POST /login (admin browser session) → 303" "303" "$session_status"
+
+status=$(http_status -b "$ADMIN_JAR" "$BASE_URL/admin/users")
+check "GET /admin/users (admin cookie) → 200" "200" "$status"
+
+# Read the token straight from the cookie jar rather than reusing the
+# one scraped off the login page: the double-submit check compares the
+# form field against whatever da_csrf the jar currently holds.
+csrf_token=$(awk '$6 == "da_csrf" { print $7 }' "$ADMIN_JAR" | tail -1 || true)
+
+# Idempotent: a leftover user from a prior run answers 409.
+create_status=$(http_status -b "$ADMIN_JAR" -c "$ADMIN_JAR" \
+    -X POST "$BASE_URL/admin/users/create" \
+    --data-urlencode "email=${CI_USER_EMAIL}" \
+    --data-urlencode "password=${CI_USER_PASSWORD}" \
+    --data-urlencode "role=user" \
+    --data-urlencode "csrf_token=${csrf_token}")
+
+if [ "$create_status" = "303" ] || [ "$create_status" = "409" ]; then
+    check "POST /admin/users/create → 303 or 409 (idempotent)" "ok" "ok"
+else
+    check "POST /admin/users/create → 303 or 409 (idempotent)" "ok" "FAILED: $create_status"
+fi
+
 # 4. User login
 # --------------------------------------------------------------------------
 echo ""
@@ -187,7 +261,7 @@ echo "--- User login ---"
 
 user_login_body=$(http_body -X POST "$BASE_URL/auth/login" \
     -H "Content-Type: application/json" \
-    -d '{"email": "ci-smoke@test.local", "password": "CIsmokePass2024!"}')
+    -d "{\"email\": \"${CI_USER_EMAIL}\", \"password\": \"${CI_USER_PASSWORD}\"}")
 
 user_token=$(echo "$user_login_body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))" 2>/dev/null || echo "")
 
@@ -216,7 +290,7 @@ fi
 
 register_body=$(http_body -X POST "$BASE_URL/auth/agent/register" \
     -H "Content-Type: application/json" \
-    -d "{\"code\": \"$reg_code\", \"machine_name\": \"ci-smoke-runner\", \"client_version\": \"0.4.2\"}")
+    -d "{\"code\": \"$reg_code\", \"machine_name\": \"ci-smoke-runner\", \"client_version\": \"${CI_AGENT_VERSION}\"}")
 
 agent_token=$(echo "$register_body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('api_token',''))" 2>/dev/null || echo "")
 
@@ -235,23 +309,21 @@ echo "--- Agent heartbeat ---"
 heartbeat_status=$(http_status -X POST "$BASE_URL/auth/agent/heartbeat" \
     -H "Authorization: Bearer $agent_token" \
     -H "Content-Type: application/json" \
-    -d '{"client_version": "0.4.2"}')
+    -d "{\"client_version\": \"${CI_AGENT_VERSION}\"}")
 check "POST /auth/agent/heartbeat → 200" "200" "$heartbeat_status"
 
 # --------------------------------------------------------------------------
-# 7. Ingest upload (the critical v0.4.2 fix)
+# 7. Ingest upload
 # --------------------------------------------------------------------------
 echo ""
 echo "--- Ingest upload (POST /ingest/upload) ---"
 
-# Create a tiny test file inline
-test_file=$(mktemp --suffix=.dat)
-echo "CI_SMOKE_TEST_PAYLOAD_v0.4.2" > "$test_file"
-trap 'rm -f "$test_file"' EXIT
+# Fill the test payload file created (and trapped) at the top of the run.
+echo "CI_SMOKE_TEST_PAYLOAD" > "$TEST_FILE"
 
 upload_status=$(http_status -X POST "$BASE_URL/ingest/upload" \
     -H "Authorization: Bearer $agent_token" \
-    -F "file=@${test_file};filename=ci-smoke.dat" \
+    -F "file=@${TEST_FILE};filename=ci-smoke.dat" \
     -F "original_filename=ci-smoke.dat" \
     -F "content_type=match-log")
 check "POST /ingest/upload (agent JWT) → 201" "201" "$upload_status"

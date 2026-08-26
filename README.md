@@ -170,15 +170,12 @@ docker compose -f docker-compose.yml -f ci/docker-compose.ci.yml down -v
 
 Both scripts are re-runnable against a live stack. `ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits, so if it dies partway through its password section the admin password is left as `ui-smoke-<original>`. Tear down with `down -v` and start again from step 2 if that happens.
 
-> **Known failures:** on a healthy stack `ci/smoke_e2e.sh` ends with exactly
-> `=== Smoke result: 11 PASS, 8 FAIL ===`. That is
-> [issue #139](https://github.com/sentania-labs/deep-analysis-server/issues/139):
-> `/admin/*` now serves the web admin UI and answers `302` where the script
-> still expects auth's bare `401`. Only one of the 8 is that redirect itself.
-> The other 7 cascade from it, because the admin-user-creation step fails and
-> every later step needs that user. The script is stale, not the stack.
-> Compare the counts, not the individual lines: anything other than 11/8 is a
-> real regression. `ci/smoke_ui.sh` should end `62 PASS, 0 FAIL`.
+> **Expected result:** on a healthy stack `ci/smoke_e2e.sh` ends
+> `=== Smoke result: 23 PASS, 0 FAIL ===` and exits 0. `ci/smoke_ui.sh` ends
+> `0 FAIL`; its PASS count moves between roughly 62 and 65 because a few of
+> its admin checks only run when the stack already has an agent row to act
+> on. Read the FAIL count, not the PASS count: any FAIL line is a real
+> regression.
 >
 > If you see a `502` anywhere, a service was not up yet. Do not skip the
 > health wait in step 5.

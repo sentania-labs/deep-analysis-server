@@ -50,6 +50,14 @@ check_contains() {
     fi
 }
 
+# NOTE on `|| true` throughout this script: `set -euo pipefail` is on, so a
+# command substitution whose command (or pipeline) exits non-zero kills the
+# run AT THE ASSIGNMENT. Where "no match" or "no answer" is a MEANINGFUL
+# result the script is supposed to report, that turns a clean FAIL line plus
+# the final summary into a silent abort. `|| true` keeps the empty value
+# flowing to the explicit `check` below it. The asserting is still done by
+# `check` / `check_contains`, never by the exit status.
+
 # Returns non-empty if the Netscape-format cookie jar contains a
 # live (non-expired, non-empty-value) da_session cookie.
 jar_has_live_session() {
@@ -79,14 +87,14 @@ get_csrf() {
     local page_url="$1"
     local jar="${2:-$COOKIE_JAR}"
     local body
-    body=$(curl -s -c "$jar" -b "$jar" "$BASE_URL$page_url")
-    _CSRF_TOKEN=$(echo "$body" | grep -o 'name="csrf_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//')
+    body=$(curl -s -c "$jar" -b "$jar" "$BASE_URL$page_url" || true)
+    _CSRF_TOKEN=$(echo "$body" | grep -o 'name="csrf_token" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//' || true)
 }
 
 # Extract the CSRF token from a cookie jar file (reads da_csrf cookie value).
 csrf_from_jar() {
     local jar="$1"
-    awk '$6 == "da_csrf" { print $7 }' "$jar" | tail -1
+    awk '$6 == "da_csrf" { print $7 }' "$jar" | tail -1 || true
 }
 
 if [ -z "${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL:-}" ] || \
@@ -109,7 +117,7 @@ echo "=== Deep Analysis UI smoke — $BASE_URL ==="
 echo ""
 echo "--- 1. GET /login ---"
 
-login_body=$(curl -s -o - -w "\n%{http_code}" "$BASE_URL/login")
+login_body=$(curl -s -o - -w "\n%{http_code}" "$BASE_URL/login" || true)
 login_status=$(echo "$login_body" | tail -n1)
 login_html=$(echo "$login_body" | sed '$d')
 check "GET /login → 200" "200" "$login_status"
@@ -129,7 +137,7 @@ post_head=$(curl -s -D - -o /dev/null \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
     --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
-    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}" || true)
 post_status=$(echo "$post_head" | head -n1 | awk '{print $2}')
 # 303 See Other — spec-preferred for POST→GET redirect after form submit.
 check "POST /login → 303" "303" "$post_status"
@@ -155,7 +163,7 @@ fi
 echo ""
 echo "--- 3. GET /dashboard (admin authenticated) ---"
 
-dash_head=$(curl -s -D - -o /dev/null -b "$COOKIE_JAR" "$BASE_URL/dashboard")
+dash_head=$(curl -s -D - -o /dev/null -b "$COOKIE_JAR" "$BASE_URL/dashboard" || true)
 dash_status=$(echo "$dash_head" | head -n1 | awk '{print $2}')
 check "GET /dashboard (admin cookie) → 302" "302" "$dash_status"
 check_contains "GET /dashboard (admin) redirects to /admin/users" "/admin/users" "$dash_head"
@@ -166,7 +174,7 @@ check_contains "GET /dashboard (admin) redirects to /admin/users" "/admin/users"
 echo ""
 echo "--- 4. GET /dashboard (unauthenticated) ---"
 
-noauth_head=$(curl -s -D - -o /dev/null "$BASE_URL/dashboard")
+noauth_head=$(curl -s -D - -o /dev/null "$BASE_URL/dashboard" || true)
 noauth_status=$(echo "$noauth_head" | head -n1 | awk '{print $2}')
 check "GET /dashboard (no cookie) → 302" "302" "$noauth_status"
 check_contains "Redirect targets /login?next=/dashboard" "/login?next=/dashboard" "$noauth_head"
@@ -188,7 +196,7 @@ pw_head=$(curl -s -D - -o /dev/null \
     --data-urlencode "current_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
     --data-urlencode "new_password=${NEW_PASSWORD}" \
     --data-urlencode "confirm_password=${NEW_PASSWORD}" \
-    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}" || true)
 pw_status=$(echo "$pw_head" | head -n1 | awk '{print $2}')
 check "POST /settings/password → 303" "303" "$pw_status"
 # Location may be absolute (https://host/dashboard) or relative (/dashboard).
@@ -214,7 +222,7 @@ restore_status=$(curl -s -o /dev/null -w "%{http_code}" \
     --data-urlencode "current_password=${NEW_PASSWORD}" \
     --data-urlencode "new_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
     --data-urlencode "confirm_password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
-    --data-urlencode "csrf_token=${_CSRF_TOKEN}")
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}" || true)
 check "Restore bootstrap password → 303" "303" "$restore_status"
 
 # --------------------------------------------------------------------------
@@ -233,18 +241,18 @@ curl -s -o /dev/null \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
     --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
-    --data-urlencode "csrf_token=${_CSRF_TOKEN}"
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}" || true
 
 # Each /profile* GET as an admin redirects (302) to /admin/users.
 for path in "/profile" "/profile/edit" "/profile/agents"; do
-    bounce_head=$(curl -s -D - -o /dev/null -b "$PROFILE_COOKIE" "$BASE_URL$path")
+    bounce_head=$(curl -s -D - -o /dev/null -b "$PROFILE_COOKIE" "$BASE_URL$path" || true)
     bounce_status=$(echo "$bounce_head" | head -n1 | awk '{print $2}')
     check "GET $path (admin cookie) → 302" "302" "$bounce_status"
     check_contains "GET $path (admin) → /admin/users" "/admin/users" "$bounce_head"
 done
 
 # Unauthenticated /profile must still redirect to /login (not /admin/users).
-noauth_profile=$(curl -s -D - -o /dev/null "$BASE_URL/profile")
+noauth_profile=$(curl -s -D - -o /dev/null "$BASE_URL/profile" || true)
 noauth_profile_status=$(echo "$noauth_profile" | head -n1 | awk '{print $2}')
 check "GET /profile (no cookie) → 302" "302" "$noauth_profile_status"
 check_contains "/profile (no cookie) redirect targets /login" "/login" "$noauth_profile"
@@ -256,7 +264,7 @@ echo ""
 echo "--- 7. /admin/users admin panel ---"
 
 # The bootstrap admin from $PROFILE_COOKIE is still authenticated.
-admin_out=$(curl -s -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/users")
+admin_out=$(curl -s -b "$PROFILE_COOKIE" -o - -w "\n%{http_code}" "$BASE_URL/admin/users" || true)
 admin_status=$(echo "$admin_out" | tail -n1)
 admin_html=$(echo "$admin_out" | sed '$d')
 check "GET /admin/users (admin cookie) → 200" "200" "$admin_status"
@@ -265,7 +273,7 @@ check_contains "GET /admin/users contains the admin email" \
 check_contains "GET /admin/users mentions Users heading" "Users" "$admin_html"
 
 # Unauthenticated must redirect to /login.
-noauth_admin=$(curl -s -D - -o /dev/null "$BASE_URL/admin/users")
+noauth_admin=$(curl -s -D - -o /dev/null "$BASE_URL/admin/users" || true)
 noauth_admin_status=$(echo "$noauth_admin" | head -n1 | awk '{print $2}')
 check "GET /admin/users (no cookie) → 302" "302" "$noauth_admin_status"
 check_contains "/admin/users redirect targets /login" "/login" "$noauth_admin"
@@ -539,14 +547,14 @@ curl -s -o /dev/null \
     -X POST "$BASE_URL/login" \
     --data-urlencode "email=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}" \
     --data-urlencode "password=${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}" \
-    --data-urlencode "csrf_token=${_CSRF_TOKEN}"
+    --data-urlencode "csrf_token=${_CSRF_TOKEN}" || true
 
 _CT=$(csrf_from_jar "$LOGOUT_COOKIE")
 logout_head=$(curl -s -D - -o /dev/null \
     -b "$LOGOUT_COOKIE" \
     -c "$LOGOUT_COOKIE" \
     -X POST "$BASE_URL/logout" \
-    --data-urlencode "csrf_token=${_CT}")
+    --data-urlencode "csrf_token=${_CT}" || true)
 logout_status=$(echo "$logout_head" | head -n1 | awk '{print $2}')
 check "POST /logout → 303" "303" "$logout_status"
 # Location may be absolute (https://host/login) or relative (/login).
