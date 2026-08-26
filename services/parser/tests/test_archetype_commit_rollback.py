@@ -21,6 +21,8 @@ import pytest
 from parser_service.consumer import ParserConsumer
 from parser_service.parsing.models import GameEvent, ParsedGame, ParsedMatch
 
+from common.storage import MemoryObjectStore, object_key
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -41,10 +43,11 @@ class _NoopPublisher:
         return None
 
 
-def _write_raw(raw_root: Path, sha: str) -> None:
-    shard = raw_root / sha[0:2] / sha[2:4]
-    shard.mkdir(parents=True, exist_ok=True)
-    (shard / f"{sha}.dat").write_bytes(b"stub-content")
+def _store_with(sha: str, body: bytes = b"stub-content") -> MemoryObjectStore:
+    """A raw archive holding one object at the key ingest would use."""
+    store = MemoryObjectStore()
+    store.seed(object_key(sha), body)
+    return store
 
 
 def _make_parsed() -> ParsedMatch:
@@ -94,7 +97,7 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
     consumer must rollback before proceeding to deck linking."""
 
     sha = "ab" * 32
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     parsed = _make_parsed()
 
     # -- Build a mock session that tracks commit/rollback calls.
@@ -138,7 +141,7 @@ async def test_archetype_commit_failure_triggers_rollback(tmp_path: Path) -> Non
     consumer = ParserConsumer(
         redis_client=MagicMock(),
         sessionmaker=_SessionMaker(),
-        raw_root=tmp_path,
+        store=store,
         parser=_StubParser(parsed),
         publisher=_NoopPublisher(),
     )

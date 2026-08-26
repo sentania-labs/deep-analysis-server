@@ -3,12 +3,18 @@
 Requires a live Postgres + Redis. Runs the full migration stack:
 root head (001 schemas/roles → 002 cross-schema grants) → auth head
 → ingest head.
+
+The raw archive is object storage, so the suite also starts a real
+S3 server (moto in server mode) on a free port and points the service
+settings at it. That keeps the upload path going over HTTP through
+boto3 exactly as it does against MinIO, with no Docker daemon needed.
 """
 
 from __future__ import annotations
 
 import os
 import secrets
+import socket
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -65,17 +71,64 @@ def _env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Path, Path]
     priv_path.write_bytes(priv_pem)
     pub_path.write_bytes(pub_pem)
 
-    raw_dir = tmp_path_factory.mktemp("ingest-raw")
-
     os.environ["DA_JWT_PRIVATE_KEY_PATH"] = str(priv_path)
     os.environ["DA_JWT_PUBLIC_KEY_PATH"] = str(pub_path)
     os.environ.setdefault("DA_REDIS_URL", "redis://localhost:6379/0")
     os.environ["DA_DATABASE_URL"] = _async_url(_sync_url())
-    os.environ["DA_INGEST_RAW_PATH"] = str(raw_dir)
     # Small cap so the 413 test doesn't need a giant payload.
     os.environ["DA_INGEST_MAX_FILE_BYTES"] = "1024"
 
     yield priv_path, pub_path
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+@pytest.fixture(scope="session", autouse=True)
+def object_store_server(_env: Any) -> Iterator[str]:
+    """A real S3 endpoint for the whole session, plus the bucket."""
+    import boto3
+    from moto.server import ThreadedMotoServer
+
+    port = _free_port()
+    server = ThreadedMotoServer(port=port, verbose=False)
+    server.start()
+    endpoint = f"http://127.0.0.1:{port}"
+
+    os.environ["DA_S3_ENDPOINT_URL"] = endpoint
+    os.environ["DA_S3_ACCESS_KEY"] = "test"
+    os.environ["DA_S3_SECRET_KEY"] = "testsecret"
+    os.environ["DA_S3_BUCKET"] = "test-raw"
+    os.environ["DA_S3_FORCE_PATH_STYLE"] = "true"
+
+    boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id="test",
+        aws_secret_access_key="testsecret",
+        region_name="us-east-1",
+    ).create_bucket(Bucket="test-raw")
+    try:
+        yield endpoint
+    finally:
+        server.stop()
+
+
+@pytest.fixture
+def s3_client(object_store_server: str) -> Any:
+    """Direct boto3 client, for asserting what actually landed."""
+    import boto3
+
+    return boto3.client(
+        "s3",
+        endpoint_url=object_store_server,
+        aws_access_key_id="test",
+        aws_secret_access_key="testsecret",
+        region_name="us-east-1",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -205,7 +258,9 @@ async def redis_client(_env: Any) -> AsyncIterator[Any]:
 
 
 @pytest_asyncio.fixture
-async def client(_truncate: None, redis_client: Any) -> AsyncIterator[Any]:
+async def client(
+    _truncate: None, redis_client: Any, object_store_server: str
+) -> AsyncIterator[Any]:
     from httpx import ASGITransport, AsyncClient
     from ingest_service import db as _db
     from ingest_service import main as _main
@@ -214,6 +269,7 @@ async def client(_truncate: None, redis_client: Any) -> AsyncIterator[Any]:
     _settings.reset_settings()
     _db.reset_engine()
     _main.reset_publisher()
+    _main.reset_store()
     _main.reset_min_version_cache()
 
     transport = ASGITransport(app=_main.app)

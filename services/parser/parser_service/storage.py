@@ -1,64 +1,64 @@
-"""Read raw uploaded files from the shared archive volume.
+"""Read raw uploaded files from the object archive.
 
-The ingest service writes content-addressed shards under
-``<root>/<sha[0:2]>/<sha[2:4]>/<sha>.<ext>`` and records the
-relative path in ``ingest.game_log_files.storage_path``. The parser
-mounts the same volume read-only and reads at that path.
+The ingest service writes each upload to the S3-compatible archive
+under a content-addressed key (``<prefix>/<ab>/<cd>/<sha>``) and
+records that key in ``ingest.game_log_files.storage_path``. The parser
+derives the same key from the sha and reads it back through the shared
+adapter, so the two services share no filesystem.
+
+The key carries no extension, so there is no extension-fallback search
+any more: one key, one object, one round trip.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-# Match-log uploads land as ``.dat`` per ingest's content-type → ext map,
-# even when the actual payload is a plaintext MTGO log. We try the
-# recorded path first, then fall back to common alternatives.
-_FALLBACK_EXTS = (".dat", ".log", ".txt", ".xml", ".bin")
+from common.storage import (
+    ObjectNotFoundError,
+    ObjectStore,
+    object_key,
+)
 
 
 class RawFileNotFoundError(FileNotFoundError):
-    """Raised when no raw file can be located for a given sha256."""
+    """Raised when no archived object exists for a given sha256."""
 
 
 class RawFileTooLargeError(OSError):
-    """Raised when a raw file exceeds the configured in-memory ceiling."""
+    """Raised when an archived object exceeds the configured in-memory ceiling."""
 
 
-def resolve_path(sha256: str, root: Path, hint_ext: str | None = None) -> Path:
-    """Return the on-disk path for ``sha256``, trying common extensions.
-
-    Caller may pass ``hint_ext`` (e.g., the ``storage_path`` suffix
-    recorded by ingest) to short-circuit the fallback search.
-    """
-    shard = root / sha256[0:2] / sha256[2:4]
-    candidates: list[str] = []
-    if hint_ext:
-        candidates.append(hint_ext if hint_ext.startswith(".") else f".{hint_ext}")
-    candidates.extend(e for e in _FALLBACK_EXTS if e not in candidates)
-    for ext in candidates:
-        candidate = shard / f"{sha256}{ext}"
-        if candidate.exists():
-            return candidate
-    raise RawFileNotFoundError(f"no raw file found for sha {sha256} under {shard}")
+def raw_key(sha256: str, key_prefix: str = "raw") -> str:
+    """Return the archive key for ``sha256``."""
+    return object_key(sha256, key_prefix)
 
 
-def read_raw(
+async def read_raw(
+    store: ObjectStore,
     sha256: str,
-    root: Path,
-    hint_ext: str | None = None,
+    key_prefix: str = "raw",
     max_bytes: int | None = None,
 ) -> bytes:
-    """Read a raw archived file. Refuses to buffer more than ``max_bytes``.
+    """Read an archived object. Refuses to buffer more than ``max_bytes``.
 
-    A ``None`` ceiling means no limit (matches historical behavior). The
-    consumer wires the configured ``parser_max_log_bytes`` so a single
-    pathologically large upload cannot exhaust process memory.
+    A ``None`` ceiling means no limit. The consumer wires the
+    configured ``parser_max_log_bytes`` so a single pathologically
+    large upload cannot exhaust process memory; the size comes from a
+    HEAD, so an oversized object is never transferred at all.
+
+    Store-level failures (unreachable endpoint, auth rejected) raise
+    :class:`common.storage.ObjectStorageError` and are bounded by the
+    adapter's timeouts, so a storage outage fails fast instead of
+    hanging the worker.
     """
-    path = resolve_path(sha256, root, hint_ext)
-    if max_bytes is not None:
-        size = path.stat().st_size
-        if size > max_bytes:
-            raise RawFileTooLargeError(
-                f"raw file for sha {sha256} is {size} bytes; exceeds ceiling {max_bytes}"
-            )
-    return path.read_bytes()
+    key = raw_key(sha256, key_prefix)
+    try:
+        if max_bytes is not None:
+            info = await store.head(key)
+            if info.size_bytes > max_bytes:
+                raise RawFileTooLargeError(
+                    f"raw object for sha {sha256} is {info.size_bytes} bytes; "
+                    f"exceeds ceiling {max_bytes}"
+                )
+        return await store.get(key)
+    except ObjectNotFoundError as exc:
+        raise RawFileNotFoundError(f"no archived object for sha {sha256} at {key}") from exc

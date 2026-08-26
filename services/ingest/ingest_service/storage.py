@@ -1,25 +1,43 @@
 """Raw file storage for ingest.
 
-Content-addressed, sharded layout under a configurable root:
+Content is written to the S3-compatible object archive through the
+shared adapter in :mod:`common.storage`. Objects are keyed by sha256:
 
-    <root>/<sha[0:2]>/<sha[2:4]>/<sha>.<ext>
+    <prefix>/<sha[0:2]>/<sha[2:4]>/<sha>
 
-Writes are atomic (write-to-temp, rename). Re-storing the same sha is
-a no-op. Disk-full is surfaced as :class:`InsufficientStorageError`.
+There is no extension in the key. The content type lives in the
+object's own metadata and in ``ingest.game_log_files.content_type``,
+so the reader never has to guess at a suffix.
+
+Re-storing the same sha is a no-op: the key is derived from the
+content, so a key that exists already holds those bytes.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import errno
-import os
-from collections.abc import AsyncIterator
 from pathlib import Path
 
+from common.storage import (
+    DEFAULT_CONTENT_TYPE,
+    ObjectInfo,
+    ObjectStore,
+    object_key,
+)
 from ingest_service.schemas import ContentType
 
-_EXT_BY_CONTENT_TYPE: dict[str, str] = {
+# What we tell the object store each payload is. Match logs are MTGO
+# ``.dat`` files (binary-ish), decklists and reference data are XML.
+_MIME_BY_CONTENT_TYPE: dict[str, str] = {
+    ContentType.MATCH_LOG.value: DEFAULT_CONTENT_TYPE,
+    ContentType.DECKLIST.value: "application/xml",
+    ContentType.REFERENCE_DATA.value: "application/xml",
+    ContentType.UNKNOWN.value: DEFAULT_CONTENT_TYPE,
+}
+
+# Extensions the pre-S3 filesystem archive used, by content type. Only
+# the backfill needs these: it has to find the old sharded files on the
+# legacy volume before it can upload them.
+_LEGACY_EXT_BY_CONTENT_TYPE: dict[str, str] = {
     ContentType.MATCH_LOG.value: ".dat",
     ContentType.DECKLIST.value: ".xml",
     ContentType.REFERENCE_DATA.value: ".xml",
@@ -27,17 +45,18 @@ _EXT_BY_CONTENT_TYPE: dict[str, str] = {
 }
 
 
-class InsufficientStorageError(OSError):
-    """Raised when the raw-file store is out of disk space."""
+def mime_for(content_type: str) -> str:
+    """Return the MIME type recorded on the stored object."""
+    return _MIME_BY_CONTENT_TYPE.get(content_type, DEFAULT_CONTENT_TYPE)
 
 
-def extension_for(content_type: str, original_filename: str | None = None) -> str:
-    """Return the file extension to use for a given content type.
+def legacy_extension_for(content_type: str, original_filename: str | None = None) -> str:
+    """Return the extension the filesystem archive would have used.
 
-    Falls back to sniffing a suffix from ``original_filename`` for the
-    ``unknown`` type so we don't lose operator-visible hints.
+    Backfill-only. Kept so the migration can locate files the old
+    layout wrote; nothing on the write path uses it.
     """
-    ext = _EXT_BY_CONTENT_TYPE.get(content_type, ".bin")
+    ext = _LEGACY_EXT_BY_CONTENT_TYPE.get(content_type, ".bin")
     if content_type == ContentType.UNKNOWN.value and original_filename:
         suffix = Path(original_filename).suffix
         if suffix:
@@ -45,80 +64,28 @@ def extension_for(content_type: str, original_filename: str | None = None) -> st
     return ext
 
 
-def _shard_path(root: Path, sha256: str, extension: str) -> Path:
-    return root / sha256[0:2] / sha256[2:4] / f"{sha256}{extension}"
-
-
-def storage_path_for(sha256: str, extension: str) -> str:
-    """Return the sharded relative path for a given sha.
-
-    Used as the value of ``ingest.game_log_files.storage_path``. The
-    absolute location is always ``<raw_root>/<storage_path>``.
-    """
-    return f"{sha256[0:2]}/{sha256[2:4]}/{sha256}{extension}"
+def storage_path_for(sha256: str, key_prefix: str = "raw") -> str:
+    """Return the object key recorded in ``game_log_files.storage_path``."""
+    return object_key(sha256, key_prefix)
 
 
 async def store_file(
+    store: ObjectStore,
     content: bytes,
     sha256: str,
-    extension: str,
-    root: Path,
-) -> Path:
-    """Write ``content`` to the sharded location for ``sha256``.
+    content_type: str,
+    key_prefix: str = "raw",
+) -> ObjectInfo:
+    """Put ``content`` in the archive under its content-addressed key.
 
-    Idempotent: if the target already exists, returns its path without
-    rewriting. Uses write-to-temp + atomic rename so concurrent
-    uploads of the same file can't produce a half-written archive
-    entry. Raises :class:`InsufficientStorageError` on ENOSPC.
-
-    All disk I/O is offloaded to a thread so the event loop is never
-    blocked under concurrent load.
+    Idempotent. Storage failures surface as
+    :class:`common.storage.ObjectStorageError` subclasses, promptly:
+    the adapter's client has bounded connect/read timeouts and a
+    bounded retry count, so an unreachable store errors in seconds
+    rather than blocking the request forever.
     """
-
-    def _write_sync() -> Path:
-        target = _shard_path(root, sha256, extension)
-        if target.exists():
-            return target
-
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        try:
-            with open(tmp, "wb") as fh:
-                fh.write(content)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.rename(tmp, target)
-        except OSError as exc:
-            # Best-effort cleanup of the tmp file; ignore if it's already gone.
-            with contextlib.suppress(OSError):
-                tmp.unlink()
-            if exc.errno == errno.ENOSPC:
-                raise InsufficientStorageError("disk full") from exc
-            raise
-        return target
-
-    return await asyncio.to_thread(_write_sync)
-
-
-async def open_file(
-    sha256: str,
-    extension: str,
-    root: Path,
-    chunk_size: int = 64 * 1024,
-) -> AsyncIterator[bytes]:
-    """Stream the content of a stored file in chunks.
-
-    Each chunk read is offloaded to a thread so the event loop is
-    never blocked, and memory usage stays bounded to one chunk at a
-    time regardless of file size.
-    """
-    path = _shard_path(root, sha256, extension)
-    fh = await asyncio.to_thread(open, path, "rb")
-    try:
-        while True:
-            chunk = await asyncio.to_thread(fh.read, chunk_size)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        await asyncio.to_thread(fh.close)
+    return await store.put(
+        object_key(sha256, key_prefix),
+        content,
+        content_type=mime_for(content_type),
+    )

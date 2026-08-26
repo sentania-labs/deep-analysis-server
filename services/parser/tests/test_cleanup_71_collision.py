@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from parser_service.models import Match
@@ -31,6 +30,8 @@ from parser_service.scripts.cleanup_71_duplicates import (
     plan_actions,
 )
 from sqlalchemy import select
+
+from common.storage import MemoryObjectStore, object_key
 
 # ---------------------------------------------------------------------------
 # Unit tests — plan_actions on synthetic groups
@@ -58,38 +59,43 @@ def _row(
     )
 
 
+async def _never(_sha: str) -> str | None:
+    return None
+
+
+async def _uuid_for_abc(sha: str) -> str | None:
+    return "UUID-FROM-BYTES" if sha == "abc" else None
+
+
 class TestComputeGroups:
-    def test_existing_raw_match_id_used_verbatim(self) -> None:
+    async def test_existing_raw_match_id_used_verbatim(self) -> None:
         rows = [_row(rid="r1", raw_match_id="UUID-A")]
-        groups, unident = compute_groups(rows, extract_uuid=lambda _sha: None)
+        groups, unident = await compute_groups(rows, extract_uuid=_never)
         assert unident == 0
         assert groups == {(1, "UUID-A"): rows}
 
-    def test_null_raw_match_id_extracted_from_bytes(self) -> None:
+    async def test_null_raw_match_id_extracted_from_bytes(self) -> None:
         rows = [_row(rid="r1", raw_match_id=None, sha256="abc")]
-        groups, unident = compute_groups(
-            rows,
-            extract_uuid=lambda sha: "UUID-FROM-BYTES" if sha == "abc" else None,
-        )
+        groups, unident = await compute_groups(rows, extract_uuid=_uuid_for_abc)
         assert unident == 0
         assert groups == {(1, "UUID-FROM-BYTES"): rows}
 
-    def test_unparseable_rows_skipped(self) -> None:
+    async def test_unparseable_rows_skipped(self) -> None:
         rows = [
             _row(rid="r1", raw_match_id=None, sha256="lost"),
             _row(rid="r2", raw_match_id="UUID-B"),
         ]
-        groups, unident = compute_groups(rows, extract_uuid=lambda _sha: None)
+        groups, unident = await compute_groups(rows, extract_uuid=_never)
         assert unident == 1
         assert (1, "UUID-B") in groups
         assert all((1, "lost") not in k for k in groups)
 
-    def test_multiple_users_grouped_separately(self) -> None:
+    async def test_multiple_users_grouped_separately(self) -> None:
         rows = [
             _row(rid="r1", user_id=1, raw_match_id="UUID-X"),
             _row(rid="r2", user_id=2, raw_match_id="UUID-X"),
         ]
-        groups, _ = compute_groups(rows, extract_uuid=lambda _sha: None)
+        groups, _ = await compute_groups(rows, extract_uuid=_never)
         assert (1, "UUID-X") in groups
         assert (2, "UUID-X") in groups
         assert len(groups[(1, "UUID-X")]) == 1
@@ -150,7 +156,7 @@ class TestPlanActions:
 
 
 @pytest.mark.asyncio
-async def test_apply_eliminates_zombie_duplicates(parser_session, tmp_path) -> None:
+async def test_apply_eliminates_zombie_duplicates(parser_session) -> None:
     """End-to-end exercise of the collision-victim path.
 
     The production scenario: three matches rows exist for the same
@@ -205,19 +211,17 @@ async def test_apply_eliminates_zombie_duplicates(parser_session, tmp_path) -> N
     parser_session.add_all(rows)
     await parser_session.commit()
 
-    # Pre-stage the raw bytes so the UUID extractor finds the match
-    # UUID for each sha. Layout mirrors what ingest writes:
-    # <root>/<sha[0:2]>/<sha[2:4]>/<sha>.dat
+    # Pre-stage the archived bytes so the UUID extractor finds the
+    # match UUID for each sha, at the key ingest would have written.
+    store = MemoryObjectStore()
     for sha in shas:
-        shard = tmp_path / sha[0:2] / sha[2:4]
-        shard.mkdir(parents=True)
-        (shard / f"{sha}.dat").write_bytes(f"prefix ${target_uuid} body".encode())
+        store.seed(object_key(sha), f"prefix ${target_uuid} body".encode())
 
     sm = _session_maker_returning(parser_session)
 
     scanned, unident, deleted, per_user = await _run_cleanup(
         sm,
-        Path(tmp_path),
+        store,
         apply=True,
         max_log_bytes=None,
     )
@@ -244,7 +248,7 @@ async def test_apply_eliminates_zombie_duplicates(parser_session, tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_dry_run_changes_nothing(parser_session, tmp_path) -> None:
+async def test_dry_run_changes_nothing(parser_session) -> None:
     """``--dry-run`` reports what *would* happen but mutates nothing."""
     target_uuid = "00112233-4455-6677-8899-aabbccddeeff"
     shas = ["d" * 64, "e" * 64]
@@ -273,16 +277,15 @@ async def test_dry_run_changes_nothing(parser_session, tmp_path) -> None:
     )
     await parser_session.commit()
 
+    store = MemoryObjectStore()
     for sha in shas:
-        shard = tmp_path / sha[0:2] / sha[2:4]
-        shard.mkdir(parents=True)
-        (shard / f"{sha}.dat").write_bytes(f"prefix ${target_uuid} suffix".encode())
+        store.seed(object_key(sha), f"prefix ${target_uuid} suffix".encode())
 
     sm = _session_maker_returning(parser_session)
 
     scanned, _unident, deleted, _per_user = await _run_cleanup(
         sm,
-        Path(tmp_path),
+        store,
         apply=False,
         max_log_bytes=None,
     )

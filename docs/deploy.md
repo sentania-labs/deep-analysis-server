@@ -107,6 +107,11 @@ proxy's actual Docker network.
 Named volumes (managed by Docker):
 
 - `postgres_data` — Postgres data directory.
+- `minio_data`: the raw game-log archive, in the stack's own MinIO.
+- `raw_archive`: the pre-object-store archive, on hosts upgraded from
+  it. Declared `external: true`, so Compose neither creates nor removes
+  it and `down -v` leaves it alone. Nothing mounts it any more except
+  the one-shot backfill job. See "Raw archive" below.
 - `caddy_data` — Caddy's internal CA, issued certs, and OCSP state.
 - `auth_secrets` — mounted into the `auth` container at `/data/secrets`.
   Holds `initial_admin.txt` (mode `0600`) when the auto-generate
@@ -119,6 +124,104 @@ Reset everything (destructive — drops DB + re-issues local certs):
 ```bash
 docker compose down -v
 ```
+
+`-v` removes every named volume Compose manages, which is all of them
+except `raw_archive`. That one is declared external precisely so this
+command cannot take the pre-backfill archive with it.
+
+## Raw archive (object storage)
+
+The raw uploads live in an S3-compatible object store, not on a shared
+filesystem. `ingest` writes them and `parser` reads them, both through
+the same adapter, so the two services share no volume.
+
+The stack ships its own MinIO service. It comes up with `docker compose
+up` and a one-shot `minio-init` container creates the bucket if it is
+missing, in the same shape as the `*-migrate` jobs. Nothing has to be
+clicked in a console and no setting has to be filled in first.
+
+Placement is entirely config. To move the archive to a shared object
+store or a real cloud bucket, change four values and restart; no code
+changes:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DA_S3_ENDPOINT_URL` | `http://minio:9000` | |
+| `DA_S3_ACCESS_KEY` | `deep-analysis` | Also seeds MinIO's root user |
+| `DA_S3_SECRET_KEY` | `deep-analysis-dev-secret` | Change this on any host that is not a throwaway |
+| `DA_S3_BUCKET` | `deep-analysis-raw` | |
+| `DA_S3_FORCE_PATH_STYLE` | `true` | MinIO needs `true`; AWS S3 wants `false` |
+| `DA_S3_REGION` | `us-east-1` | Signing region. Ignored by MinIO, required by AWS S3 |
+| `DA_S3_CONNECT_TIMEOUT_SECONDS` | `3.0` | |
+| `DA_S3_READ_TIMEOUT_SECONDS` | `10.0` | |
+| `DA_S3_MAX_ATTEMPTS` | `3` | |
+| `DA_S3_KEY_PREFIX` | `raw` | Key prefix objects are written under |
+
+Every one of these is forwarded to `ingest`, `parser` and the backfill
+job from a single `x-s3-env` block in `docker-compose.yml`. `.env`
+supplies Compose *interpolation* values only, so a setting that is not
+in that block never reaches a container no matter what `.env` says. If
+you add a setting to the adapter, add it there too.
+
+Objects are keyed by sha256 (`raw/<ab>/<cd>/<sha256>`), which is what
+`ingest.game_log_files.storage_path` records. The key is derivable from
+the sha alone, so a lost `storage_path` is recoverable.
+
+### Failure behaviour
+
+Every store call has a bounded connect timeout (3s), read timeout (10s)
+and retry count (3), so an unreachable archive produces an error in
+seconds instead of blocking. `/healthz` on `ingest` and `parser` heads
+the bucket on every call (own 1.5s budget, capped at 2s by the health
+helper) and reports `object_store: error` with HTTP 503 when it cannot
+be reached. A stuck archive is now visible from the outside rather than
+hiding behind a healthy-looking service. An upload that cannot be
+stored answers 503 `storage_unavailable` (or 507 when the store reports
+itself full) and rolls the database row back, so the table never claims
+content the archive does not have.
+
+### Backfill from the old volume
+
+Migrating an existing install off the `raw_archive` volume:
+
+```bash
+docker compose --profile backfill run --rm raw-backfill
+```
+
+The volume is external, so this only works on a host that actually has
+one. On a fresh install it fails with an external-volume-not-found
+error, which is the right answer: there is no legacy archive to move.
+
+Until the backfill has run, every legacy sha is already in
+`ingest.game_log_files` with no object behind it. Uploads handle that
+safely: an upload writes its bytes to the archive on every request,
+dedup hit or not, so a re-upload of a not-yet-backfilled file stores the
+content instead of returning 201 over an empty archive. The same
+behaviour repairs an object deleted by accident. The backfill is still
+what moves files nobody re-uploads.
+
+It is idempotent (keys are content-addressed), so re-running it is the
+supported way to confirm the first run finished. It prints a count
+block: expected, uploaded, already present, missing source, hash
+mismatch, failed, verified. `result: OK` means every row in
+`ingest.game_log_files` was verified present in the bucket. Anything
+else is `INCOMPLETE` and the job exits non-zero. Add `--dry-run` (via
+`run --rm raw-backfill python -m ingest_service.backfill_s3 --source
+/data/raw --dry-run`) to see the plan without writing.
+
+**The backfill never deletes anything.** The old volume is left exactly
+as it was, so the change is reversible until someone deliberately
+removes it. The volume is declared `external: true` in the Compose file,
+so `docker compose down -v` does not remove it either. Once the run reports `result: OK` and you have confirmed
+uploads and parses are working against the object store, reclaim the
+space yourself:
+
+```bash
+docker volume rm deep-analysis_raw_archive
+```
+
+That is the only step that destroys the old copy, and nothing does it
+for you.
 
 ## Port publishing
 

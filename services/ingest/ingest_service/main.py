@@ -20,17 +20,19 @@ from common.events import FILE_INGESTED, FileIngestedPayload
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
+from common.storage import (
+    ObjectStorageError,
+    ObjectStore,
+    ObjectStoreFullError,
+    get_object_store,
+    reset_object_store,
+)
 from ingest_service import models as _models  # noqa: F401 — load Base.metadata
 from ingest_service.db import get_session
 from ingest_service.deps import get_current_agent
 from ingest_service.schemas import AgentClassification, ContentType, UploadResponse
 from ingest_service.settings import get_settings
-from ingest_service.storage import (
-    InsufficientStorageError,
-    extension_for,
-    storage_path_for,
-    store_file,
-)
+from ingest_service.storage import storage_path_for, store_file
 
 SERVICE_NAME = "ingest"
 configure_logging(SERVICE_NAME)
@@ -163,10 +165,20 @@ def reset_publisher() -> None:
     _publisher = None
 
 
+def get_store() -> ObjectStore:
+    """The raw archive. Built once per process from settings."""
+    return get_object_store(get_settings().s3_config())
+
+
+def reset_store() -> None:
+    """Test hook."""
+    reset_object_store()
+
+
 @app.get("/healthz")
 @app.get("/ingest/healthz")
 async def healthz() -> JSONResponse:
-    from common.health import check_db, check_redis, evaluate
+    from common.health import check_db, check_object_store, check_redis, evaluate
     from ingest_service.db import get_sessionmaker as _get_sm
 
     redis_client = await get_redis(get_settings().redis_url)
@@ -174,6 +186,10 @@ async def healthz() -> JSONResponse:
         [
             check_db(_get_sm()),
             check_redis(redis_client),
+            # The archive is a hard dependency of every upload, so an
+            # unreachable object store has to read as degraded rather
+            # than letting the service accept traffic it cannot serve.
+            check_object_store(get_store()),
         ]
     )
     return JSONResponse(
@@ -243,8 +259,7 @@ async def upload(
         raise _too_large()
 
     sha = hashlib.sha256(content).hexdigest()
-    ext = extension_for(content_type.value, original_filename)
-    storage_path = storage_path_for(sha, ext)
+    storage_path = storage_path_for(sha, settings.s3_key_prefix)
 
     # Upsert the content-addressed row. RETURNING tells us whether this
     # was a fresh insert (first-time content) or a dedup hit.
@@ -261,19 +276,38 @@ async def upload(
     inserted = insert_res.first() is not None
     deduped = not inserted
 
-    # Only write to disk on first-time content; re-uploads are a no-op
-    # on the raw archive (store_file is idempotent anyway, but skipping
-    # the syscall round-trip is cheap).
-    if inserted:
-        try:
-            await store_file(content, sha, ext, settings.ingest_raw_path)
-        except InsufficientStorageError as exc:
-            # Roll back the db row so the archive + table stay in sync.
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
-                detail={"error": "insufficient_storage"},
-            ) from exc
+    # Write to the archive on every upload, dedup hit or not. A 201 has
+    # to mean the content IS in the object store, and the db row alone
+    # does not prove that: on a host upgraded from the filesystem
+    # archive, every legacy sha is already in game_log_files with no
+    # object behind it until the backfill runs, and an object can also
+    # go missing by accident. store_file is idempotent (HEAD before
+    # PUT), so the already-present case costs one metadata round-trip
+    # and the missing case is repaired by the next upload of that file.
+    try:
+        await store_file(
+            get_store(),
+            content,
+            sha,
+            content_type.value,
+            key_prefix=settings.s3_key_prefix,
+        )
+    except ObjectStoreFullError as exc:
+        # Roll back the db row so the archive + table stay in sync.
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail={"error": "insufficient_storage"},
+        ) from exc
+    except ObjectStorageError as exc:
+        # Store unreachable or refusing writes. Fail fast and loudly
+        # rather than committing a row whose object never landed.
+        await db.rollback()
+        _log.error("object store write failed sha=%s: %s", sha, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "storage_unavailable"},
+        ) from exc
 
     # Always record the per-user attribution row, even on dedup.
     now = datetime.now(UTC)

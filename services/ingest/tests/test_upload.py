@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from typing import Any
 
 import pytest
@@ -36,6 +35,7 @@ async def test_upload_happy_path(
     client: AsyncClient,
     seed_agent: dict[str, Any],
     db_session: AsyncSession,
+    s3_client: Any,
 ) -> None:
     body = b"match log content example"
     sha = hashlib.sha256(body).hexdigest()
@@ -52,7 +52,7 @@ async def test_upload_happy_path(
     assert j["deduped"] is False
     assert isinstance(j["upload_id"], int)
 
-    # game_log_files row written, raw file on disk.
+    # game_log_files row written, object in the archive.
     row = (
         await db_session.execute(
             text(
@@ -64,11 +64,11 @@ async def test_upload_happy_path(
     ).one()
     assert row[0] == len(body)
     assert row[1] == "match-log"
-    assert row[2] == f"{sha[0:2]}/{sha[2:4]}/{sha}.dat"
+    assert row[2] == f"raw/{sha[0:2]}/{sha[2:4]}/{sha}"
 
-    raw_root = os.environ["DA_INGEST_RAW_PATH"]
-    with open(os.path.join(raw_root, row[2]), "rb") as fh:
-        assert fh.read() == body
+    # The bytes are in object storage, at the key the row points at.
+    obj = s3_client.get_object(Bucket="test-raw", Key=row[2])
+    assert obj["Body"].read() == body
 
 
 async def test_upload_oversize_returns_413(client: AsyncClient, seed_agent: dict[str, Any]) -> None:

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +32,8 @@ from parser_service.models import Match
 from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.persistence import persist_match
 from sqlalchemy import select
+
+from common.storage import MemoryObjectStore, object_key
 
 # ---------------------------------------------------------------------------
 # Pure helpers — no DB
@@ -92,7 +93,7 @@ class _StubParser:
         return self._parsed
 
 
-def _consumer_with(parsed: ParsedMatch, sm, raw_root: Path) -> ParserConsumer:
+def _consumer_with(parsed: ParsedMatch, sm, store: MemoryObjectStore) -> ParserConsumer:
     """Build a consumer using stub redis/parser dependencies.
 
     ``_resolve_hero`` is short-circuited: it queries ``auth.users``,
@@ -112,7 +113,7 @@ def _consumer_with(parsed: ParsedMatch, sm, raw_root: Path) -> ParserConsumer:
     consumer = ParserConsumer(
         redis_client=_DummyRedis(),
         sessionmaker=sm,
-        raw_root=raw_root,
+        store=store,
         parser=_StubParser(parsed),
         publisher=_NoopPublisher(),
     )
@@ -129,19 +130,19 @@ class _NoopPublisher:
         return None
 
 
-def _write_raw(raw_root: Path, sha: str) -> None:
-    """Write a non-empty raw file at the ingest shard path for ``sha``."""
-    shard = raw_root / sha[0:2] / sha[2:4]
-    shard.mkdir(parents=True, exist_ok=True)
-    (shard / f"{sha}.dat").write_bytes(b"unused-by-stub-parser")
+def _store_with(sha: str, body: bytes = b"unused-by-stub-parser") -> MemoryObjectStore:
+    """A raw archive holding one object at the key ingest would use."""
+    store = MemoryObjectStore()
+    store.seed(object_key(sha), body)
+    return store
 
 
 @pytest.mark.asyncio
 async def test_consumer_drops_empty_parse(parser_session, tmp_path) -> None:
     sha = "e" * 64
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     sm = _session_maker_returning(parser_session)
-    consumer = _consumer_with(ParsedMatch(), sm, tmp_path)
+    consumer = _consumer_with(ParsedMatch(), sm, store)
 
     await consumer.handle_event(sha, user_id=1)
 
@@ -152,14 +153,14 @@ async def test_consumer_drops_empty_parse(parser_session, tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_consumer_persists_partial_as_pending_review(parser_session, tmp_path) -> None:
     sha = "f" * 64
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     partial = ParsedMatch(
         raw_match_id="pending-uuid-1",
         players=["alice", "bob"],
         games=[ParsedGame(game_number=1, winner=None)],
     )
     sm = _session_maker_returning(parser_session)
-    consumer = _consumer_with(partial, sm, tmp_path)
+    consumer = _consumer_with(partial, sm, store)
 
     await consumer.handle_event(sha, user_id=1)
     parser_session.expire_all()
@@ -175,7 +176,7 @@ async def test_consumer_persists_conclusive_with_null_review_status(
     parser_session, tmp_path
 ) -> None:
     sha = "a" * 64
-    _write_raw(tmp_path, sha)
+    store = _store_with(sha)
     conclusive = ParsedMatch(
         raw_match_id="conclusive-uuid-1",
         players=["alice", "bob"],
@@ -187,7 +188,7 @@ async def test_consumer_persists_conclusive_with_null_review_status(
         ],
     )
     sm = _session_maker_returning(parser_session)
-    consumer = _consumer_with(conclusive, sm, tmp_path)
+    consumer = _consumer_with(conclusive, sm, store)
 
     await consumer.handle_event(sha, user_id=1)
     parser_session.expire_all()

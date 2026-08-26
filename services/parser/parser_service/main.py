@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
+from common.storage import ObjectStore, get_object_store, reset_object_store
 from parser_service import models as _models  # noqa: F401 — load Base.metadata
 from parser_service.backfill import backfill_loop
 from parser_service.consumer import ParserConsumer
@@ -35,6 +36,16 @@ _consumer: ParserConsumer | None = None
 _consumer_task: asyncio.Task[None] | None = None
 _backfill_task: asyncio.Task[None] | None = None
 _backfill_stop: asyncio.Event | None = None
+
+
+def get_store() -> ObjectStore:
+    """The raw archive. Built once per process from settings."""
+    return get_object_store(get_settings().s3_config())
+
+
+def reset_store() -> None:
+    """Test hook."""
+    reset_object_store()
 
 
 def reset_consumer() -> None:
@@ -54,7 +65,8 @@ async def _start_consumer() -> None:
     _consumer = ParserConsumer(
         redis_client=client,
         sessionmaker=sm,
-        raw_root=settings.parser_raw_path,
+        store=get_store(),
+        key_prefix=settings.s3_key_prefix,
         parser=LogParser(),
         publisher=EventPublisher(client),
         max_log_bytes=settings.parser_max_log_bytes,
@@ -123,13 +135,16 @@ app.include_router(_reparse_router)
 @app.get("/healthz")
 @app.get("/parser/healthz")
 async def healthz() -> JSONResponse:
-    from common.health import check_db, check_redis, evaluate
+    from common.health import check_db, check_object_store, check_redis, evaluate
 
     redis_client = await get_redis(get_settings().redis_url)
     report = await evaluate(
         [
             check_db(get_sessionmaker()),
             check_redis(redis_client),
+            # A parser that cannot reach the archive parses nothing.
+            # Say so here rather than looking healthy while stuck.
+            check_object_store(get_store()),
         ]
     )
     return JSONResponse(
