@@ -1,4 +1,4 @@
-"""Tests for common.metrics — metrics move to their own port (issue #134).
+"""Tests for common.metrics: metrics move to their own port (issue #134).
 
 These verify the shape the issue asks for: no /metrics route on the app
 itself, and a working listener on the configured metrics port.

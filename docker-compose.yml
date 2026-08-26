@@ -172,7 +172,7 @@ services:
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD:-}
       DEEP_ANALYSIS_FORCE_ADMIN_RESET: ${DEEP_ANALYSIS_FORCE_ADMIN_RESET:-false}
     expose:
-      - "9000"  # DA_METRICS_PORT — internal-only, not published to host
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:
@@ -206,7 +206,7 @@ services:
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
-      - "9000"  # DA_METRICS_PORT — internal-only, not published to host
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - raw_archive:/data/raw
       - ./.secrets:/data/secrets:ro
@@ -241,7 +241,7 @@ services:
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
-      - "9000"  # DA_METRICS_PORT — internal-only, not published to host
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - raw_archive:/data/raw:ro
       - ./.secrets:/data/secrets:ro
@@ -273,7 +273,7 @@ services:
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
-      - "9000"  # DA_METRICS_PORT — internal-only, not published to host
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:
@@ -305,7 +305,7 @@ services:
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
     expose:
-      - "9000"  # DA_METRICS_PORT — internal-only, not published to host
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:

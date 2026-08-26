@@ -27,7 +27,7 @@
     }
 
     # Per-service app metrics (auth/ingest/analytics/parser/web) are not
-    # reachable through this gateway at all — issue #134 moved them off
+    # reachable through this gateway at all: issue #134 moved them off
     # the app port entirely onto DA_METRICS_PORT (default 9000), which
     # this Caddyfile never proxies to. There is no route to remove them
     # from here; the RFC1918 remote_ip guard that used to gate
