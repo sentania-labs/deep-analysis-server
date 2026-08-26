@@ -54,6 +54,7 @@ from analytics_service.scraper_lock import (
     TRIGGER_MANUAL,
     TRIGGER_SCHEDULED,
     ScrapeAlreadyRunning,
+    ScrapeLeaseLost,
     ScraperRun,
 )
 from analytics_service.scraper_lock import acquire as acquire_scraper_lock
@@ -156,6 +157,11 @@ async def _run_scrape_if_idle(
             lambda: runner(sm),
             trigger=TRIGGER_SCHEDULED,
         )
+    except ScrapeLeaseLost:
+        _log.warning(
+            "scheduled scrape aborted; lock lease was lost mid-run",
+            extra={"scraper_name": scraper_name},
+        )
     except ScrapeAlreadyRunning as exc:
         _log.info(
             "scheduled scrape skipped; run already in progress",
@@ -174,12 +180,21 @@ async def _run_scrape_holding(
     run: ScraperRun,
 ) -> None:
     """Background-task path: the lock was acquired by the HTTP handler."""
-    await run_scrape_locked(
-        scraper_name,
-        lambda: runner(sm),
-        trigger=run.trigger,
-        run=run,
-    )
+    try:
+        await run_scrape_locked(
+            scraper_name,
+            lambda: runner(sm),
+            trigger=run.trigger,
+            run=run,
+        )
+    except ScrapeLeaseLost:
+        # The run was cut short because another owner took the lock. The
+        # 202 is already out the door, so this is the only place it can
+        # be reported.
+        _log.warning(
+            "manual scrape aborted; lock lease was lost mid-run",
+            extra={"scraper_name": scraper_name, "run_id": run.run_id},
+        )
 
 
 def _already_running_response(exc: ScrapeAlreadyRunning) -> JSONResponse:
@@ -946,6 +961,8 @@ async def list_scrapers(
                     is_running=bool(run["is_running"]),
                     running_since=run["running_since"],
                     run_trigger=run["run_trigger"],
+                    run_id=run["run_id"],
+                    last_heartbeat_at=run["last_heartbeat_at"],
                 )
             )
     return ScraperConfigListResponse(scrapers=scrapers)
@@ -1022,6 +1039,8 @@ async def update_scraper_config(
         is_running=bool(run["is_running"]),
         running_since=run["running_since"],
         run_trigger=run["run_trigger"],
+        run_id=run["run_id"],
+        last_heartbeat_at=run["last_heartbeat_at"],
     )
 
 

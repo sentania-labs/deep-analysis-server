@@ -83,6 +83,21 @@ class ScrapeAlreadyRunning(Exception):
         self.run = run
 
 
+class ScrapeLeaseLost(Exception):
+    """Raised when a running scrape lost its lock to another owner.
+
+    Means the heartbeat could not be refreshed for longer than the
+    staleness window (a stalled event loop, or database trouble), so the
+    run was aborted mid-flight to keep the one-scrape-at-a-time
+    guarantee.
+    """
+
+    def __init__(self, scraper_name: str, run: ScraperRun) -> None:
+        super().__init__(f"{scraper_name} scrape aborted: run {run.run_id} lost its lock")
+        self.scraper_name = scraper_name
+        self.run = run
+
+
 @dataclass(frozen=True)
 class ScraperRun:
     """A row of ``analytics.scraper_runs`` plus its liveness verdict."""
@@ -414,7 +429,9 @@ async def get_run(scraper_name: str, *, store: LockStore | None = None) -> Scrap
     return await (store or get_store()).read(scraper_name)
 
 
-async def _heartbeat_loop(store: LockStore, run: ScraperRun, interval: float) -> None:
+async def _heartbeat_loop(
+    store: LockStore, run: ScraperRun, interval: float, lost: asyncio.Event
+) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
@@ -429,14 +446,15 @@ async def _heartbeat_loop(store: LockStore, run: ScraperRun, interval: float) ->
             )
             continue
         if not held:
-            # Our row is gone or belongs to someone else, which means the
-            # staleness window already elapsed for us. Stop beating: the
-            # scrape finishes unlocked rather than stealing the row back
-            # from whoever legitimately took it over.
+            # Our row is gone or belongs to someone else: the staleness
+            # window elapsed for us and somebody legitimately took over.
+            # Do not steal it back, and do not keep scraping alongside the
+            # new owner: signal the holder so it aborts the run.
             _log.warning(
                 "scraper lock lost; another process took it over",
                 extra={"scraper_name": run.scraper_name, "run_id": run.run_id},
             )
+            lost.set()
             return
 
 
@@ -446,14 +464,17 @@ async def held(
     *,
     store: LockStore | None = None,
     heartbeat_seconds: float = HEARTBEAT_SECONDS,
+    lost: asyncio.Event | None = None,
 ) -> AsyncIterator[ScraperRun]:
     """Hold an acquired lock: heartbeat while inside, release on exit.
 
     Release happens in ``finally``, so a scrape that raises frees the
-    lock just like one that returns.
+    lock just like one that returns. ``lost`` is set if the heartbeat
+    finds the row taken over, so the caller can abort the work rather
+    than run on unlocked next to the new owner.
     """
     st = store or get_store()
-    beat = asyncio.create_task(_heartbeat_loop(st, run, heartbeat_seconds))
+    beat = asyncio.create_task(_heartbeat_loop(st, run, heartbeat_seconds, lost or asyncio.Event()))
     try:
         yield run
     finally:
@@ -488,5 +509,23 @@ async def run_locked[T](
     """
     st = store or get_store()
     acquired = run if run is not None else await acquire(scraper_name, trigger=trigger, store=st)
-    async with held(acquired, store=st, heartbeat_seconds=heartbeat_seconds):
-        return await runner()
+    lost = asyncio.Event()
+    async with held(acquired, store=st, heartbeat_seconds=heartbeat_seconds, lost=lost):
+        # ensure_future, not create_task: runner is typed Awaitable[T].
+        work: asyncio.Task[T] = asyncio.ensure_future(runner())
+        watch = asyncio.create_task(lost.wait())
+        try:
+            await asyncio.wait({work, watch}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
+        if work.done():
+            return work.result()
+        # The lease is gone and somebody else owns the scraper now.
+        # Stop fetching immediately: two concurrent scrapes is the exact
+        # thing this lock exists to prevent.
+        work.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await work
+        raise ScrapeLeaseLost(scraper_name, acquired)

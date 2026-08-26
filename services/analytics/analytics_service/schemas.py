@@ -181,6 +181,8 @@ class ScraperConfigResponse(BaseModel):
     is_running: bool = False
     running_since: datetime | None = None
     run_trigger: str | None = None
+    run_id: str | None = None
+    last_heartbeat_at: datetime | None = None
 
 
 class ScraperConfigListResponse(BaseModel):

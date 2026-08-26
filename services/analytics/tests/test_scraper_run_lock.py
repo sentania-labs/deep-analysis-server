@@ -21,6 +21,7 @@ from analytics_service.scraper_lock import (
     TRIGGER_SCHEDULED,
     InMemoryLockStore,
     ScrapeAlreadyRunning,
+    ScrapeLeaseLost,
     acquire,
     held,
     run_locked,
@@ -392,3 +393,63 @@ async def test_scheduled_run_proceeds_when_idle(installed_store: InMemoryLockSto
     await analytics_main._run_scrape_if_idle(MTGO, fake_scrape, _fake_sessionmaker)
     assert calls == ["ran"]
     assert await installed_store.read(MTGO) is None
+
+
+# --------------------------------------------------------------------------- #
+# Losing the lease mid-run
+# --------------------------------------------------------------------------- #
+
+
+async def test_scrape_is_aborted_when_another_owner_takes_the_lock(
+    store: InMemoryLockStore, clock: _Clock
+) -> None:
+    """A run whose heartbeat fell behind must stop, not scrape on unlocked
+    next to the new owner."""
+    cancelled = asyncio.Event()
+    started = asyncio.Event()
+
+    async def long_scrape() -> str:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return "finished"
+
+    async def steal() -> None:
+        await started.wait()
+        clock.advance(1000)  # our heartbeat is now hopelessly stale
+        await acquire(MTGO, trigger=TRIGGER_SCHEDULED, store=store)
+
+    thief = asyncio.create_task(steal())
+    with pytest.raises(ScrapeLeaseLost):
+        await run_locked(
+            MTGO, long_scrape, trigger=TRIGGER_MANUAL, store=store, heartbeat_seconds=0.01
+        )
+    await thief
+    assert cancelled.is_set(), "the scrape must be cancelled, not left running"
+
+    # The new owner still holds the lock: the aborted run's release is
+    # run_id-guarded and must not free somebody else's row.
+    current = await store.read(MTGO)
+    assert current is not None
+    assert current.trigger == TRIGGER_SCHEDULED
+
+
+async def test_lease_loss_does_not_crash_the_scheduler_tick(
+    installed_store: InMemoryLockStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lost lease is an operational warning, not a crashed background loop."""
+
+    async def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise ScrapeLeaseLost(
+            MTGO, await acquire(MTGO, trigger=TRIGGER_MANUAL, store=installed_store)
+        )
+
+    monkeypatch.setattr(analytics_main, "run_scrape_locked", boom)
+
+    async def fake_scrape(_sm: Any) -> None:
+        return None
+
+    await analytics_main._run_scrape_if_idle(MTGO, fake_scrape, _fake_sessionmaker)
