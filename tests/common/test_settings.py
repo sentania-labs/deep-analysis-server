@@ -21,6 +21,18 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.redis_url == "redis://x"
     assert s.jwt_public_key_path == Path("/tmp/test.pem")
     assert s.log_level == "INFO"
+    assert s.metrics_port == 9000
+
+
+def test_settings_metrics_port_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DA_SERVICE_NAME", "test")
+    monkeypatch.setenv("DA_DATABASE_URL", "postgresql://x")
+    monkeypatch.setenv("DA_REDIS_URL", "redis://x")
+    monkeypatch.setenv("DA_JWT_PUBLIC_KEY_PATH", "/tmp/test.pem")
+    monkeypatch.setenv("DA_METRICS_PORT", "9100")
+
+    s = BaseServiceSettings()
+    assert s.metrics_port == 9100
 
 
 def test_settings_log_level_override(monkeypatch: pytest.MonkeyPatch) -> None:

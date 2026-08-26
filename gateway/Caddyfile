@@ -26,55 +26,12 @@
         metrics
     }
 
-    # Per-service Prometheus metrics — path rewritten before forwarding.
-    # Restricted to RFC 1918 ranges + loopback; public requests get 403.
-    handle /auth/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
-        respond @denied 403
-        rewrite * /metrics
-        reverse_proxy auth:8000 {
-            transport http {
-                keepalive 30s
-                keepalive_idle_conns 10
-            }
-        }
-    }
-
-    handle /ingest/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
-        respond @denied 403
-        rewrite * /metrics
-        reverse_proxy ingest:8000 {
-            transport http {
-                keepalive 30s
-                keepalive_idle_conns 10
-            }
-        }
-    }
-
-    handle /analytics/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
-        respond @denied 403
-        rewrite * /metrics
-        reverse_proxy analytics:8000 {
-            transport http {
-                keepalive 30s
-                keepalive_idle_conns 10
-            }
-        }
-    }
-
-    handle /parser/metrics {
-        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
-        respond @denied 403
-        rewrite * /metrics
-        reverse_proxy parser:8000 {
-            transport http {
-                keepalive 30s
-                keepalive_idle_conns 10
-            }
-        }
-    }
+    # Per-service app metrics (auth/ingest/analytics/parser/web) are not
+    # reachable through this gateway at all: issue #134 moved them off
+    # the app port entirely onto DA_METRICS_PORT (default 9000), which
+    # this Caddyfile never proxies to. There is no route to remove them
+    # from here; the RFC1918 remote_ip guard that used to gate
+    # /<service>/metrics is gone along with the routes it was guarding.
 
     handle /postgres/metrics {
         @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16

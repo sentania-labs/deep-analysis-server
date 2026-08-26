@@ -1,5 +1,8 @@
 {
 	auto_https off
+	servers {
+		metrics
+	}
 }
 
 :8080 {
@@ -12,6 +15,26 @@
 
     handle /health {
         respond "ok" 200
+    }
+
+    # Caddy gateway metrics. Mirrors gateway/Caddyfile so ci/smoke_e2e.sh
+    # probes the same routes CI and production actually serve.
+    handle /metrics {
+        metrics
+    }
+
+    handle /postgres/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+        respond @denied 403
+        rewrite * /metrics
+        reverse_proxy postgres-exporter:9187
+    }
+
+    handle /redis/metrics {
+        @denied not remote_ip 127.0.0.1 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+        respond @denied 403
+        rewrite * /metrics
+        reverse_proxy redis-exporter:9121
     }
 
     handle /auth/* {

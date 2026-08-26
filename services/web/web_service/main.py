@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -24,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
-from common.metrics import mount_metrics
+from common.metrics import start_metrics_server
 from web_service import analytics_client, auth_client, parser_client
 from web_service import csrf as _csrf_mod
 from web_service.deps import (
@@ -45,8 +46,14 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 _TEMPLATES_DIR = _PACKAGE_ROOT / "templates"
 _STATIC_DIR = _PACKAGE_ROOT / "static"
 
-app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}")
-mount_metrics(app, SERVICE_NAME)
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
+    yield
+
+
+app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
@@ -99,7 +106,7 @@ async def csrf_protection_middleware(request: Request, call_next: Any) -> Respon
 async def inject_motd_middleware(request: Request, call_next: Any) -> Response:
     """Fetch the MOTD once per request and stash it on request.state."""
     path = request.url.path
-    if path.startswith("/static") or path.endswith("/healthz") or path == "/metrics":
+    if path.startswith("/static") or path.endswith("/healthz"):
         return await call_next(request)
     try:
         motd = await _get_cached_motd(get_settings())

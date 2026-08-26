@@ -1,20 +1,23 @@
-"""Prometheus metrics mixin for FastAPI services.
+"""Prometheus metrics for FastAPI services.
 
 Provides:
-- Per-service request duration histogram (``mount_metrics``)
+- Per-service request duration histogram (registered by ``start_metrics_server``)
 - DB query duration histogram via SQLAlchemy event hooks (``instrument_engine``)
+- A metrics HTTP listener on its own port, separate from the app port
+  (``start_metrics_server``), so the public app surface never carries a
+  /metrics path.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 
-from fastapi import FastAPI
-from prometheus_client import CONTENT_TYPE_LATEST, Histogram, generate_latest
+from prometheus_client import Histogram, start_http_server
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from starlette.requests import Request
-from starlette.responses import Response
+
+_log = logging.getLogger("common.metrics")
 
 _HISTOGRAMS: dict[str, Histogram] = {}
 _DB_HISTOGRAM: Histogram | None = None
@@ -82,11 +85,31 @@ def instrument_engine(sync_engine: Engine, service_name: str) -> None:
             histogram.labels(service=service_name).observe(duration)
 
 
-def mount_metrics(app: FastAPI, service_name: str) -> None:
-    """Register /metrics endpoint on the given FastAPI app."""
+def start_metrics_server(service_name: str, metrics_port: int) -> None:
+    """Start the Prometheus metrics HTTP listener for this process.
+
+    Serves on its own port, separate from the app port, so /metrics is
+    never reachable through the app's public HTTP surface regardless of
+    what a proxy in front of it does or does not route.
+
+    Binds to 0.0.0.0 (not loopback) because it still needs to be reachable
+    from elsewhere on the compose/cluster network for scraping; its safety
+    comes from being off the public port, not from a restrictive bind.
+
+    NOTE: this starts one HTTP server per process via a background thread.
+    Every service today runs single-worker uvicorn, so one process is one
+    metrics listener. If a service is ever run with multiple uvicorn
+    workers, each worker would try to bind the same port and this needs to
+    move to prometheus_client's multiprocess mode instead.
+    """
     get_request_histogram(service_name)
-
-    async def metrics_endpoint(_: Request) -> Response:
-        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-    app.add_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
+    try:
+        start_http_server(metrics_port, addr="0.0.0.0")
+        _log.info("metrics server listening on 0.0.0.0:%d", metrics_port)
+    except OSError:
+        # Best-effort: a bound port here means either two services share a
+        # process (test suites import multiple service `main` modules into
+        # one interpreter) or a real port collision on the host. Either
+        # way the app itself must keep starting; metrics being unreachable
+        # is not a reason to fail request serving.
+        _log.warning("metrics server could not bind 0.0.0.0:%d; already in use", metrics_port)

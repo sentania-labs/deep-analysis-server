@@ -56,7 +56,7 @@ from analytics_service.stats import router as stats_router
 from common.background_loop import BackgroundLoop
 from common.cache import invalidate_user
 from common.logging import configure_logging
-from common.metrics import mount_metrics
+from common.metrics import start_metrics_server
 from common.redis_client import get_redis
 
 SERVICE_NAME = "analytics"
@@ -332,6 +332,7 @@ async def _stop_card_backfill() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    start_metrics_server(SERVICE_NAME, get_settings().metrics_port)
     try:
         await _scryfall_loop.start()
     except Exception:  # noqa: BLE001 — healthz still serves even if scheduler fails
@@ -372,7 +373,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
-mount_metrics(app, SERVICE_NAME)
 app.include_router(archetypes_router)
 app.include_router(bnr_events_router)
 app.include_router(stats_router)

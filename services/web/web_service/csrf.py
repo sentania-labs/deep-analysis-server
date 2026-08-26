@@ -4,7 +4,7 @@ Every GET response sets a ``da_csrf`` cookie (if absent) containing a
 random token. Every POST form must include a hidden ``csrf_token``
 field whose value matches the cookie. Mismatches produce a 403.
 
-Exempt paths (healthz, metrics, static) are skipped entirely.
+Exempt paths (healthz, static) are skipped entirely.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ _EXEMPT_PREFIXES = (
     "/static",
     "/healthz",
     "/web/healthz",
-    "/metrics",
 )
 
 

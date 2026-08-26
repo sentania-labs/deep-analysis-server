@@ -167,9 +167,12 @@ services:
       DA_JWT_PRIVATE_KEY_PATH: ${DA_JWT_PRIVATE_KEY_PATH:-/data/secrets/jwt_private.pem}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+      DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL:-}
       DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD: ${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD:-}
       DEEP_ANALYSIS_FORCE_ADMIN_RESET: ${DEEP_ANALYSIS_FORCE_ADMIN_RESET:-false}
+    expose:
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:
@@ -201,6 +204,9 @@ services:
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_INGEST_RAW_PATH: /data/raw
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+      DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+    expose:
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - raw_archive:/data/raw
       - ./.secrets:/data/secrets:ro
@@ -233,6 +239,9 @@ services:
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_PARSER_RAW_PATH: /data/raw
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+      DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+    expose:
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - raw_archive:/data/raw:ro
       - ./.secrets:/data/secrets:ro
@@ -262,6 +271,9 @@ services:
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+      DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+    expose:
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:
@@ -291,6 +303,9 @@ services:
       DA_REDIS_URL: ${DA_REDIS_URL:-redis://redis:6379/0}
       DA_JWT_PUBLIC_KEY_PATH: ${DA_JWT_PUBLIC_KEY_PATH:-/data/secrets/jwt_public.pem}
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
+      DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+    expose:
+      - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:
       - ./.secrets:/data/secrets:ro
     depends_on:
