@@ -28,17 +28,18 @@
 <div class="bg-surface-3 dark:bg-surface-2 border dark:border-border border-border-light rounded-md p-3 text-sm dark:text-txt-primary text-txt-primary-light mb-4" role="status">{{ msg }}</div>
 {% endif %}
 
-{# Review-status filter chips — kept outside the main filter form so
-   they navigate independently and pre-set the dropdown for the user. #}
+{# Review-status filter chips: kept outside the main filter form so
+   they navigate independently and pre-set the dropdown for the user.
+   Built with filter_url so every other active filter survives the click. #}
 {% set rs = filters.review_status %}
 <div class="flex flex-wrap gap-2 mb-4 text-xs">
     {% set chip_base = "px-3 py-1 rounded-full border no-underline transition-colors" %}
     {% set chip_off = "dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:bg-surface-2 hover:bg-surface-light-3" %}
     {% set chip_on = "bg-accent text-white border-accent" %}
-    <a href="/admin/matches" class="{{ chip_base }} {% if not rs %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">All</a>
-    <a href="/admin/matches?review_status=pending_review" class="{{ chip_base }} {% if rs == 'pending_review' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Pending review</a>
-    <a href="/admin/matches?review_status=rejected" class="{{ chip_base }} {% if rs == 'rejected' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Rejected</a>
-    <a href="/admin/matches?review_status=normal" class="{{ chip_base }} {% if rs == 'normal' %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">Normal</a>
+    {% for value, label in [("", "All"), ("pending_review", "Pending review"), ("rejected", "Rejected"), ("normal", "Normal")] %}
+    <a href="{{ filter_url('/admin/matches', filters, {'review_status': value}, per_page=chip_per_page) }}"
+       class="{{ chip_base }} {% if rs == value %}{{ chip_on }}{% else %}{{ chip_off }}{% endif %}">{{ label }}</a>
+    {% endfor %}
 </div>
 
 {# Filter bar #}
