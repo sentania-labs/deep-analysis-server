@@ -89,6 +89,8 @@ docker compose --profile observability up -d
 
 Every push must go through a feature branch + PR, and only merges when CI is green. Direct pushes to `main` are reserved for urgent fixes with Scott's sign-off.
 
+A local PreToolUse hook also gates pushes on a `/self-review` marker that matches the HEAD of the tree being pushed. See [CONTRIBUTING.md](CONTRIBUTING.md#pre-push-review-gate).
+
 ### What CI covers
 
 Jobs and where each one runs (issue #161 set the placement, per the `github-ci` rule that the `lab` pool exists to reach the lab, not to avoid GitHub):
