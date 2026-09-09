@@ -10,7 +10,7 @@ fallback. This table stores the same identity outside ``parser.matches``
 so force-reparse can replace match rows without losing admin decisions.
 The source SHA remains as provenance even for canonical identities.
 
-Existing rejected and pending-review matches are copied during the normal
+Existing rejected matches are copied during the normal
 root migration that runs before services start. This protects current
 admin decisions on the first force-reparse after deployment.
 """
@@ -80,7 +80,7 @@ def upgrade() -> None:
                review_status,
                review_reason
           FROM parser.matches
-         WHERE review_status IN ('pending_review', 'rejected')
+         WHERE review_status = 'rejected'
         ON CONFLICT (user_id, identity_kind, identity_value) DO UPDATE
             SET source_sha256 = EXCLUDED.source_sha256,
                 verdict = EXCLUDED.verdict,

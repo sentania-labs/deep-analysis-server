@@ -16,7 +16,8 @@ from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.persistence import persist_match
 from parser_service.reparse import _delete_all_matches, _delete_matches_for_user
 from sqlalchemy import create_engine, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from alembic import command
 
@@ -396,7 +397,7 @@ async def test_in_place_parse_waits_for_concurrent_admin_verdict(
 
 
 @pytest.mark.parametrize("review_status", ["pending_review", "rejected"])
-def test_upgrade_migrates_existing_admin_verdict(review_status: str) -> None:
+def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_status: str) -> None:
     """Root startup migration protects admin decisions created before 032."""
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -409,7 +410,7 @@ def test_upgrade_migrates_existing_admin_verdict(review_status: str) -> None:
     match_id = uuid.uuid4()
     sha256 = ("8" if review_status == "pending_review" else "9") * 64
     raw_match_id = f"pre-032-{review_status}-match"
-    review_reason = f"admin set {review_status} before upgrade"
+    review_reason = "incomplete snapshot" if review_status == "pending_review" else "admin rejected"
 
     command.downgrade(cfg, "031")
     try:
@@ -447,14 +448,55 @@ def test_upgrade_migrates_existing_admin_verdict(review_status: str) -> None:
                      WHERE user_id = 9200
                     """
                 )
-            ).one()
-        assert tuple(row) == (
-            "raw_match_id",
-            raw_match_id,
-            sha256,
-            review_status,
-            review_reason,
-        )
+            ).one_or_none()
+        if review_status == "pending_review":
+            assert row is None
+        else:
+            assert row is not None
+            assert tuple(row) == (
+                "raw_match_id",
+                raw_match_id,
+                sha256,
+                review_status,
+                review_reason,
+            )
+
+        async def complete_and_rebuild() -> None:
+            async_engine = create_async_engine(make_url(db_url).set(drivername="postgresql+asyncpg"))
+            sessions = async_sessionmaker(async_engine, expire_on_commit=False)
+            expected_status = "rejected" if review_status == "rejected" else None
+            try:
+                async with sessions() as session:
+                    completed = await persist_match(
+                        session,
+                        _parsed(raw_match_id),
+                        sha256="ab" * 32,
+                        user_id=9200,
+                    )
+                    assert completed.id == match_id
+                    assert completed.review_status == expected_status
+                    visible = await _load_user_matches(session, 9200)
+                    assert len(visible) == (0 if expected_status else 1)
+
+                    deletion = await _delete_matches_for_user(
+                        session, 9200, None, None, agent_id=None,
+                    )
+                    assert deletion.deleted_count == 1
+                    assert deletion.verdicts_carried_forward == (1 if expected_status else 0)
+                    rebuilt = await persist_match(
+                        session,
+                        _parsed(raw_match_id),
+                        sha256="cd" * 32,
+                        user_id=9200,
+                    )
+                    assert rebuilt.id != match_id
+                    assert rebuilt.review_status == expected_status
+                    visible = await _load_user_matches(session, 9200)
+                    assert len(visible) == (0 if expected_status else 1)
+            finally:
+                await async_engine.dispose()
+
+        asyncio.run(complete_and_rebuild())
     finally:
         command.upgrade(cfg, "head")
         engine.dispose()

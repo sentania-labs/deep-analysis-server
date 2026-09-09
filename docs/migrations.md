@@ -7,7 +7,8 @@ under `services/<name>/alembic/`. Apply the root head before service heads;
 Docker Compose runs these as migration jobs before the dependent services start.
 
 Root revision `032` creates the durable match review verdict table and copies
-existing rejected and pending-review matches into it. Apply it before running
+existing rejected matches into it. Pending-review rows are excluded because
+they can represent automatic holds rather than admin decisions. Apply it before running
 the updated services or force-reparse. Prior accept/restore decisions cannot be
 backfilled because the old normal status did not distinguish an admin decision
 from a normal parse.
