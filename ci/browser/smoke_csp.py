@@ -50,6 +50,7 @@ class WaitTimeout(Exception):
 
 SMOKE_USER_EMAIL = "csp-smoke@local"
 SMOKE_USER_PASSWORD = "CspSmokeUserPw2026!"
+CANCELLED_USER_EMAIL = "csp-cancelled@local"
 FIXTURE_USER_EMAIL = "csp-fixture@local"
 FIXTURE_USER_PASSWORD = "CspFixtureUserPw2026!"
 
@@ -303,6 +304,7 @@ class Smoke:
 
         self.section("shared chrome", self.check_chrome, page, rec)
         self.section("/admin/settings controls", self.check_settings, page, rec)
+        self.section("submit-once control", self.check_submit_once, page, rec)
         self.section("scraper event pages", self.check_scraper_events, page, rec)
         self.section("/metagame component", self.check_metagame, page, rec)
 
@@ -430,6 +432,48 @@ class Smoke:
         )
         self.audit(page, rec, "/admin/settings interactions")
 
+    def check_submit_once(self, page: Page, rec: Recorder) -> None:
+        self.visit(page, rec, "/admin/bnr-events")
+        button = page.locator('button[data-submit-once][type="submit"]')
+        if not self.t.check(
+            "import-wiki submit-once button renders",
+            button.count() == 1,
+            str(button.count()),
+        ):
+            return
+
+        pattern = "**/admin/bnr-events/import-wiki"
+        intercepted_methods: list[str] = []
+
+        def intercept(route) -> None:
+            intercepted_methods.append(route.request.method)
+            route.fulfill(status=204, body="")
+
+        page.route(pattern, intercept)
+        try:
+            with page.expect_request(pattern):
+                state = button.evaluate(
+                    """button => {
+                        button.click();
+                        return {disabled: button.disabled, label: button.textContent.trim()};
+                    }"""
+                )
+            page.wait_for_timeout(100)
+        finally:
+            page.unroute(pattern, intercept)
+
+        self.t.check(
+            "submit-once sends only the intercepted POST",
+            intercepted_methods == ["POST"],
+            str(intercepted_methods),
+        )
+        self.t.check(
+            "submit-once disables and relabels the button",
+            state == {"disabled": True, "label": "Importing..."},
+            str(state),
+        )
+        self.audit(page, rec, "submit-once interaction")
+
     def check_metagame(self, page: Page, rec: Recorder) -> None:
         """/metagame/<format>: the Alpine `metagame` component (x-for, x-if,
         :style object, async window switch) and the Chart.js render."""
@@ -518,10 +562,38 @@ class Smoke:
 
     def ensure_smoke_user(self, page: Page, rec: Recorder) -> None:
         self.dialog_action = "accept"
+        self.delete_user(page, CANCELLED_USER_EMAIL, quiet=True)
         self.delete_smoke_user(page, quiet=True)
         page.goto(self.base + "/admin/users", wait_until="domcontentloaded")
         self.settle(page)
         form = page.locator('form[action^="/admin/users/create"]')
+
+        form.locator('input[name="email"]').fill(CANCELLED_USER_EMAIL)
+        form.locator('input[name="password"]').fill(SMOKE_USER_PASSWORD)
+        form.locator('select[name="role"]').select_option("user")
+        form.locator('input[name="must_change_password"]').uncheck()
+        initial_url = page.url
+        try:
+            self.dialog_action = "dismiss"
+            form.locator('button[type="submit"]').click()
+            page.wait_for_timeout(500)
+            self.settle(page)
+            self.t.check(
+                "create-user cancel stays on the same page",
+                page.url == initial_url,
+                page.url,
+            )
+            self.t.check(
+                "create-user cancel does not create a user",
+                self.user_row(page, CANCELLED_USER_EMAIL) is None,
+            )
+            self.audit(page, rec, "cancel create smoke user")
+        finally:
+            self.dialog_action = "accept"
+
+        if self.user_row(page, CANCELLED_USER_EMAIL) is not None:
+            self.delete_user(page, CANCELLED_USER_EMAIL, quiet=True)
+
         form.locator('input[name="email"]').fill(SMOKE_USER_EMAIL)
         form.locator('input[name="password"]').fill(SMOKE_USER_PASSWORD)
         form.locator('select[name="role"]').select_option("user")
@@ -535,28 +607,63 @@ class Smoke:
         )
         self.audit(page, rec, "create smoke user")
 
-    def smoke_user_row(self, page: Page):
+    def user_row(self, page: Page, email: str):
         rows = page.locator("tr[id^='user-']")
         for i in range(rows.count()):
             row = rows.nth(i)
-            if SMOKE_USER_EMAIL in (row.text_content() or ""):
+            if email in (row.text_content() or ""):
                 return row
         return None
 
-    def delete_smoke_user(self, page: Page, quiet: bool = False) -> None:
+    def smoke_user_row(self, page: Page):
+        return self.user_row(page, SMOKE_USER_EMAIL)
+
+    def delete_user(self, page: Page, email: str, quiet: bool = False) -> None:
         self.dialog_action = "accept"
         page.goto(self.base + "/admin/users", wait_until="domcontentloaded")
         self.settle(page)
-        row = self.smoke_user_row(page)
+        row = self.user_row(page, email)
         if row is None:
             if not quiet:
-                print("  SKIP: smoke user not present")
+                print(f"  SKIP: {email} not present")
             return
         with page.expect_navigation(wait_until="domcontentloaded"):
             row.locator('form[action*="/delete"] button[type="submit"]').click()
         self.settle(page)
         if not quiet:
-            self.t.check("smoke user deleted", self.smoke_user_row(page) is None)
+            self.t.check(f"{email} deleted", self.user_row(page, email) is None)
+
+    def delete_smoke_user(self, page: Page, quiet: bool = False) -> None:
+        self.delete_user(page, SMOKE_USER_EMAIL, quiet)
+
+    def check_dashboard_row_navigation(self, page: Page, rec: Recorder) -> None:
+        for label, key in (("mouse", None), ("Enter", "Enter"), ("Space", "Space")):
+            self.visit(page, rec, "/dashboard")
+            row = page.locator('tr[data-format][data-href*="format="]').first
+            if not self.t.check(
+                f"data-href {label} row renders",
+                row.count() == 1,
+            ):
+                continue
+            target = row.get_attribute("data-href")
+            if not self.t.check(
+                f"data-href {label} row has a format target",
+                bool(target) and "format=" in target,
+                str(target),
+            ):
+                continue
+            if key is None:
+                row.click()
+            else:
+                row.press(key)
+            self.settle(page)
+            final = re.sub(r"^https?://[^/]+", "", page.url)
+            self.t.check(
+                f"data-href {label} navigates to its format target",
+                final == target,
+                final,
+            )
+            self.audit(page, rec, f"data-href {label} interaction")
 
     # -------------------------------------------------------- fixture user
     def run_fixture_user(self, browser: Browser) -> None:
@@ -573,6 +680,7 @@ class Smoke:
             ctx.close()
             return
 
+        self.check_dashboard_row_navigation(page, rec)
         self.visit(page, rec, "/matches")
         links = page.locator('a[href^="/matches/"]')
         if not self.t.check(

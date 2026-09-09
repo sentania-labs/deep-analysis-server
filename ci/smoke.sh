@@ -208,12 +208,22 @@ fi
 
 echo ""
 echo "--- waiting for the bootstrap admin ---"
+admin_login_json=$(python3 -c '
+import json, os, sys
+json.dump(
+    {
+        "email": os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL"],
+        "password": os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD"],
+    },
+    sys.stdout,
+)
+')
 code=""
 for i in $(seq 1 60); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' \
+    code=$(printf '%s' "$admin_login_json" | curl -s -o /dev/null -w '%{http_code}' \
         -X POST "$BASE_URL/auth/login" \
         -H 'Content-Type: application/json' \
-        -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}" || true)
+        --data-binary @- || true)
     if [ "$code" = "200" ]; then
         echo "bootstrap admin ready after ${i} tries"
         break
@@ -267,12 +277,13 @@ SQL
 # in the same schemas the parser and analytics services own. Any setup failure
 # is fatal because the browser pass must never skip these paths.
 seed_csp_browser_fixture() {
-    local login_response admin_jwt create_response fixture_user_id list_response sql
+    local login_response admin_jwt fixture_user_json create_response fixture_user_id
+    local list_response sql
 
-    if ! login_response=$(curl -fsS \
+    if ! login_response=$(printf '%s' "$admin_login_json" | curl -fsS \
         -X POST "$BASE_URL/auth/login" \
         -H 'Content-Type: application/json' \
-        -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}"); then
+        --data-binary @-); then
         echo "STOP: could not log in as the bootstrap admin for the browser fixture" >&2
         return 1
     fi
@@ -283,12 +294,26 @@ seed_csp_browser_fixture() {
         return 1
     fi
 
-    if ! create_response=$(printf '%s\n' "$admin_jwt" | compose exec -T auth sh -c '
+    fixture_user_json=$(python3 -c '
+import json, sys
+json.dump(
+    {
+        "email": "csp-fixture@local",
+        "password": "CspFixtureUserPw2026!",
+        "role": "user",
+        "must_change_password": False,
+    },
+    sys.stdout,
+)
+')
+    if ! create_response=$(printf '%s\n%s\n' "$admin_jwt" "$fixture_user_json" \
+        | compose exec -T auth sh -c '
 read -r token
+read -r payload
 curl -sS -X POST http://localhost:8000/admin/users \
     -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
-    -d '\''{"email":"csp-fixture@local","password":"CspFixtureUserPw2026!","role":"user","must_change_password":false}'\''
+    --data-binary "${payload}"
 '); then
         echo "STOP: could not create csp-fixture@local through the auth admin API" >&2
         return 1

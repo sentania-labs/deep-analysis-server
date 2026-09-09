@@ -3,8 +3,10 @@
 {% block title %}Metagame{% if selected_format %} &middot; {{ selected_format }}{% endif %} &middot; Deep Analysis{% endblock %}
 
 {% block extra_head %}
+{% if selected_format and tiers is defined %}
 <script defer src="/static/js/metagame.js?v={{ app_version }}"></script>
 <script defer src="/static/vendor/chart-4.5.1.umd.js" integrity="sha384-hfkuqrKeWFmnTMWN31VWyoe8xgdTADD11kgxmdpx2uyE6j5Az5uZq6u6AKYYmAOw"></script>
+{% endif %}
 {% endblock %}
 
 {% block content %}
