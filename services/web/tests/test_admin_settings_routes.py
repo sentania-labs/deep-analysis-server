@@ -535,6 +535,7 @@ def _sample_tunables(
     parser_version: str = "0.9.0",
     reparse_min_version: str = "0.9.0",
     min_agent_version: str = "0.5.0",
+    s3_auto_backfill: bool = True,
 ) -> Any:
     from web_service import auth_client
 
@@ -543,6 +544,7 @@ def _sample_tunables(
         backfill_interval_seconds=300,
         scryfall_sync_interval_days=7,
         mtgo_scraper_interval_hours=24,
+        s3_auto_backfill=s3_auto_backfill,
         parser_version=parser_version,
         reparse_min_version=reparse_min_version,
         min_agent_version=min_agent_version,
@@ -641,3 +643,97 @@ async def test_get_settings_renders_editable_version_fields(
     assert "Agents on older versions will be prompted to upgrade" in r.text
     # The value rendered is what the (faked) auth service returned.
     assert 'value="0.6.0"' in r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_enabled", "running_enabled", "expects_restart_notice"),
+    [(True, True, False), (False, True, True), (False, False, False)],
+)
+async def test_get_settings_renders_auto_backfill_toggle_and_restart_notice(
+    saved_enabled: bool,
+    running_enabled: bool,
+    expects_restart_notice: bool,
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client, ingest_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    async def fake_mode(_url: str, _token: str) -> auth_client.RegistrationMode:
+        return _sample_mode()
+
+    async def fake_tunables(_url: str, _token: str) -> auth_client.TunablesResult:
+        return _sample_tunables(s3_auto_backfill=saved_enabled)
+
+    async def fake_backfill(_url: str, _token: str) -> dict[str, Any]:
+        return {
+            "enabled": running_enabled,
+            "status": "pending",
+            "is_running": False,
+            "percent": 0,
+            "processed": 0,
+            "expected": 0,
+            "remaining": 0,
+            "uploaded": 0,
+            "already_present": 0,
+            "verified": 0,
+            "missing_source": 0,
+            "failed": 0,
+            "hash_mismatch": 0,
+            "verify_errors": 0,
+            "source_available": False,
+            "completed_at": None,
+            "last_error": None,
+        }
+
+    monkeypatch.setattr(auth_client, "admin_get_registration_mode", fake_mode)
+    monkeypatch.setattr(auth_client, "admin_get_tunables", fake_tunables)
+    monkeypatch.setattr(ingest_client, "admin_get_raw_backfill", fake_backfill)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        response = await app_client.get("/admin/settings")
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    checkbox = response.text.split('name="automatic_enabled"', 1)[1].split(">", 1)[0]
+    assert ("checked" in checkbox) is saved_enabled
+    assert "Run migration now" in response.text
+    notice = "The saved setting differs from the running value. It takes effect at next start."
+    assert (notice in response.text) is expects_restart_notice
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("form", "expected"), [({"automatic_enabled": "true"}, True), ({}, False)])
+async def test_post_auto_backfill_setting_updates_persisted_tunable(
+    form: dict[str, str],
+    expected: bool,
+    app_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import auth_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    captured: dict[str, bool | int | str] = {}
+
+    async def fake_update(
+        _url: str, _token: str, updates: dict[str, bool | int | str]
+    ) -> tuple[auth_client.TunablesResult | None, str | None]:
+        captured.update(updates)
+        return _sample_tunables(s3_auto_backfill=expected), None
+
+    monkeypatch.setattr(auth_client, "admin_update_tunables", fake_update)
+    dep, _ = _override_admin()
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = dep
+    try:
+        response = await app_client.post("/admin/settings/raw-backfill/automatic", data=form)
+    finally:
+        _main.app.dependency_overrides.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/settings?raw_backfill_setting_saved=1"
+    assert captured == {"s3_auto_backfill": expected}

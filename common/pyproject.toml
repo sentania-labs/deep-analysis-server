@@ -35,4 +35,5 @@ bypass-selection = true
 "cache.py" = "common/cache.py"
 "health.py" = "common/health.py"
 "background_loop.py" = "common/background_loop.py"
+"job_lock.py" = "common/job_lock.py"
 "storage.py" = "common/storage.py"

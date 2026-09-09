@@ -27,6 +27,12 @@ class WebSettings(BaseServiceSettings):
     # backend-only contract as auth_service_url.
     parser_service_url: str = "http://parser:8000"
 
+    # Internal compose-network URL for the ingest service. Same
+    # backend-only contract as auth_service_url. Used only for the
+    # operator surface (raw-archive migration status); uploads go
+    # agent-to-ingest and never touch the web service.
+    ingest_service_url: str = "http://ingest:8000"
+
     # Matches auth.access_token_ttl_seconds default. If auth is
     # reconfigured, set DA_SESSION_COOKIE_TTL_SECONDS to match.
     session_cookie_ttl_seconds: int = 900

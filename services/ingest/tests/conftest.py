@@ -185,6 +185,7 @@ async def _truncate(async_engine: Any) -> AsyncIterator[None]:
         await s.execute(
             text(
                 "TRUNCATE ingest.user_uploads, ingest.game_log_files, "
+                "ingest.job_runs, ingest.backfill_state, "
                 "auth.agent_registrations, auth.sessions, auth.users "
                 "RESTART IDENTITY CASCADE"
             )
@@ -193,6 +194,18 @@ async def _truncate(async_engine: Any) -> AsyncIterator[None]:
         await s.execute(text("DELETE FROM auth.server_settings WHERE key LIKE 'tunable:%'"))
         await s.commit()
     yield
+
+
+@pytest_asyncio.fixture
+async def sessionmaker_factory(async_engine: Any, _truncate: None) -> Any:
+    """A real sessionmaker, for code that opens its own sessions.
+
+    ``db_session`` hands out one long-lived session; the auto-backfill
+    commits from several at once (progress writes while the migration
+    holds its own), so it needs the factory rather than a borrowed
+    session.
+    """
+    return async_sessionmaker(async_engine, expire_on_commit=False)
 
 
 @pytest_asyncio.fixture

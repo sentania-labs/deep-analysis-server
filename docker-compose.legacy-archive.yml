@@ -1,0 +1,29 @@
+# docker-compose.legacy-archive.yml: point the automatic raw-archive
+# migration at a legacy Docker VOLUME instead of a host path (issue #161).
+#
+# Use this overlay on a host upgraded from the pre-object-store
+# filesystem archive, where the old files live in a Compose-managed
+# volume rather than at a path you can name:
+#
+#   docker volume ls | grep raw_archive          # find the real name
+#   DA_LEGACY_ARCHIVE_VOLUME=<that-name> \
+#     docker compose -f docker-compose.yml -f docker-compose.legacy-archive.yml up -d
+#
+# Why this is an overlay and not the default: the volume is declared
+# `external: true` so `docker compose down -v` cannot destroy the only
+# pre-migration copy of the archive. External also means Compose will
+# not CREATE it, so a service that mounts it unconditionally would make
+# `docker compose up` fail outright on every fresh install, and Compose
+# has no way to mount a volume conditionally. The base file therefore
+# mounts a bind path that is created empty if missing (a fresh install
+# has nothing to migrate, which is the correct answer), and this overlay
+# is how a host that DOES have the volume says so without anyone
+# hand-copying a /var/lib/docker/volumes/... path into .env.
+#
+# Once the migration reports complete on the admin Settings page, stop
+# passing this overlay. Nothing re-checks: completion is recorded in
+# ingest.backfill_state. See docs/deploy.md.
+services:
+  ingest:
+    volumes:
+      - raw_archive:/data/raw:ro

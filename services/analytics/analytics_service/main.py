@@ -203,7 +203,7 @@ def _already_running_response(exc: ScrapeAlreadyRunning) -> JSONResponse:
         status_code=status.HTTP_409_CONFLICT,
         content={
             "error": "scrape_already_running",
-            "scraper_name": exc.scraper_name,
+            "scraper_name": exc.job_name,
             "running_since": exc.run.started_at.isoformat() if exc.run else None,
             "run_trigger": exc.run.trigger if exc.run else None,
         },

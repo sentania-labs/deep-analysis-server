@@ -144,6 +144,26 @@ async def test_patch_accepts_v_prefix_and_pre_release(
 
 
 @pytest.mark.asyncio
+async def test_patch_s3_auto_backfill_round_trip(client: Any, db_session: AsyncSession) -> None:
+    _admin_id, token = await _seed_admin(client, db_session)
+    r = await client.patch(
+        "/admin/settings/tunables",
+        json={"s3_auto_backfill": False},
+        headers=_h(token),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["s3_auto_backfill"] is False
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(ServerSetting).where(ServerSetting.key == "tunable:s3_auto_backfill")
+        )
+    ).scalar_one()
+    assert row.value is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "value",
     ["", "   ", "abc", "1.2", "1.2.x", "1.2.3.4", "not-a-version"],
@@ -190,6 +210,7 @@ async def test_get_tunables_surfaces_defaults(client: Any, db_session: AsyncSess
     assert body["parser_version"] == "0.9.0"
     assert body["reparse_min_version"] == "0.9.0"
     assert body["min_agent_version"] == "0.5.0"
+    assert body["s3_auto_backfill"] is True
 
 
 # ---------------------------------------------------------------------------

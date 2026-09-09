@@ -10,14 +10,17 @@ service boundary clean.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from common.agent_auth import AuthenticatedAgent
+from common.jwt_verify import InvalidTokenError, JWTVerifier
 from common.token_utils import hash_api_token
 from ingest_service.db import get_session
+from ingest_service.settings import get_settings
 
 
 def _unauthorized() -> HTTPException:
@@ -64,3 +67,63 @@ async def get_current_agent(
         machine_name=str(machine_name),
         client_version=(None if client_version is None else str(client_version)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin (user JWT) auth
+# ---------------------------------------------------------------------------
+#
+# Agent API tokens authenticate uploads; they say nothing about a human
+# operator. The raw-archive migration endpoints are operator surface, so
+# they take the same RS256 access token the rest of the admin UI carries
+# and require role=admin, exactly as analytics does.
+
+
+@dataclass
+class AuthenticatedUser:
+    user_id: int
+    role: str
+
+
+_verifier: JWTVerifier | None = None
+
+
+def get_verifier() -> JWTVerifier:
+    global _verifier
+    if _verifier is None:
+        s = get_settings()
+        _verifier = JWTVerifier(s.jwt_public_key_path, s.jwt_issuer, s.jwt_audience)
+    return _verifier
+
+
+def reset_verifier() -> None:
+    """Test hook."""
+    global _verifier
+    _verifier = None
+
+
+def _forbidden() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": "forbidden"},
+    )
+
+
+def _resolve_user(request: Request) -> AuthenticatedUser:
+    token = _extract_bearer(request)
+    try:
+        claims = get_verifier().verify(token)
+    except InvalidTokenError as exc:
+        raise _unauthorized() from exc
+    try:
+        return AuthenticatedUser(user_id=int(claims["sub"]), role=str(claims["role"]))
+    except (KeyError, ValueError) as exc:
+        raise _unauthorized() from exc
+
+
+async def require_admin(request: Request) -> AuthenticatedUser:
+    """Authenticated caller with role=admin."""
+    user = _resolve_user(request)
+    if user.role != "admin":
+        raise _forbidden()
+    return user

@@ -36,6 +36,7 @@ import asyncio
 import hashlib
 import logging
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -60,22 +61,34 @@ _FALLBACK_EXTS = (".dat", ".log", ".txt", ".xml", ".bin", "")
 # run short, not about saturating anything.
 _CONCURRENCY = 8
 
+# How often the progress callback fires, in rows. Small enough that a
+# 5k-object run reports dozens of times, large enough that the extra
+# write is noise next to the upload it accompanies.
+_PROGRESS_EVERY = 100
+
 
 @dataclass
 class BackfillCounts:
     """Everything an operator needs to decide whether this worked."""
 
     expected: int = 0
+    processed: int = 0
     uploaded: int = 0
     already_present: int = 0
     missing_source: int = 0
     hash_mismatch: int = 0
     failed: int = 0
     bytes_uploaded: int = 0
+    verify_errors: int = 0
     storage_paths_updated: int = 0
     source_files_scanned: int = 0
     orphan_source_files: int = 0
     verified: int = 0
+
+    @property
+    def remaining(self) -> int:
+        """Rows not yet accounted for in this pass."""
+        return max(0, self.expected - self.processed)
 
     @property
     def ok(self) -> bool:
@@ -84,6 +97,7 @@ class BackfillCounts:
             self.failed == 0
             and self.hash_mismatch == 0
             and self.missing_source == 0
+            and self.verify_errors == 0
             and self.verified == self.expected
         )
 
@@ -127,13 +141,18 @@ def index_source(root: Path) -> _SourceIndex:
     return index
 
 
-def locate_source(row: _Row, root: Path, index: _SourceIndex) -> Path | None:
+def locate_source(
+    row: _Row, root: Path, index: _SourceIndex, key_prefix: str = "raw"
+) -> Path | None:
     """Find the legacy file for ``row``, by recorded path then by index."""
     candidates: list[Path] = []
     recorded = row.storage_path.strip()
     # A pre-migration storage_path is a relative sharded path; a
-    # post-migration one is an object key, which is not on disk.
-    if recorded and not recorded.startswith(("s3://", "raw/")):
+    # post-migration one is an object key, which is not on disk. The
+    # prefix is configurable, so take it from the caller rather than
+    # assuming the default.
+    object_prefixes = ("s3://", f"{key_prefix.strip('/')}/") if key_prefix else ("s3://",)
+    if recorded and not recorded.startswith(object_prefixes):
         candidates.append(root / recorded)
     sha = row.sha256
     shard = root / sha[0:2] / sha[2:4]
@@ -180,7 +199,7 @@ async def _migrate_one(
     except ObjectStorageError as exc:
         return _Outcome(row=row, state="failed", detail=str(exc))
 
-    path = locate_source(row, root, index)
+    path = locate_source(row, root, index, key_prefix)
     if path is None:
         return _Outcome(row=row, state="missing_source")
 
@@ -230,19 +249,45 @@ async def _update_storage_paths(sm: Any, rows: list[_Row], key_prefix: str) -> i
     return len(updates)
 
 
-async def _verify(rows: list[_Row], store: ObjectStore, key_prefix: str) -> int:
-    """Count how many rows have an object actually present in the store."""
+async def _verify(rows: list[_Row], store: ObjectStore, key_prefix: str) -> tuple[int, int]:
+    """Count rows whose object is present, and rows we could not check.
+
+    "Absent" and "could not ask" are different facts and must not be
+    folded together. An unreachable store during the verify pass would
+    otherwise look exactly like a missing object, and a run that
+    actually succeeded would be recorded as permanently unfinishable.
+    """
     sem = asyncio.Semaphore(_CONCURRENCY)
 
-    async def _one(row: _Row) -> bool:
+    async def _one(row: _Row) -> bool | None:
         async with sem:
             try:
                 return await store.exists(object_key(row.sha256, key_prefix))
-            except ObjectStorageError:
-                return False
+            except ObjectStorageError as exc:
+                _log.warning("verify could not check sha=%s: %s", row.sha256, exc)
+                return None
 
     results = await asyncio.gather(*(_one(r) for r in rows))
-    return sum(1 for r in results if r)
+    return sum(1 for r in results if r is True), sum(1 for r in results if r is None)
+
+
+def _tally(counts: BackfillCounts, outcome: _Outcome) -> None:
+    """Fold one row's outcome into the running counts."""
+    if outcome.state in {"uploaded", "would_upload"}:
+        counts.uploaded += 1
+        counts.bytes_uploaded += outcome.size
+    elif outcome.state == "already_present":
+        counts.already_present += 1
+    elif outcome.state == "missing_source":
+        counts.missing_source += 1
+        _log.warning("no source file for sha=%s", outcome.row.sha256)
+    elif outcome.state == "hash_mismatch":
+        counts.hash_mismatch += 1
+        _log.error("hash mismatch sha=%s %s", outcome.row.sha256, outcome.detail)
+    else:
+        counts.failed += 1
+        _log.error("upload failed sha=%s: %s", outcome.row.sha256, outcome.detail)
+    counts.processed += 1
 
 
 async def run_backfill(
@@ -252,8 +297,19 @@ async def run_backfill(
     key_prefix: str = "raw",
     dry_run: bool = False,
     limit: int | None = None,
+    on_progress: Callable[[BackfillCounts], Awaitable[None]] | None = None,
+    progress_every: int = _PROGRESS_EVERY,
 ) -> BackfillCounts:
-    """Migrate the legacy archive into ``store`` and verify the result."""
+    """Migrate the legacy archive into ``store`` and verify the result.
+
+    ``on_progress`` is awaited every ``progress_every`` rows (and once
+    when the row pass finishes) with the counts so far. That is what
+    makes a multi-minute run legible from outside the process: the
+    automatic path persists those counts so an admin endpoint and the
+    metrics port can report expected / done / remaining while it is
+    still going. A progress callback that raises is logged and ignored;
+    reporting is never allowed to abort the migration.
+    """
     counts = BackfillCounts()
     rows = await _load_rows(sm)
     if limit is not None:
@@ -265,33 +321,32 @@ async def run_backfill(
     known = {r.sha256 for r in rows}
     counts.orphan_source_files = sum(1 for sha in index.by_sha if sha not in known)
 
+    async def _report() -> None:
+        if on_progress is None:
+            return
+        try:
+            await on_progress(counts)
+        except Exception:  # noqa: BLE001  (progress reporting must not abort the run)
+            _log.warning("backfill progress callback failed", exc_info=True)
+
+    await _report()
+
     sem = asyncio.Semaphore(_CONCURRENCY)
 
-    async def _one(row: _Row) -> _Outcome:
+    async def _one(row: _Row) -> None:
         async with sem:
-            return await _migrate_one(row, source_root, index, store, key_prefix, dry_run)
+            outcome = await _migrate_one(row, source_root, index, store, key_prefix, dry_run)
+        # Single-threaded event loop: no lock needed around the tally.
+        _tally(counts, outcome)
+        if progress_every > 0 and counts.processed % progress_every == 0:
+            await _report()
 
-    outcomes = await asyncio.gather(*(_one(r) for r in rows))
-
-    for outcome in outcomes:
-        if outcome.state in {"uploaded", "would_upload"}:
-            counts.uploaded += 1
-            counts.bytes_uploaded += outcome.size
-        elif outcome.state == "already_present":
-            counts.already_present += 1
-        elif outcome.state == "missing_source":
-            counts.missing_source += 1
-            _log.warning("no source file for sha=%s", outcome.row.sha256)
-        elif outcome.state == "hash_mismatch":
-            counts.hash_mismatch += 1
-            _log.error("hash mismatch sha=%s %s", outcome.row.sha256, outcome.detail)
-        else:
-            counts.failed += 1
-            _log.error("upload failed sha=%s: %s", outcome.row.sha256, outcome.detail)
+    await asyncio.gather(*(_one(r) for r in rows))
+    await _report()
 
     if not dry_run:
         counts.storage_paths_updated = await _update_storage_paths(sm, rows, key_prefix)
-        counts.verified = await _verify(rows, store, key_prefix)
+        counts.verified, counts.verify_errors = await _verify(rows, store, key_prefix)
 
     return counts
 
