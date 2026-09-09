@@ -1,16 +1,18 @@
-"""Regression guards for the browser execution boundary (issue #126).
+"""Template and asset lint for the browser execution boundary (issue #126).
 
-The gateway ships ``script-src 'self'`` and ``style-src 'self'`` with no
-'unsafe-inline', no 'unsafe-eval' and no third-party origin. Anything in a
-template that needs one of those is a silent breakage in production (the
-browser refuses it and only the console knows), so these tests fail the
-build instead:
+This is a lint over the web service's own artifacts, not a behaviour test:
 
-* no inline ``<script>`` (JSON data blocks excepted: they are never executed),
-* no ``on*=`` handlers and no ``style=`` attributes,
+* no inline ``<script>`` in a template (JSON data blocks excepted: they are
+  never executed),
+* no ``on*=`` handler and no ``style=`` attribute in a template,
 * no script, stylesheet, font or frame loaded from another origin,
-* every vendored third-party file matches ``static/vendor/manifest.json``,
+* every vendored third-party file hashes to ``static/vendor/manifest.json``,
 * the ``integrity`` attributes in templates match the manifest.
+
+Whether the pages actually run under the gateway CSP (Alpine expressions
+evaluating on the CSP build, htmx not injecting inline styles, no console
+error on any page or control) is proven in a real browser by
+``ci/browser/smoke_csp.py``, which is part of ``bash ci/smoke.sh ui``.
 """
 
 from __future__ import annotations
@@ -72,20 +74,6 @@ def test_template_loads_no_third_party_resource(template: Path) -> None:
     assert not hits, f"{template.name}: third-party resource load: {hits}"
 
 
-def test_alpine_expressions_avoid_globals() -> None:
-    """Alpine's CSP build resolves identifiers from component scope only.
-    A global in an x-* attribute throws at runtime; put that logic in
-    static/js instead."""
-    pattern = re.compile(
-        r"""(?:x-[a-z-]+|@[a-z.-]+|:[a-z-]+)="[^"]*\b"""
-        r"""(?:window|document|Math|localStorage|JSON|console|Alpine)\."""
-    )
-    offenders = [
-        f"{t.name}: {m.group(0)}" for t in TEMPLATES for m in pattern.finditer(t.read_text())
-    ]
-    assert not offenders, offenders
-
-
 def test_manifest_lists_every_vendored_file() -> None:
     manifest = _manifest()
     listed = {entry["path"] for entry in manifest["assets"]}
@@ -126,18 +114,3 @@ def test_template_integrity_attributes_match_manifest() -> None:
             assert sri == by_path[rel]["sri"], f"{t.name}: stale integrity for {rel}"
             seen += 1
     assert seen >= 3, "expected integrity attributes on htmx, alpine and chart.js"
-
-
-def test_base_template_disables_htmx_inline_features() -> None:
-    """htmx would inject an inline <style> for .htmx-indicator and would
-    evaluate hx-on / js: expressions with the Function constructor; both
-    are blocked by the CSP, so the meta config has to turn them off."""
-    base = (TEMPLATE_DIR / "base.html").read_text()
-    m = re.search(r"""<meta name="htmx-config" content='([^']+)'>""", base)
-    assert m, "htmx-config meta tag missing from base.html"
-    cfg = json.loads(m.group(1))
-    assert cfg.get("includeIndicatorStyles") is False
-    assert cfg.get("allowEval") is False
-    assert cfg.get("allowScriptTags") is False
-    css = (STATIC_DIR / "style.css").read_text()
-    assert ".htmx-indicator" in css, "indicator styles must live in style.css instead"

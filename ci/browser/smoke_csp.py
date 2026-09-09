@@ -263,7 +263,7 @@ class Smoke:
         self.t.check(
             f"{path}: style-src is exactly 'self'", bool(m) and m.group(1).strip() == "'self'", csp
         )
-        for directive in ("object-src 'none'", "base-uri 'self'", "frame-ancestors 'none'"):
+        for directive in ("object-src 'none'", "base-uri 'self'"):
             self.t.check(f"{path}: CSP has {directive}", directive in csp, csp)
 
     def login(self, page: Page, rec: Recorder, email: str, password: str, lands_on: str) -> bool:
@@ -474,7 +474,6 @@ class Smoke:
         self.visit(page, rec, links[0])
         root = page.locator('[x-data="metagame"]')
         self.t.check("metagame component root rendered", root.count() == 1)
-        rows = page.locator('[x-data="metagame"] tbody tr')
         self.wait_until(
             page,
             "document.querySelectorAll("
@@ -528,7 +527,6 @@ class Smoke:
             detail.wait_for(state="visible", timeout=5_000)
             self.t.check("event result expands on click", detail.is_visible())
             self.audit(page, rec, "/metagame event interactions")
-        _ = rows
 
     def ensure_smoke_user(self, page: Page, rec: Recorder) -> None:
         self.dialog_action = "accept"

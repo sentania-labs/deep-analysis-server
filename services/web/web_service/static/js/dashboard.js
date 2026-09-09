@@ -37,11 +37,6 @@
                     if (this.preset !== 'custom') this.selectPreset(this.preset);
                 },
 
-                // Editing either date input turns the preset into "custom".
-                markCustom: function () {
-                    this.preset = 'custom';
-                },
-
                 selectPreset: function (value) {
                     if (value === 'all' || value === '0') {
                         this.dateFrom = '';

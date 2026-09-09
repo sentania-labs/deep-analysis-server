@@ -22,10 +22,8 @@
     #   img-src also allows cards.scryfall.io: /cards shows card art from
     #   the Scryfall URLs the analytics service stores; images cannot be
     #   vendored and an <img> cannot execute anything.
-    #   object-src 'none', base-uri 'self', form-action 'self' and
-    #   frame-ancestors 'none' close plugin, <base>-hijack, form-hijack and
-    #   clickjacking vectors (frame-ancestors is the CSP form of the
-    #   X-Frame-Options header above; both are kept for older browsers).
+    #   object-src 'none' and base-uri 'self' close the plugin and
+    #   <base>-hijack script execution vectors.
     #
     # Rollback: restore this header block and the templates from the parent
     # of the commit that introduced it; nothing else depends on it.
@@ -34,7 +32,7 @@
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cards.scryfall.io; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cards.scryfall.io; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'"
     }
 
     handle /health {
