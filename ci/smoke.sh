@@ -386,6 +386,22 @@ VALUES
     ('mtgtop8', '00000000-0000-0000-0000-000000000126',
      now() - interval '1 day', now() - interval '1 day', 'manual', 'csp-smoke')
 ON CONFLICT (scraper_name) DO NOTHING;
+
+-- One archetype and one B&R event so /admin/archetypes and /admin/bnr-events
+-- render an edit link each. Without a row those list pages carry no link and
+-- the browser pass cannot reach the edit templates at all. Both ids are
+-- UUIDs, which is why the browser pass matches a UUID path segment.
+INSERT INTO analytics.archetypes (name, format, defining_cards)
+SELECT 'CSP Smoke Archetype', 'Pauper', '["Counterspell"]'::jsonb
+WHERE NOT EXISTS (
+    SELECT 1 FROM analytics.archetypes WHERE name = 'CSP Smoke Archetype'
+);
+
+INSERT INTO analytics.bnr_events (format, effective_date, description, card_actions)
+VALUES
+    ('Pauper', DATE '2026-01-01', 'CSP smoke B&R event',
+     '[{"card": "Counterspell", "action": "banned"}]'::jsonb)
+ON CONFLICT (format, effective_date) DO NOTHING;
 SQL
 )
     if printf '%s\n' "$sql" | compose exec -T postgres \

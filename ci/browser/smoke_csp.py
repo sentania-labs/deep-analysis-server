@@ -48,6 +48,10 @@ class WaitTimeout(Exception):
     """wait_until gave up."""
 
 
+# Archetype, B&R event and match ids are UUIDs, so a digit-only pattern
+# never matches and the edit pages drop out of the suite unnoticed.
+_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
 SMOKE_USER_EMAIL = "csp-smoke@local"
 SMOKE_USER_PASSWORD = "CspSmokeUserPw2026!"
 CANCELLED_USER_EMAIL = "csp-cancelled@local"
@@ -298,8 +302,8 @@ class Smoke:
 
         # Detail pages that only exist when rows exist: follow whatever the
         # list pages link to, so a populated stack gets more coverage.
-        self.visit_linked(page, rec, "/admin/archetypes", r"^/admin/archetypes/\d+/edit$")
-        self.visit_linked(page, rec, "/admin/bnr-events", r"^/admin/bnr-events/\d+/edit$")
+        self.visit_linked(page, rec, "/admin/archetypes", rf"^/admin/archetypes/{_UUID}/edit$")
+        self.visit_linked(page, rec, "/admin/bnr-events", rf"^/admin/bnr-events/{_UUID}/edit$")
         self.visit_linked(page, rec, "/admin/matches", r"^/admin/matches/[^/?]+$")
 
         self.section("shared chrome", self.check_chrome, page, rec)
@@ -326,7 +330,15 @@ class Smoke:
             if href and rx.match(href):
                 self.visit(page, rec, href)
                 return
-        print(f"  SKIP: no {pattern} link on {list_path} (no rows yet)")
+        # Not a skip. Every list this is called with is backed by a seeded
+        # fixture, so "no matching link" means the page did not render the
+        # row or the pattern no longer matches the id format, and the page
+        # it guards would silently drop out of the CSP coverage.
+        self.t.check(
+            f"{list_path} links to a page matching {pattern}",
+            False,
+            "no matching link rendered",
+        )
 
     def check_chrome(self, page: Page, rec: Recorder) -> None:
         """The base.html controls: theme toggle, profile menu, sidebar, MOTD."""
