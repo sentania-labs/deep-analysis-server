@@ -111,8 +111,11 @@ async def test_self_service_reparse_succeeds_when_slot_acquired(
         _before: Any,
         *,
         agent_id: str | None = None,
-    ) -> int:
-        return 5
+    ) -> _reparse.DeletedCountResponse:
+        return _reparse.DeletedCountResponse(
+            deleted_count=5,
+            verdicts_carried_forward=2,
+        )
 
     monkeypatch.setattr(_reparse, "_try_acquire_reparse_slot", fake_cas)
     monkeypatch.setattr(_reparse, "_delete_matches_for_user", fake_delete)
@@ -128,7 +131,7 @@ async def test_self_service_reparse_succeeds_when_slot_acquired(
         _clear_overrides()
 
     assert r.status_code == 200
-    assert r.json() == {"deleted_count": 5}
+    assert r.json() == {"deleted_count": 5, "verdicts_carried_forward": 2}
     assert cas_calls["uid"] == 123
     assert cas_calls["when"] == now
     assert cas_calls["cooldown"] == 3600
@@ -152,9 +155,9 @@ async def test_self_service_reparse_rate_limited_when_slot_held(
 
     called: dict[str, bool] = {"delete": False}
 
-    async def fake_delete(*_a: Any, **_kw: Any) -> int:
+    async def fake_delete(*_a: Any, **_kw: Any) -> _reparse.DeletedCountResponse:
         called["delete"] = True
-        return 0
+        return _reparse.DeletedCountResponse(deleted_count=0)
 
     monkeypatch.setattr(_reparse, "_try_acquire_reparse_slot", fake_cas)
     monkeypatch.setattr(_reparse, "_delete_matches_for_user", fake_delete)

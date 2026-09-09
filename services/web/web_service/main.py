@@ -2164,7 +2164,12 @@ async def admin_user_reparse(
         page=page,
         per_page=per_page,
         error=None,
-        result={"reparse": True, "user_id": user_id, "deleted_count": result.deleted_count},
+        result={
+            "reparse": True,
+            "user_id": user_id,
+            "deleted_count": result.deleted_count,
+            "verdicts_carried_forward": result.verdicts_carried_forward,
+        },
         status_code=200,
     )
 
@@ -4096,9 +4101,9 @@ async def admin_match_set_review_status(
 
     ``verdict`` is one of ``""`` (back to NULL, so user-visible),
     ``"pending_review"`` (flag for admin review), or ``"rejected"``
-    (hide from the user; the verdict is kept through an in-place
-    reparse, but a force-reparse deletes the row and loses it, see
-    issue #154). Anything else 422s.
+    (hide from the user; the verdict is stored by stable match identity
+    and survives both ordinary and force-reparse flows). Anything else
+    422s.
     """
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:

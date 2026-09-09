@@ -370,14 +370,12 @@ async def test_reject_form_confirms_with_match_context(
     assert "2026-05-22 12:00 UTC" in text
     assert "Pending review" in text
     assert "winner ambiguous" in text
-    # And it must state what rejecting actually does, without
-    # overstating durability: force-reparse deletes the row and loses
-    # the verdict (issue #154), so the wording must not promise the
-    # rejection survives every reparse.
+    # And it must state what rejecting actually does, including the
+    # durability guaranteed by the stable identity record.
     assert "hides this match" in text
     assert "not deleted" in text
-    assert "survives an ordinary reparse" in text
-    assert "not guaranteed to survive a force-reparse" in text
+    assert "kept across reparses" in text
+    assert "including force-reparse" in text
 
 
 @pytest.mark.asyncio
@@ -453,9 +451,9 @@ async def test_reject_button_label_does_not_claim_permanent_discard(
     )
     assert "Discard permanently" not in body
     assert "not deleted" in body
-    # But it must not claim the verdict outlives a force-reparse.
-    assert "kept across reparses" not in body
-    assert "a force-reparse can bring it back" in body
+    assert "kept across reparses" in body
+    assert "including force-reparse" in body
+    assert "a force-reparse can bring it back" not in body
 
 
 @pytest.mark.asyncio

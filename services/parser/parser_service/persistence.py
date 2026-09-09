@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import and_, case, delete, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,12 +26,81 @@ from parser_service.models import (
     GamePlayer,
     GameState,
     Match,
+    MatchReviewVerdict,
 )
 from parser_service.parsing.grouping_parser import ParsedGrouping, extract_deck_uuid
 from parser_service.parsing.models import ParsedGame, ParsedMatch
 from parser_service.settings import PARSER_VERSION
 
 _log = logging.getLogger("parser.persistence")
+
+
+@dataclass(frozen=True)
+class StoredReviewVerdict:
+    """Admin decision resolved from the durable identity table."""
+
+    review_status: str | None
+    review_reason: str | None
+
+
+async def _find_stored_review_verdict(
+    session: AsyncSession,
+    raw_match_id: str | None,
+    sha256: str,
+    user_id: int,
+) -> StoredReviewVerdict | None:
+    """Find an admin verdict using the parser's identity precedence.
+
+    When a legacy SHA-keyed decision is found during a parse that now
+    has ``raw_match_id``, add the canonical identity before returning.
+    The legacy row remains as provenance and as a fallback for old data.
+    """
+    identity_conditions = [
+        and_(
+            MatchReviewVerdict.identity_kind == "source_sha256",
+            MatchReviewVerdict.identity_value == sha256,
+        )
+    ]
+    if raw_match_id is not None:
+        identity_conditions.insert(
+            0,
+            and_(
+                MatchReviewVerdict.identity_kind == "raw_match_id",
+                MatchReviewVerdict.identity_value == raw_match_id,
+            ),
+        )
+
+    row = (
+        await session.execute(
+            select(MatchReviewVerdict)
+            .where(
+                MatchReviewVerdict.user_id == user_id,
+                or_(*identity_conditions),
+            )
+            .order_by(case((MatchReviewVerdict.identity_kind == "raw_match_id", 0), else_=1))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    if raw_match_id is not None and row.identity_kind == "source_sha256":
+        promote = (
+            pg_insert(MatchReviewVerdict)
+            .values(
+                user_id=user_id,
+                identity_kind="raw_match_id",
+                identity_value=raw_match_id,
+                source_sha256=row.source_sha256,
+                verdict=row.verdict,
+                review_reason=row.review_reason,
+            )
+            .on_conflict_do_nothing(index_elements=["user_id", "identity_kind", "identity_value"])
+        )
+        await session.execute(promote)
+    return StoredReviewVerdict(
+        review_status=None if row.verdict == "accepted" else row.verdict,
+        review_reason=row.review_reason,
+    )
 
 
 def _parse_quality_key(
@@ -100,10 +170,12 @@ async def _find_existing_match(
     if raw_match_id is not None:
         row = (
             await session.execute(
-                select(Match).where(
+                select(Match)
+                .where(
                     Match.raw_match_id == raw_match_id,
                     Match.user_id == user_id,
                 )
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if row is not None:
@@ -111,11 +183,13 @@ async def _find_existing_match(
 
     return (
         await session.execute(
-            select(Match).where(
+            select(Match)
+            .where(
                 Match.sha256 == sha256,
                 Match.user_id == user_id,
                 Match.raw_match_id.is_(None),
             )
+            .with_for_update()
         )
     ).scalar_one_or_none()
 
@@ -170,6 +244,7 @@ async def _update_match_row(
     review_status: str | None,
     review_reason: str | None,
     existing_review_status: str | None,
+    stored_review_verdict: StoredReviewVerdict | None,
     now: datetime,
     preserve_manual_format: bool,
 ) -> None:
@@ -182,13 +257,10 @@ async def _update_match_row(
     ``review_status`` is the new desired status from the caller
     (``None`` for a conclusive parse, ``'pending_review'`` for a
     partial one). ``existing_review_status`` is what's already on the
-    row. The rule: a row that an admin has already ``'rejected'`` stays
-    rejected on an in-place reparse: admin verdicts are not auto-undone.
-    This only holds while the row survives. A force-reparse deletes the
-    matches row outright (see ``parser_service/reparse.py``), so the
-    verdict is lost and the match can be recreated visible; issue #154
-    tracks that gap. Otherwise
-    the new status wins, which is what upgrades a previous
+    row. A durable admin verdict wins first. For legacy rows without a
+    durable record, an existing ``'rejected'`` status still stays
+    rejected on an in-place reparse. Otherwise the new status wins,
+    which is what upgrades a previous
     ``pending_review`` row to NULL when a later conclusive snapshot
     arrives for the same logical match.
     """
@@ -208,8 +280,11 @@ async def _update_match_row(
         "parsed_with_version": PARSER_VERSION,
         "hero_player_name": hero_player_name,
     }
-    if existing_review_status == "rejected":
-        # Preserve admin's rejection — a later snapshot must not undo it.
+    if stored_review_verdict is not None:
+        values["review_status"] = stored_review_verdict.review_status
+        values["review_reason"] = stored_review_verdict.review_reason
+    elif existing_review_status == "rejected":
+        # Preserve legacy admin rejections that predate the verdict table.
         values["review_status"] = "rejected"
         # Keep the original review_reason on rejected rows.
     else:
@@ -263,14 +338,16 @@ async def persist_match(
     holding-pen parses (winner-less but at least one game observed).
     On reparse, the new status wins so a later, conclusive snapshot
     upgrades a ``pending_review`` row back to NULL. Admin rejections
-    (``'rejected'``) survive an in-place reparse, but not a
-    force-reparse, which deletes the row first (issue #154). See
-    :func:`_update_match_row`.
+    are reapplied from ``match_review_verdicts`` even when a force-reparse
+    replaced the match row. See :func:`_update_match_row`.
     """
     now = datetime.now(UTC)
     raw_match_id = parsed.raw_match_id
 
     existing = await _find_existing_match(session, raw_match_id, sha256, user_id)
+    stored_review_verdict = await _find_stored_review_verdict(
+        session, raw_match_id, sha256, user_id
+    )
 
     if existing is not None:
         match_id = existing.id
@@ -298,6 +375,9 @@ async def persist_match(
             }
             if existing.raw_match_id is None and raw_match_id is not None:
                 bookkeeping["raw_match_id"] = raw_match_id
+            if stored_review_verdict is not None:
+                bookkeeping["review_status"] = stored_review_verdict.review_status
+                bookkeeping["review_reason"] = stored_review_verdict.review_reason
             await session.execute(update(Match).where(Match.id == match_id).values(**bookkeeping))
             await session.commit()
             refreshed = (
@@ -322,6 +402,7 @@ async def persist_match(
             review_status=review_status,
             review_reason=review_reason,
             existing_review_status=existing.review_status,
+            stored_review_verdict=stored_review_verdict,
             now=now,
             preserve_manual_format=existing.format_source == "manual",
         )
@@ -334,8 +415,16 @@ async def persist_match(
                 user_id=user_id,
                 raw_match_id=raw_match_id,
                 hero_player_name=hero_player_name,
-                review_status=review_status,
-                review_reason=review_reason,
+                review_status=(
+                    stored_review_verdict.review_status
+                    if stored_review_verdict is not None
+                    else review_status
+                ),
+                review_reason=(
+                    stored_review_verdict.review_reason
+                    if stored_review_verdict is not None
+                    else review_reason
+                ),
                 now=now,
             )
         except IntegrityError:
@@ -347,6 +436,9 @@ async def persist_match(
             existing = await _find_existing_match(session, raw_match_id, sha256, user_id)
             if existing is None:
                 raise
+            stored_review_verdict = await _find_stored_review_verdict(
+                session, raw_match_id, sha256, user_id
+            )
             match_id = existing.id
             await _update_match_row(
                 session,
@@ -358,6 +450,7 @@ async def persist_match(
                 review_status=review_status,
                 review_reason=review_reason,
                 existing_review_status=existing.review_status,
+                stored_review_verdict=stored_review_verdict,
                 now=now,
                 preserve_manual_format=existing.format_source == "manual",
             )
