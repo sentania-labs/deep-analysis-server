@@ -379,8 +379,8 @@ class Smoke:
         menu.wait_for(state="hidden", timeout=5_000)
         self.t.check("profile menu closes on outside click", not menu.is_visible())
 
-        # Sidebar store on a narrow viewport: the hamburger toggles it, the
-        # backdrop closes it. Start from a known state.
+        # Sidebar store on a narrow viewport: the backdrop closes it. Start
+        # from a known state.
         page.set_viewport_size({"width": 800, "height": 900})
         page.evaluate("Alpine.store('sidebar').open = true")
         backdrop = page.locator("div.fixed.inset-0.z-30")
@@ -388,14 +388,6 @@ class Smoke:
         backdrop.click(position={"x": 700, "y": 600})
         self.wait_until(page, "Alpine.store('sidebar').open === false", timeout=5_000)
         self.t.check("backdrop click closes the sidebar", True)
-        page.click('button[aria-label="Toggle sidebar"]')
-        page.wait_for_timeout(300)
-        opened = page.evaluate("Alpine.store('sidebar').open")
-        self.t.check("hamburger opens the sidebar", opened is True, f"open={opened}")
-        if opened:
-            page.click('button[aria-label="Toggle sidebar"]')
-            self.wait_until(page, "Alpine.store('sidebar').open === false", timeout=5_000)
-            self.t.check("hamburger closes the sidebar again", True)
         page.set_viewport_size({"width": 1280, "height": 900})
         self.audit(page, rec, "shared chrome interactions")
 

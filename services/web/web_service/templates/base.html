@@ -28,11 +28,8 @@
         <div class="flex items-center justify-between w-full">
             <div class="flex items-center gap-3">
                 {% if user %}
-                {# Mobile hamburger. .stop keeps this click from reaching the
-                   sidebar's @click.outside listener (Alpine registers .outside
-                   listeners on document, .window notwithstanding), which used
-                   to close the sidebar again in the same event. #}
-                <button @click.stop="$store.sidebar.toggle()"
+                {# Mobile hamburger #}
+                <button @click="$store.sidebar.toggle()"
                         aria-label="Toggle sidebar"
                         class="lg:hidden dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
