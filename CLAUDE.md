@@ -63,7 +63,10 @@ Payload shapes are TBD — final schema will be in openapi/ or a dedicated event
 
 These are locked decisions from the v0.4.0 plan. If you think one needs revisiting, surface it to Scott — don't unilaterally change it.
 
-1. **Six services, one compose stack.** Not a monolith, not a k8s deployment. Compose on `docker.int` for ship.
+1. **Six services, one application.** Docker Compose remains the supported
+   self-hosting path. Lab rollout is declared by `sentania-labs/lab-deployment`
+   under `apps/deep-analysis/`, with images pinned by digest and reconciled by
+   Argo CD.
 2. **Single Postgres, per-service logical schemas.** Schemas: `auth.*`, `ingest.*`, `parser.*`, `analytics.*`. Analytics reads across schemas but owns no tables.
 3. **Redis for event bus and caches.** Ingest publishes `file.ingested`; parser consumes it. Services also use Redis for short-lived caches.
 4. **Short-lived JWTs for service-to-service auth.** `auth` service issues JWTs; each service holds the public key to verify inbound tokens.

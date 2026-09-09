@@ -5,6 +5,16 @@ The general contribution flow (feature branch, PR, green CI before merge) is in
 tests. This file covers the pre-push review gate, which is a local hook rather
 than a CI job.
 
+## Release boundary
+
+A version tag publishes the service images to GHCR and creates a GitHub
+Release. The release is complete when those artifacts exist. It does not deploy
+the application.
+
+Lab rollout is owned by `sentania-labs/lab-deployment`, which references the
+chosen image digest under `apps/deep-analysis/`. Argo CD reconciles that desired
+state. Changes to what runs in the lab belong in that repository.
+
 ## Pre-push review gate
 
 `.claude/hooks/check-review-passed.sh` runs as a PreToolUse hook on every Bash
