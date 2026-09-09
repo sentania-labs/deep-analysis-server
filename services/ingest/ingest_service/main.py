@@ -75,16 +75,17 @@ async def _read_auto_backfill_setting(
                     )
                 )
             ).scalar_one_or_none()
-    except Exception:  # noqa: BLE001  (the environment fallback keeps startup available)
+    except Exception:  # noqa: BLE001
         _log.warning(
-            "failed to read s3_auto_backfill tunable; using configured fallback", exc_info=True
+            "failed to read s3_auto_backfill tunable; automatic starts disabled until restart",
+            exc_info=True,
         )
-        return fallback
+        return False
     if value is None:
         return fallback
     if not isinstance(value, bool):
-        _log.warning("invalid s3_auto_backfill tunable; using configured fallback")
-        return fallback
+        _log.warning("invalid s3_auto_backfill tunable; automatic starts disabled until restart")
+        return False
     return value
 
 
