@@ -86,6 +86,7 @@ def _sample_tunables() -> Any:
         backfill_interval_seconds=300,
         scryfall_sync_interval_days=7,
         mtgo_scraper_interval_hours=24,
+        s3_auto_backfill=True,
         parser_version="0.9.0",
         reparse_min_version="0.9.0",
         min_agent_version="0.5.0",

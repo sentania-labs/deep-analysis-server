@@ -101,6 +101,7 @@
 {# Raw archive migration (issue #161) #}
 {% if raw_backfill_triggered %}<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Raw archive migration started. Progress updates below as it runs.</div>{% endif %}
 {% if raw_backfill_running %}<div class="bg-warning-muted border border-warning/20 text-warning rounded-md p-3 text-sm mb-4" role="status">A raw archive migration is already running.</div>{% endif %}
+{% if raw_backfill_setting_saved %}<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">Automatic migration setting saved.</div>{% endif %}
 
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
     <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Raw archive migration</h2>
@@ -109,6 +110,26 @@
         background after a deploy and never deletes anything from the old location. Until it finishes,
         re-reading a raw log (force-reparse, admin re-ingest) fails for the files it has not reached yet.
     </p>
+
+    {% if tunables is not none %}
+        <form method="post" action="/admin/settings/raw-backfill/automatic" class="flex flex-wrap items-center gap-3 mb-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="inline-flex items-center gap-2 text-sm dark:text-txt-primary text-txt-primary-light">
+                <input type="checkbox" name="automatic_enabled" value="true" {% if tunables.s3_auto_backfill %}checked{% endif %}
+                       class="h-4 w-4 rounded border-border-light text-accent focus:ring-accent">
+                Start automatically
+            </label>
+            <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors">Save setting</button>
+        </form>
+        <p class="text-xs dark:text-txt-secondary text-txt-secondary-light mb-4">
+            Changes take effect at the next ingest service start. Disabling automatic start does not cancel a migration already in flight.
+        </p>
+        {% if raw_backfill is not none and tunables.s3_auto_backfill != raw_backfill.enabled %}
+            <p class="bg-warning-muted border border-warning/20 text-warning rounded-md p-3 text-xs mb-4" role="status">
+                The saved setting differs from the running value. It takes effect at next start.
+            </p>
+        {% endif %}
+    {% endif %}
 
     {% if raw_backfill is none %}
         <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">Migration status unavailable (ingest service not reachable).</p>
@@ -126,7 +147,7 @@
                 <span class="bg-surface-3 dark:text-txt-secondary text-txt-secondary-light text-xs font-medium px-2 py-0.5 rounded">{{ raw_backfill.status|upper }}</span>
             {% endif %}
             {% if not raw_backfill.enabled %}
-                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Automatic migration is off (<code>DA_S3_AUTO_BACKFILL=false</code>). The button below still works.</span>
+                <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">This ingest process is running with automatic migration off. The button below still works.</span>
             {% endif %}
         </div>
 

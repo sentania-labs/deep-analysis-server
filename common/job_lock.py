@@ -79,6 +79,11 @@ HEARTBEAT_SECONDS = 30.0
 #: iteration or a stalled event loop never steals a live lock.
 STALE_AFTER_SECONDS = 180.0
 
+#: Stop a worker after this many consecutive heartbeat errors. At the
+#: production 30-second interval this aborts after 90 seconds, leaving a
+#: further 90 seconds before another replica may treat the lease as stale.
+HEARTBEAT_FAILURE_LIMIT = 3
+
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"
 #: A job the service started on its own at boot, with no operator input.
@@ -110,9 +115,10 @@ class JobAlreadyRunning(Exception):
 class JobLeaseLost(Exception):
     """Raised when a running job lost its lock to another owner.
 
-    Means the heartbeat could not be refreshed for longer than the
-    staleness window (a stalled event loop, or database trouble), so the
-    run was aborted mid-flight to keep the one-at-a-time guarantee.
+    Means the heartbeat could not be refreshed safely, either because
+    another owner took over or because repeated database errors made the
+    lease unverifiable. The run is aborted before a second owner can work
+    alongside it.
     """
 
     def __init__(self, job_name: str, run: JobRun) -> None:
@@ -416,19 +422,38 @@ async def get_run(job_name: str, *, store: LockStore) -> JobRun | None:
 async def _heartbeat_loop(
     store: LockStore, run: JobRun, interval: float, lost: asyncio.Event
 ) -> None:
+    consecutive_failures = 0
     while True:
         await asyncio.sleep(interval)
         try:
             held_still = await store.heartbeat(run.job_name, run.run_id)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001  (a failed heartbeat must not kill the job)
+        except Exception:  # noqa: BLE001  (bounded retries handle database trouble)
+            consecutive_failures += 1
             _log.warning(
                 "job lock heartbeat failed",
-                extra={"job_name": run.job_name, "run_id": run.run_id},
+                extra={
+                    "job_name": run.job_name,
+                    "run_id": run.run_id,
+                    "consecutive_failures": consecutive_failures,
+                    "failure_limit": HEARTBEAT_FAILURE_LIMIT,
+                },
                 exc_info=True,
             )
+            if consecutive_failures >= HEARTBEAT_FAILURE_LIMIT:
+                _log.error(
+                    "job lock heartbeat failure limit reached; aborting worker",
+                    extra={
+                        "job_name": run.job_name,
+                        "run_id": run.run_id,
+                        "consecutive_failures": consecutive_failures,
+                    },
+                )
+                lost.set()
+                return
             continue
+        consecutive_failures = 0
         if not held_still:
             # Our row is gone or belongs to someone else: the staleness
             # window elapsed for us and somebody legitimately took over.

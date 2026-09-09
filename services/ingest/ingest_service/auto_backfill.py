@@ -473,6 +473,9 @@ async def run_once(
 
     try:
         state = await read_state(sm)
+    except asyncio.CancelledError:
+        await asyncio.shield(_release_preacquired())
+        raise
     except Exception:
         # A database hiccup at boot must not silently cost the caller
         # its lock, nor look like a decision.
@@ -494,6 +497,9 @@ async def run_once(
     # durably so this is the last boot that asks the question.
     try:
         any_rows = await has_archive_rows(sm)
+    except asyncio.CancelledError:
+        await asyncio.shield(_release_preacquired())
+        raise
     except Exception:
         await _release_preacquired()
         raise

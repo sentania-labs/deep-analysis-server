@@ -259,6 +259,7 @@ class TunablesView(BaseModel):
     backfill_interval_seconds: int
     scryfall_sync_interval_days: int
     mtgo_scraper_interval_hours: int
+    s3_auto_backfill: bool
     reparse_min_version: str
     min_agent_version: str
     parser_version: str
@@ -271,6 +272,7 @@ class UpdateTunablesRequest(BaseModel):
     backfill_interval_seconds: int | None = Field(default=None, ge=60, le=3600)
     scryfall_sync_interval_days: int | None = Field(default=None, ge=1, le=30)
     mtgo_scraper_interval_hours: int | None = Field(default=None, ge=1, le=168)
+    s3_auto_backfill: bool | None = None
     # Version-string tunables. Validated against a loose semver regex
     # in the admin endpoint so we can return a 400 with a field-level
     # error rather than letting Pydantic 422 the whole request.
@@ -287,6 +289,7 @@ class UpdateTunablesRequest(BaseModel):
                 self.backfill_interval_seconds,
                 self.scryfall_sync_interval_days,
                 self.mtgo_scraper_interval_hours,
+                self.s3_auto_backfill,
                 self.parser_version,
                 self.reparse_min_version,
                 self.min_agent_version,

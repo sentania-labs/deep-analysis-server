@@ -289,8 +289,14 @@ an object in the bucket for every single row in
 
 #### Turning it off, and driving it by hand
 
-`DA_S3_AUTO_BACKFILL=false` disables the automatic run. The one-shot job
-is unchanged and still supported:
+Use the **Start automatically** toggle under Admin > Settings. The saved
+value takes effect at the next ingest service start. If it differs from
+the value used by the running process, the page shows that a restart is
+needed. Disabling automatic start does not cancel a migration already in
+flight, and **Run migration now** remains available.
+
+`DA_S3_AUTO_BACKFILL=false` supplies the fallback before the GUI setting
+has been saved. The one-shot job is unchanged and still supported:
 
 ```bash
 docker compose --profile backfill run --rm raw-backfill

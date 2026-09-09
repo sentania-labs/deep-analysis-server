@@ -1115,6 +1115,7 @@ class TunablesResult:
     backfill_interval_seconds: int
     scryfall_sync_interval_days: int
     mtgo_scraper_interval_hours: int
+    s3_auto_backfill: bool
     reparse_min_version: str
     min_agent_version: str
     parser_version: str
@@ -1135,6 +1136,7 @@ async def admin_get_tunables(base_url: str, token: str) -> TunablesResult:
         backfill_interval_seconds=int(data["backfill_interval_seconds"]),
         scryfall_sync_interval_days=int(data["scryfall_sync_interval_days"]),
         mtgo_scraper_interval_hours=int(data["mtgo_scraper_interval_hours"]),
+        s3_auto_backfill=bool(data["s3_auto_backfill"]),
         reparse_min_version=str(data["reparse_min_version"]),
         min_agent_version=str(data["min_agent_version"]),
         parser_version=str(data["parser_version"]),
@@ -1144,7 +1146,7 @@ async def admin_get_tunables(base_url: str, token: str) -> TunablesResult:
 async def admin_update_tunables(
     base_url: str,
     token: str,
-    updates: dict[str, int | str],
+    updates: dict[str, bool | int | str],
 ) -> tuple[TunablesResult | None, str | None]:
     """Admin-only: patch mutable tunables. Returns (result, error_code).
 
@@ -1166,6 +1168,7 @@ async def admin_update_tunables(
             backfill_interval_seconds=int(data["backfill_interval_seconds"]),
             scryfall_sync_interval_days=int(data["scryfall_sync_interval_days"]),
             mtgo_scraper_interval_hours=int(data["mtgo_scraper_interval_hours"]),
+            s3_auto_backfill=bool(data["s3_auto_backfill"]),
             reparse_min_version=str(data["reparse_min_version"]),
             min_agent_version=str(data["min_agent_version"]),
             parser_version=str(data["parser_version"]),

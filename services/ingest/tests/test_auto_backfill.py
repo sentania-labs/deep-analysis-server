@@ -33,7 +33,7 @@ from ingest_service.auto_backfill import (
 )
 from sqlalchemy import text
 
-from common.job_lock import TRIGGER_MANUAL, TRIGGER_STARTUP, PostgresJobLockStore
+from common.job_lock import TRIGGER_MANUAL, TRIGGER_STARTUP, PostgresJobLockStore, acquire
 from common.storage import S3Config, S3ObjectStore, object_key
 
 pytestmark = pytest.mark.asyncio
@@ -369,6 +369,95 @@ async def test_disabled_by_config_does_not_run(
         state = await read_state(sessionmaker_factory)
         assert state.status == "pending"
     finally:
+        job_lock.set_store(None)
+        _settings.reset_settings()
+
+
+async def test_persisted_disabled_setting_overrides_enabled_environment(
+    sessionmaker_factory: Any,
+    lock_store: PostgresJobLockStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ingest_service import main as _main
+    from ingest_service import settings as _settings
+
+    await _seed(sessionmaker_factory, tmp_path, 2)
+    async with sessionmaker_factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO auth.server_settings (key, value) "
+                "VALUES ('tunable:s3_auto_backfill', 'false'::jsonb)"
+            )
+        )
+        await session.commit()
+
+    called = False
+
+    async def _never(*_args: Any, **_kwargs: Any) -> BackfillCounts:  # pragma: no cover
+        nonlocal called
+        called = True
+        return BackfillCounts()
+
+    monkeypatch.setattr(auto_backfill, "run_backfill", _never)
+    monkeypatch.setenv("DA_LEGACY_ARCHIVE_PATH", str(tmp_path))
+    monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "true")
+    _settings.reset_settings()
+    job_lock.set_store(lock_store)
+
+    try:
+        async with _main.lifespan(_main.app):
+            await asyncio.sleep(0.2)
+            assert _main._auto_backfill_enabled is False
+        assert called is False
+    finally:
+        job_lock.set_store(None)
+        _settings.reset_settings()
+
+
+async def test_disabling_automatic_start_does_not_cancel_inflight_migration(
+    sessionmaker_factory: Any,
+    lock_store: PostgresJobLockStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ingest_service import main as _main
+    from ingest_service import settings as _settings
+
+    await _seed(sessionmaker_factory, tmp_path, 1)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_backfill(*_args: Any, **_kwargs: Any) -> BackfillCounts:
+        started.set()
+        await release.wait()
+        return BackfillCounts(expected=1, processed=1, verified=1, already_present=1)
+
+    monkeypatch.setattr(auto_backfill, "run_backfill", _slow_backfill)
+    monkeypatch.setenv("DA_LEGACY_ARCHIVE_PATH", str(tmp_path))
+    monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "true")
+    _settings.reset_settings()
+    job_lock.set_store(lock_store)
+
+    try:
+        async with _main.lifespan(_main.app):
+            await asyncio.wait_for(started.wait(), timeout=10)
+            async with sessionmaker_factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO auth.server_settings (key, value) "
+                        "VALUES ('tunable:s3_auto_backfill', 'false'::jsonb)"
+                    )
+                )
+                await session.commit()
+            await asyncio.sleep(0.05)
+            assert _main._backfill_task is not None
+            assert not _main._backfill_task.done()
+            assert _main._auto_backfill_enabled is True
+            release.set()
+            await asyncio.wait_for(_main._backfill_task, timeout=10)
+    finally:
+        release.set()
         job_lock.set_store(None)
         _settings.reset_settings()
 
@@ -913,6 +1002,43 @@ async def test_a_missing_mount_with_unmigrated_rows_stays_loud(
 # --------------------------------------------------------------------------- #
 # Cancellation
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cancelled_precheck", ["read_state", "has_archive_rows"])
+async def test_cancelling_a_precheck_releases_a_manually_acquired_lock(
+    cancelled_precheck: str,
+    sessionmaker_factory: Any,
+    store: S3ObjectStore,
+    lock_store: PostgresJobLockStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation before run_locked must not strand the endpoint's lock."""
+    entered = asyncio.Event()
+
+    async def blocked_precheck(*_args: Any, **_kwargs: Any) -> Any:
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(auto_backfill, cancelled_precheck, blocked_precheck)
+    run = await acquire(JOB_NAME, trigger=TRIGGER_MANUAL, store=lock_store)
+    task = asyncio.create_task(
+        run_once(
+            sessionmaker_factory,
+            store,
+            tmp_path,
+            trigger=TRIGGER_MANUAL,
+            lock_store=lock_store,
+            run=run,
+        )
+    )
+    await asyncio.wait_for(entered.wait(), timeout=2)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await lock_store.read(JOB_NAME) is None
 
 
 async def test_cancelling_the_run_stops_the_work_before_the_lock_is_released(

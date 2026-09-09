@@ -2811,6 +2811,7 @@ def _render_admin_settings(
     raw_backfill: dict[str, Any] | None = None,
     raw_backfill_triggered: bool = False,
     raw_backfill_running: bool = False,
+    raw_backfill_setting_saved: bool = False,
     status_code: int,
 ) -> Response:
     # Build per-scraper dicts for template convenience
@@ -2849,6 +2850,7 @@ def _render_admin_settings(
             "raw_backfill": raw_backfill,
             "raw_backfill_triggered": raw_backfill_triggered,
             "raw_backfill_running": raw_backfill_running,
+            "raw_backfill_setting_saved": raw_backfill_setting_saved,
         },
         status_code=status_code,
     )
@@ -2869,6 +2871,7 @@ async def admin_settings(
     scrape_mtgtop8_running: Annotated[int, Query(ge=0, le=1)] = 0,
     raw_backfill_triggered: Annotated[int, Query(ge=0, le=1)] = 0,
     raw_backfill_running: Annotated[int, Query(ge=0, le=1)] = 0,
+    raw_backfill_setting_saved: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -2951,6 +2954,7 @@ async def admin_settings(
         raw_backfill=raw_backfill,
         raw_backfill_triggered=raw_backfill_triggered == 1,
         raw_backfill_running=raw_backfill_running == 1,
+        raw_backfill_setting_saved=raw_backfill_setting_saved == 1,
         status_code=code,
     )
 
@@ -3247,6 +3251,43 @@ async def admin_settings_raw_backfill(
         )
     return RedirectResponse(
         url="/admin/settings?raw_backfill_triggered=1", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@app.post("/admin/settings/raw-backfill/automatic")
+async def admin_settings_raw_backfill_automatic(
+    request: Request,
+    automatic_enabled: Annotated[str | None, Form()] = None,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+) -> Response:
+    """Persist whether ingest should start the migration on its next start."""
+    blocked = _require_admin_or_403(request, user)
+    if blocked is not None:
+        return blocked
+
+    try:
+        result, error = await auth_client.admin_update_tunables(
+            settings.auth_service_url,
+            user.token,
+            {"s3_auto_backfill": automatic_enabled == "true"},
+        )
+    except auth_client.AuthForbidden:
+        return _admin_forbidden(request, user)
+    except auth_client.AuthClientError:
+        _log.exception("auth PATCH /admin/settings/tunables call failed")
+        return Response(
+            content="Authentication service unavailable. Please try again.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if error is not None or result is None:
+        return Response(
+            content="Could not update the automatic migration setting.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    return RedirectResponse(
+        url="/admin/settings?raw_backfill_setting_saved=1",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 

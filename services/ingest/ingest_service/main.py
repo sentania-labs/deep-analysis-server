@@ -26,7 +26,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from common.agent_auth import AuthenticatedAgent
 from common.events import FILE_INGESTED, FileIngestedPayload
@@ -58,13 +58,44 @@ _log = logging.getLogger("ingest.main")
 
 _backfill_task: asyncio.Task[None] | None = None
 _manual_task: asyncio.Task[None] | None = None
+_auto_backfill_enabled: bool | None = None
+
+
+async def _read_auto_backfill_setting(
+    sm: async_sessionmaker[AsyncSession], *, fallback: bool
+) -> bool:
+    """Resolve the persisted automatic-start setting once per process start."""
+    try:
+        async with sm() as session:
+            value = (
+                await session.execute(
+                    text(
+                        "SELECT value FROM auth.server_settings "
+                        "WHERE key = 'tunable:s3_auto_backfill'"
+                    )
+                )
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001  (the environment fallback keeps startup available)
+        _log.warning(
+            "failed to read s3_auto_backfill tunable; using configured fallback", exc_info=True
+        )
+        return fallback
+    if value is None:
+        return fallback
+    if not isinstance(value, bool):
+        _log.warning("invalid s3_auto_backfill tunable; using configured fallback")
+        return fallback
+    return value
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    global _backfill_task
+    global _auto_backfill_enabled, _backfill_task
     settings = get_settings()
     start_metrics_server(SERVICE_NAME, settings.metrics_port)
+    _auto_backfill_enabled = await _read_auto_backfill_setting(
+        get_sessionmaker(), fallback=settings.s3_auto_backfill
+    )
 
     # The legacy-archive migration (issue #161) is started here and
     # deliberately NOT awaited. `create_task` schedules the coroutine
@@ -72,7 +103,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # normal speed: healthz answers and uploads are served while a
     # 5,000-object migration is still moving bytes in the background.
     # Awaiting it here would turn every deploy into a multi-minute hang.
-    if settings.s3_auto_backfill:
+    if _auto_backfill_enabled:
         _backfill_task = auto_backfill.start(
             get_sessionmaker(),
             get_store(),
@@ -81,7 +112,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             retry_seconds=settings.s3_auto_backfill_retry_seconds,
         )
     else:
-        _log.info("automatic raw archive migration disabled (DA_S3_AUTO_BACKFILL=false)")
+        _log.info("automatic raw archive migration disabled")
 
     try:
         yield
@@ -95,6 +126,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 await task
         _backfill_task = None
         _manual_task = None
+        _auto_backfill_enabled = None
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
@@ -434,7 +466,11 @@ async def admin_raw_backfill_status(
     payload = await auto_backfill.status_payload(
         get_sessionmaker(),
         settings.legacy_archive_path,
-        enabled=settings.s3_auto_backfill,
+        enabled=(
+            _auto_backfill_enabled
+            if _auto_backfill_enabled is not None
+            else settings.s3_auto_backfill
+        ),
     )
     return JSONResponse(content=jsonable_encoder(payload))
 

@@ -28,6 +28,8 @@ from analytics_service.scraper_lock import (
     run_status_fields,
 )
 
+from common.job_lock import HEARTBEAT_FAILURE_LIMIT, HEARTBEAT_SECONDS, STALE_AFTER_SECONDS
+
 MTGO = "mtgo"
 
 
@@ -435,6 +437,44 @@ async def test_scrape_is_aborted_when_another_owner_takes_the_lock(
     current = await store.read(MTGO)
     assert current is not None
     assert current.trigger == TRIGGER_SCHEDULED
+
+
+async def test_database_partition_aborts_worker_before_lease_can_expire(
+    store: InMemoryLockStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated database errors must stop work before stale takeover is legal."""
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    heartbeat_attempts = 0
+
+    async def partitioned_heartbeat(_job_name: str, _run_id: str) -> bool:
+        nonlocal heartbeat_attempts
+        heartbeat_attempts += 1
+        raise ConnectionError("database partition")
+
+    async def long_scrape() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(store, "heartbeat", partitioned_heartbeat)
+
+    with pytest.raises(ScrapeLeaseLost):
+        await run_locked(
+            MTGO,
+            long_scrape,
+            trigger=TRIGGER_MANUAL,
+            store=store,
+            heartbeat_seconds=0.01,
+        )
+
+    assert started.is_set()
+    assert cancelled.is_set(), "the worker must stop while the lease is still exclusive"
+    assert heartbeat_attempts == HEARTBEAT_FAILURE_LIMIT
+    assert HEARTBEAT_FAILURE_LIMIT * HEARTBEAT_SECONDS < STALE_AFTER_SECONDS
 
 
 async def test_lease_loss_does_not_crash_the_scheduler_tick(

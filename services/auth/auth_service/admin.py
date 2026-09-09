@@ -732,6 +732,10 @@ _STRING_TUNABLE_DEFAULTS: dict[str, str] = {
     "min_agent_version": "0.5.0",
 }
 
+_BOOLEAN_TUNABLE_DEFAULTS: dict[str, bool] = {
+    "s3_auto_backfill": True,
+}
+
 # Loose semver-ish gate: X.Y.Z or vX.Y.Z plus an optional -suffix
 # (e.g. "0.5.0", "v1.2.3", "0.5.0-rc1"). Numeric components only.
 _VERSION_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$")
@@ -763,6 +767,16 @@ async def _read_string_tunable(db: AsyncSession, key: str) -> str:
     return row.value
 
 
+async def _read_boolean_tunable(db: AsyncSession, key: str) -> bool:
+    """Read a boolean tunable with its compiled default as fallback."""
+    row = (
+        await db.execute(select(ServerSetting).where(ServerSetting.key == f"tunable:{key}"))
+    ).scalar_one_or_none()
+    if row is None or not isinstance(row.value, bool):
+        return _BOOLEAN_TUNABLE_DEFAULTS[key]
+    return row.value
+
+
 async def read_min_agent_version(db: AsyncSession) -> str:
     """Public accessor for the heartbeat handler. Returns the
     DB-backed minimum agent version with the compiled fallback."""
@@ -775,6 +789,7 @@ async def _read_all_tunables(db: AsyncSession) -> TunablesView:
         backfill_interval_seconds=await _read_tunable(db, "backfill_interval_seconds"),
         scryfall_sync_interval_days=await _read_tunable(db, "scryfall_sync_interval_days"),
         mtgo_scraper_interval_hours=await _read_tunable(db, "mtgo_scraper_interval_hours"),
+        s3_auto_backfill=await _read_boolean_tunable(db, "s3_auto_backfill"),
         reparse_min_version=await _read_string_tunable(db, "reparse_min_version"),
         min_agent_version=await _read_string_tunable(db, "min_agent_version"),
         parser_version=await _read_string_tunable(db, "parser_version"),
@@ -808,6 +823,10 @@ async def update_tunables(
     if body.mtgo_scraper_interval_hours is not None:
         int_updates["mtgo_scraper_interval_hours"] = body.mtgo_scraper_interval_hours
 
+    boolean_updates: dict[str, bool] = {}
+    if body.s3_auto_backfill is not None:
+        boolean_updates["s3_auto_backfill"] = body.s3_auto_backfill
+
     string_updates: dict[str, str] = {}
     for field in ("parser_version", "reparse_min_version", "min_agent_version"):
         raw = getattr(body, field)
@@ -821,7 +840,7 @@ async def update_tunables(
             )
         string_updates[field] = candidate
 
-    for key, value in (*int_updates.items(), *string_updates.items()):
+    for key, value in (*int_updates.items(), *boolean_updates.items(), *string_updates.items()):
         db_key = f"tunable:{key}"
         row = (
             await db.execute(select(ServerSetting).where(ServerSetting.key == db_key))
