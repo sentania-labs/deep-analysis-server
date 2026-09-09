@@ -298,8 +298,12 @@ if ! command -v docker >/dev/null 2>&1; then
 elif [ -z "$ADMIN_JWT" ]; then
     echo "  SKIP-REASON: no admin JWT in session cookie jar"
     RUN_CRUD=0
-elif ! docker compose ps auth >/dev/null 2>&1; then
-    echo "  SKIP-REASON: docker compose project not reachable from $(pwd)"
+elif [ -z "$(docker compose ps --quiet --status running auth 2>/dev/null)" ]; then
+    # `docker compose ps auth` exits 0 with EMPTY output when the service is
+    # not part of the resolved project, so testing its exit status alone let
+    # a wrong COMPOSE_PROJECT_NAME slide through as a FAIL instead of a skip.
+    # Require an actual running container id.
+    echo "  SKIP-REASON: no running 'auth' container in the resolved compose project"
     RUN_CRUD=0
 fi
 

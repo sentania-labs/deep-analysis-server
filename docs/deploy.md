@@ -2,6 +2,18 @@
 
 Deployment and environment guide for the Deep Analysis server stack.
 
+## Release boundary
+
+This repository's release process publishes the five service images to GHCR and
+creates a GitHub Release. The image digest is its output. Release CI does not
+select or update a running environment.
+
+The lab deployment is declared in
+[`sentania-labs/lab-deployment`](https://github.com/sentania-labs/lab-deployment)
+under `apps/deep-analysis/`. That repository pins the selected image digest,
+and Argo CD reconciles the cluster. The remaining instructions in this document
+are for independent Docker Compose self-hosting.
+
 ## Prerequisites
 
 - Docker Engine 24+ with the Compose v2 plugin

@@ -405,8 +405,15 @@ class ParserConsumer:
         sha256: str,
         user_id: int,
         file_mtime: float | None = None,
-    ) -> None:
-        """Handle a decklist (grouping XML) upload — parse and persist."""
+    ) -> bool:
+        """Handle a decklist (grouping XML) upload: parse and persist.
+
+        Returns True only when a deck composition was actually parsed
+        and persisted. Every early return (missing raw object, size
+        ceiling, read error, unparseable XML, persist failure) returns
+        False so callers can count real work. :func:`scan_unparsed`
+        keys its processed counter on this.
+        """
         try:
             content = await read_raw(
                 self._store,
@@ -416,18 +423,18 @@ class ParserConsumer:
             )
         except RawFileNotFoundError:
             _log.warning("raw grouping object missing for sha=%s; skipping", sha256)
-            return
+            return False
         except RawFileTooLargeError:
             _log.warning("raw grouping object exceeds size ceiling sha=%s; skipping", sha256)
-            return
+            return False
         except (ObjectStorageError, OSError):
             _log.exception("failed to read raw grouping object sha=%s", sha256)
-            return
+            return False
 
         parsed = parse_grouping_xml(content)
         if parsed is None:
             _log.warning("grouping XML unparseable sha=%s user_id=%s", sha256, user_id)
-            return
+            return False
 
         original_filename = await self._lookup_original_filename(sha256, user_id)
 
@@ -444,7 +451,7 @@ class ParserConsumer:
             except Exception:
                 _log.exception("persist deck composition failed sha=%s user_id=%s", sha256, user_id)
                 await session.rollback()
-                return
+                return False
 
         _log.info(
             "deck composition parsed sha=%s user_id=%s type=%s name=%s items=%d",
@@ -454,6 +461,7 @@ class ParserConsumer:
             parsed.name,
             len(parsed.items),
         )
+        return True
 
 
 # ---------------------------------------------------------------------------
