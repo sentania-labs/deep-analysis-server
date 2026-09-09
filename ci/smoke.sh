@@ -380,13 +380,6 @@ WHERE m.sha256 = repeat('c', 64)
   AND g.game_number = 1
 ON CONFLICT (game_id, turn_number, active_player) DO NOTHING;
 
-INSERT INTO analytics.scraper_runs
-    (scraper_name, run_id, started_at, heartbeat_at, trigger, owner)
-VALUES
-    ('mtgtop8', '00000000-0000-0000-0000-000000000126',
-     now() - interval '1 day', now() - interval '1 day', 'manual', 'csp-smoke')
-ON CONFLICT (scraper_name) DO NOTHING;
-
 -- One archetype and one B&R event so /admin/archetypes and /admin/bnr-events
 -- render an edit link each. Without a row those list pages carry no link and
 -- the browser pass cannot reach the edit templates at all. Both ids are
@@ -407,7 +400,7 @@ SQL
     if printf '%s\n' "$sql" | compose exec -T postgres \
         psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q \
         -v fixture_user_id="$fixture_user_id"; then
-        echo "browser fixture seeded (csp-fixture@local, match, turns, scraper run)"
+        echo "browser fixture seeded (csp-fixture@local, match, turns)"
     else
         echo "STOP: could not seed the fixture-backed browser paths" >&2
         return 1
