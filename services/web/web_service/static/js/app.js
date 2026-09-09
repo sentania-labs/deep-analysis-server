@@ -23,13 +23,6 @@
 (function () {
     'use strict';
 
-    function storageGet(key) {
-        try { return window.localStorage.getItem(key); } catch (e) { return null; }
-    }
-    function storageSet(key, value) {
-        try { window.localStorage.setItem(key, value); } catch (e) { /* private mode etc. */ }
-    }
-
     // ---- Alpine components and stores ---------------------------------------
     document.addEventListener('alpine:init', function () {
         // <html x-data="themeManager">: dark/light toggle persisted in localStorage.
@@ -37,7 +30,7 @@
             return {
                 isDark: true,
                 init: function () {
-                    var stored = storageGet('theme');
+                    var stored = window.localStorage.getItem('theme');
                     if (stored === 'light') {
                         this.isDark = false;
                     } else if (stored === 'system') {
@@ -48,17 +41,17 @@
                 },
                 toggle: function () {
                     this.isDark = !this.isDark;
-                    storageSet('theme', this.isDark ? 'dark' : 'light');
+                    window.localStorage.setItem('theme', this.isDark ? 'dark' : 'light');
                 }
             };
         });
 
         // $store.sidebar: the authenticated layout's collapsible sidebar.
         Alpine.store('sidebar', {
-            open: storageGet('sidebar_open') !== 'false',
+            open: window.localStorage.getItem('sidebar_open') !== 'false',
             toggle: function () {
                 this.open = !this.open;
-                storageSet('sidebar_open', this.open);
+                window.localStorage.setItem('sidebar_open', this.open);
             },
             // Mobile only: tapping outside the sidebar closes it.
             closeOnMobile: function () {
@@ -68,10 +61,6 @@
     });
 
     // ---- Declarative behaviours ---------------------------------------------
-
-    function isInteractive(el) {
-        return !!(el.closest && el.closest('a, button, input, select, textarea, label'));
-    }
 
     // <form data-confirm="Really?">: ask before submitting. Capture phase so
     // it runs before anything else and can cancel the submit.
@@ -90,13 +79,13 @@
     // <tr data-href="/path" role="button" tabindex="0">: the whole row is a link.
     document.addEventListener('click', function (e) {
         var row = e.target.closest && e.target.closest('[data-href]');
-        if (!row || isInteractive(e.target)) return;
+        if (!row) return;
         window.location.href = row.dataset.href;
     });
     document.addEventListener('keydown', function (e) {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         var row = e.target.closest && e.target.closest('[data-href]');
-        if (!row || isInteractive(e.target)) return;
+        if (!row) return;
         e.preventDefault();
         window.location.href = row.dataset.href;
     });
@@ -145,11 +134,11 @@
         btn.form.submit();
     });
 
-    // <div data-progress-percent="42">: set the width through the CSSOM.
-    // A style="width: 42%" attribute is an inline style and CSP blocks it;
-    // assigning element.style.width is not.
+    // <div data-progress-percent="42">: set the width through the CSSOM once
+    // at load. A style="width: 42%" attribute is an inline style and CSP
+    // blocks it; assigning element.style.width is not.
     function applyProgressWidths(root) {
-        var nodes = (root || document).querySelectorAll('[data-progress-percent]');
+        var nodes = root.querySelectorAll('[data-progress-percent]');
         Array.prototype.forEach.call(nodes, function (el) {
             var pct = parseFloat(el.dataset.progressPercent);
             if (isNaN(pct)) return;
@@ -157,7 +146,4 @@
         });
     }
     applyProgressWidths(document);
-    document.addEventListener('htmx:load', function (e) {
-        applyProgressWidths(e.detail && e.detail.elt);
-    });
 })();

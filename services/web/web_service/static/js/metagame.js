@@ -84,7 +84,6 @@
                     if (!canvas) return;
                     if (chart) { chart.destroy(); chart = null; }
                     if (!this.trendLabels.length) return;
-                    if (typeof Chart === 'undefined') return;
                     var isDark = document.documentElement.classList.contains('dark');
                     var gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
                     var textColor = isDark ? '#8b8b9e' : '#6b6b7e';
