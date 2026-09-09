@@ -462,7 +462,9 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
             )
 
         async def complete_and_rebuild() -> None:
-            async_engine = create_async_engine(make_url(db_url).set(drivername="postgresql+asyncpg"))
+            async_engine = create_async_engine(
+                make_url(db_url).set(drivername="postgresql+asyncpg")
+            )
             sessions = async_sessionmaker(async_engine, expire_on_commit=False)
             expected_status = "rejected" if review_status == "rejected" else None
             try:
@@ -479,7 +481,11 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
                     assert len(visible) == (0 if expected_status else 1)
 
                     deletion = await _delete_matches_for_user(
-                        session, 9200, None, None, agent_id=None,
+                        session,
+                        9200,
+                        None,
+                        None,
+                        agent_id=None,
                     )
                     assert deletion.deleted_count == 1
                     assert deletion.verdicts_carried_forward == (1 if expected_status else 0)
