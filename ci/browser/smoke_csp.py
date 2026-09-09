@@ -19,10 +19,7 @@ way ci/smoke_ui.sh does.
 
 Usage:
     DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=... DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=... \\
-    uv run smoke_csp.py http://localhost:8080 [--expect-metagame]
-
---expect-metagame: ci/smoke.sh passes it after seeding a metagame fixture, so a
-/metagame page that renders no tier table is a FAIL instead of a SKIP.
+    uv run smoke_csp.py http://localhost:8080
 
 Exit 0 = every check passed. Exit 1 = one or more failed.
 """
@@ -53,6 +50,8 @@ class WaitTimeout(Exception):
 
 SMOKE_USER_EMAIL = "csp-smoke@local"
 SMOKE_USER_PASSWORD = "CspSmokeUserPw2026!"
+FIXTURE_USER_EMAIL = "csp-fixture@local"
+FIXTURE_USER_PASSWORD = "CspFixtureUserPw2026!"
 
 # Recorded before any page script runs, so nothing is missed.
 INIT_SCRIPT = """
@@ -160,9 +159,8 @@ class Recorder:
 
 
 class Smoke:
-    def __init__(self, base_url: str, expect_metagame: bool) -> None:
+    def __init__(self, base_url: str) -> None:
         self.base = base_url.rstrip("/")
-        self.expect_metagame = expect_metagame
         self.t = Tally()
         self.admin_email = os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL"]
         self.admin_password = os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD"]
@@ -299,13 +297,13 @@ class Smoke:
 
         # Detail pages that only exist when rows exist: follow whatever the
         # list pages link to, so a populated stack gets more coverage.
-        self.visit_linked(page, rec, "/admin/scrapers", r"^/admin/scrapers/[^/]+/events$")
         self.visit_linked(page, rec, "/admin/archetypes", r"^/admin/archetypes/\d+/edit$")
         self.visit_linked(page, rec, "/admin/bnr-events", r"^/admin/bnr-events/\d+/edit$")
         self.visit_linked(page, rec, "/admin/matches", r"^/admin/matches/[^/?]+$")
 
         self.section("shared chrome", self.check_chrome, page, rec)
         self.section("/admin/settings controls", self.check_settings, page, rec)
+        self.section("scraper event pages", self.check_scraper_events, page, rec)
         self.section("/metagame component", self.check_metagame, page, rec)
 
         print("")
@@ -445,10 +443,7 @@ class Smoke:
         )
         links = [h for h in links if h and "/events/" not in h]
         if not links:
-            if self.expect_metagame:
-                self.t.check("metagame fixture rendered a format link", False, "none found")
-            else:
-                print("  SKIP: no metagame formats on this stack")
+            self.t.check("metagame fixture rendered a format link", False, "none found")
             return
         self.visit(page, rec, links[0])
         root = page.locator('[x-data="metagame"]')
@@ -507,6 +502,20 @@ class Smoke:
             self.t.check("event result expands on click", detail.is_visible())
             self.audit(page, rec, "/metagame event interactions")
 
+    def check_scraper_events(self, page: Page, rec: Recorder) -> None:
+        list_path = "/admin/scrapers/mtgtop8/events"
+        self.visit(page, rec, list_path)
+        links = page.locator('a[href^="/admin/scrapers/mtgtop8/events/"]')
+        if not self.t.check(
+            "scraper fixture rendered an event link",
+            links.count() > 0,
+            "none found",
+        ):
+            return
+        detail_path = links.first.get_attribute("href")
+        if self.t.check("scraper fixture event link has a target", bool(detail_path)):
+            self.visit(page, rec, detail_path)
+
     def ensure_smoke_user(self, page: Page, rec: Recorder) -> None:
         self.dialog_action = "accept"
         self.delete_smoke_user(page, quiet=True)
@@ -521,7 +530,7 @@ class Smoke:
             form.locator('button[type="submit"]').click()  # data-confirm accepted
         self.settle(page)
         self.t.check(
-            "create-user form (data-confirm) created the smoke user",
+            "create-user button (data-confirm) created the smoke user",
             self.smoke_user_row(page) is not None,
         )
         self.audit(page, rec, "create smoke user")
@@ -548,6 +557,89 @@ class Smoke:
         self.settle(page)
         if not quiet:
             self.t.check("smoke user deleted", self.smoke_user_row(page) is None)
+
+    # -------------------------------------------------------- fixture user
+    def run_fixture_user(self, browser: Browser) -> None:
+        print("")
+        print("--- fixture user session ---")
+        ctx, page, rec = self.new_page(browser)
+        if not self.login(
+            page,
+            rec,
+            FIXTURE_USER_EMAIL,
+            FIXTURE_USER_PASSWORD,
+            "/dashboard",
+        ):
+            ctx.close()
+            return
+
+        self.visit(page, rec, "/matches")
+        links = page.locator('a[href^="/matches/"]')
+        if not self.t.check(
+            "fixture match renders in match history",
+            links.count() > 0,
+            "none found",
+        ):
+            ctx.close()
+            return
+        match_path = links.first.get_attribute("href")
+        if not self.t.check("fixture match links to its detail page", bool(match_path)):
+            ctx.close()
+            return
+
+        self.visit(page, rec, match_path)
+        format_select = page.locator("select[data-autosubmit]")
+        if not self.t.check(
+            "match detail renders the format selector",
+            format_select.count() == 1,
+            str(format_select.count()),
+        ):
+            ctx.close()
+            return
+        with page.expect_navigation(wait_until="domcontentloaded") as navigation:
+            format_select.select_option("Pauper")
+        self.settle(page)
+        response = navigation.value
+        self.t.check(
+            "data-autosubmit returns the match detail page",
+            response is not None and response.status == 200,
+            f"got {response.status if response else 0}",
+        )
+        selected_format = page.input_value("select[data-autosubmit]")
+        self.t.check(
+            "data-autosubmit persists the selected format",
+            selected_format == "Pauper",
+            selected_format,
+        )
+
+        show_turns = page.locator('button[hx-get$="/turns"]')
+        if not self.t.check(
+            "match detail renders the Show turns control",
+            show_turns.count() > 0,
+            "none found",
+        ):
+            ctx.close()
+            return
+        show_turns.first.click()
+        details = page.locator("#turns-1 button[data-toggle-target]")
+        details.first.wait_for(state="visible", timeout=10_000)
+        self.t.check("Show turns swaps in populated turn rows", details.count() == 2)
+
+        detail_button = details.first
+        target_id = detail_button.get_attribute("data-toggle-target")
+        if not self.t.check("turn Details control has a target", bool(target_id)):
+            ctx.close()
+            return
+        detail_row = page.locator(f"#{target_id}")
+        self.t.check("turn details start hidden", not detail_row.is_visible())
+        detail_button.click()
+        detail_row.wait_for(state="visible", timeout=5_000)
+        self.t.check("turn details reveal", detail_row.is_visible())
+        detail_button.click()
+        detail_row.wait_for(state="hidden", timeout=5_000)
+        self.t.check("turn details re-hide", not detail_row.is_visible())
+        self.audit(page, rec, "fixture match interactions")
+        ctx.close()
 
     # --------------------------------------------------------------- user
     def run_user(self, browser: Browser) -> None:
@@ -645,6 +737,7 @@ class Smoke:
                 self.section("public pages", self.run_public, browser)
                 self.section("admin session", self.run_admin, browser)
                 if getattr(self, "admin_page", None) is not None:
+                    self.section("fixture user session", self.run_fixture_user, browser)
                     self.section("user session", self.run_user, browser)
                     print("")
                     print("--- cleanup ---")
@@ -663,13 +756,12 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("base_url", nargs="?", default="http://localhost:8080")
-    ap.add_argument("--expect-metagame", action="store_true")
     args = ap.parse_args()
     for var in ("DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL", "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD"):
         if not os.environ.get(var):
             print(f"FAIL: {var} must be set", file=sys.stderr)
             return 1
-    return Smoke(args.base_url, args.expect_metagame).run()
+    return Smoke(args.base_url).run()
 
 
 if __name__ == "__main__":

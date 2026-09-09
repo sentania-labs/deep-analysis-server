@@ -10,7 +10,6 @@ module.exports = {
   content: [
     "./web_service/templates/**/*.html",
     "./web_service/static/js/**/*.js",
-    "./web_service/**/*.py",
   ],
   darkMode: "class",
   // Classes assembled from Jinja variables (text-{{ col.align }}) never

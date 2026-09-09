@@ -39,7 +39,7 @@
 {# Create user form #}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
     <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-4">Create user</h2>
-    <form method="post" action="/admin/users/create?page={{ page }}&per_page={{ per_page }}" class="flex flex-wrap items-end gap-3" data-confirm="Create this user?">
+    <form method="post" action="/admin/users/create?page={{ page }}&per_page={{ per_page }}" class="flex flex-wrap items-end gap-3">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label class="flex flex-col gap-1">
             <span class="text-xs font-medium dark:text-txt-secondary text-txt-secondary-light">Email</span>
@@ -62,7 +62,7 @@
             <input type="checkbox" name="must_change_password" value="on" checked class="rounded">
             <span class="text-xs">Must change password</span>
         </label>
-        <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-1.5 text-sm font-medium transition-colors">Create user</button>
+        <button type="submit" data-confirm="Create this user?" class="bg-accent text-white hover:bg-accent-hover rounded-md px-4 py-1.5 text-sm font-medium transition-colors">Create user</button>
     </form>
 </div>
 

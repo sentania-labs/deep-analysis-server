@@ -262,6 +262,116 @@ SQL
     fi
 }
 
+# The match detail and scraper event paths need owned rows on a fresh stack.
+# Create a dedicated ordinary user through auth, then seed deterministic rows
+# in the same schemas the parser and analytics services own. Any setup failure
+# is fatal because the browser pass must never skip these paths.
+seed_csp_browser_fixture() {
+    local login_response admin_jwt create_response fixture_user_id list_response sql
+
+    if ! login_response=$(curl -fsS \
+        -X POST "$BASE_URL/auth/login" \
+        -H 'Content-Type: application/json' \
+        -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}"); then
+        echo "STOP: could not log in as the bootstrap admin for the browser fixture" >&2
+        return 1
+    fi
+    admin_jwt=$(printf '%s' "$login_response" | python3 -c \
+        'import json, sys; print(json.load(sys.stdin).get("access_token", ""))')
+    if [ -z "$admin_jwt" ]; then
+        echo "STOP: bootstrap admin login returned no JWT for the browser fixture" >&2
+        return 1
+    fi
+
+    if ! create_response=$(printf '%s\n' "$admin_jwt" | compose exec -T auth sh -c '
+read -r token
+curl -sS -X POST http://localhost:8000/admin/users \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    -d '\''{"email":"csp-fixture@local","password":"CspFixtureUserPw2026!","role":"user","must_change_password":false}'\''
+'); then
+        echo "STOP: could not create csp-fixture@local through the auth admin API" >&2
+        return 1
+    fi
+    fixture_user_id=$(printf '%s' "$create_response" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("id", ""))
+except json.JSONDecodeError:
+    pass
+')
+
+    if [ -z "$fixture_user_id" ]; then
+        if ! list_response=$(printf '%s\n' "$admin_jwt" | compose exec -T auth sh -c '
+read -r token
+curl -sS -H "Authorization: Bearer ${token}" http://localhost:8000/admin/users?limit=200
+'); then
+            echo "STOP: could not look up csp-fixture@local through the auth admin API" >&2
+            return 1
+        fi
+        fixture_user_id=$(printf '%s' "$list_response" | python3 -c '
+import json, sys
+for user in json.load(sys.stdin).get("users", []):
+    if user.get("email") == "csp-fixture@local":
+        print(user["id"])
+        break
+')
+    fi
+    if ! [[ "$fixture_user_id" =~ ^[0-9]+$ ]]; then
+        echo "STOP: auth returned no numeric id for csp-fixture@local" >&2
+        return 1
+    fi
+
+    sql=$(cat <<'SQL'
+INSERT INTO parser.matches
+    (sha256, user_id, format, players, game_count, played_at, parsed_at, review_status)
+VALUES
+    (repeat('c', 64), :'fixture_user_id'::integer, 'Pauper',
+     '["csp_fixture", "csp_opponent"]'::jsonb, 1, now() - interval '1 day',
+     now() - interval '1 day', NULL)
+ON CONFLICT (sha256, user_id) DO NOTHING;
+
+INSERT INTO parser.games (match_id, game_number, winner)
+SELECT id, 1, 'csp_fixture'
+FROM parser.matches
+WHERE sha256 = repeat('c', 64) AND user_id = :'fixture_user_id'::integer
+ON CONFLICT (match_id, game_number) DO NOTHING;
+
+INSERT INTO parser.game_states
+    (game_id, turn_number, active_player, player_states, stack)
+SELECT g.id, s.turn_number, s.active_player, s.player_states, s.stack
+FROM parser.games g
+JOIN parser.matches m ON m.id = g.match_id
+CROSS JOIN (VALUES
+    (1, 'csp_fixture',
+     '{"csp_fixture":{"life":20,"zones":{"hand":["Island"]}},"csp_opponent":{"life":20,"zones":{"hand":["Mountain"]}}}'::jsonb,
+     '[]'::jsonb),
+    (2, 'csp_opponent',
+     '{"csp_fixture":{"life":18,"zones":{"battlefield":["Island"]}},"csp_opponent":{"life":20,"zones":{"battlefield":["Mountain"]}}}'::jsonb,
+     '["Counterspell"]'::jsonb)
+) AS s(turn_number, active_player, player_states, stack)
+WHERE m.sha256 = repeat('c', 64)
+  AND m.user_id = :'fixture_user_id'::integer
+  AND g.game_number = 1
+ON CONFLICT (game_id, turn_number, active_player) DO NOTHING;
+
+INSERT INTO analytics.scraper_runs
+    (scraper_name, run_id, started_at, heartbeat_at, trigger, owner)
+VALUES
+    ('mtgtop8', '00000000-0000-0000-0000-000000000126',
+     now() - interval '1 day', now() - interval '1 day', 'manual', 'csp-smoke')
+ON CONFLICT (scraper_name) DO NOTHING;
+SQL
+)
+    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q \
+        -v fixture_user_id="$fixture_user_id" -c "$sql"; then
+        echo "browser fixture seeded (csp-fixture@local, match, turns, scraper run)"
+    else
+        echo "STOP: could not seed the fixture-backed browser paths" >&2
+        return 1
+    fi
+}
+
 rc=0
 if [ "$SUITE" = "e2e" ] || [ "$SUITE" = "all" ]; then
     echo ""
@@ -278,10 +388,10 @@ if [ "$SUITE" = "ui" ] || [ "$SUITE" = "all" ]; then
     # pages render but whose scripts are refused by the CSP is broken.
     echo ""
     echo "--- browser CSP smoke (ci/browser/smoke_csp.py) ---"
-    if ! seed_metagame_fixture; then
+    if ! seed_metagame_fixture || ! seed_csp_browser_fixture; then
         rc=1
     elif (cd ci/browser && uv sync --quiet && uv run playwright install chromium >/dev/null); then
-        (cd ci/browser && uv run smoke_csp.py "$BASE_URL" --expect-metagame) || rc=1
+        (cd ci/browser && uv run smoke_csp.py "$BASE_URL") || rc=1
     else
         echo "STOP: could not install Playwright's Chromium for ci/browser (see README, pre-push smoke test)" >&2
         rc=1

@@ -30,10 +30,7 @@
 
                 init: function () {
                     var node = this.$el.querySelector('script[type="application/json"][data-metagame]');
-                    var data = {};
-                    if (node) {
-                        try { data = JSON.parse(node.textContent) || {}; } catch (e) { data = {}; }
-                    }
+                    var data = JSON.parse(node.textContent);
                     this.currentWindow = data.window || '30d';
                     this.format = data.format || '';
                     this.tierRows = data.tiers || [];

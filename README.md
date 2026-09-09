@@ -169,7 +169,7 @@ The gateway sends `script-src 'self'; style-src 'self'` with no `'unsafe-inline'
 
 | What | Where | How it is kept honest |
 |---|---|---|
-| Tailwind utilities | `static/css/tailwind.css`, compiled and committed | `bash services/web/build-css.sh` rebuilds it from the templates with the Tailwind CLI pinned in `services/web/package-lock.json`; the `frontend-assets` CI job rebuilds and fails on drift. Run it after editing any template, static JS file, Python file under `web_service/` (the content scan covers them too) or `tailwind.config.js`. |
+| Tailwind utilities | `static/css/tailwind.css`, compiled and committed | `bash services/web/build-css.sh` rebuilds it from the templates with the Tailwind CLI pinned in `services/web/package-lock.json`; the `frontend-assets` CI job rebuilds and fails on drift. Run it after editing any template, static JS file or `tailwind.config.js`. |
 | htmx, Alpine.js (CSP build), Chart.js, Inter, JetBrains Mono | `static/vendor/`, `static/fonts/` | Pinned with upstream URL, integrity and sha256 in `static/vendor/manifest.json`; `services/web/tests/test_csp_hygiene.py` verifies every file against it. |
 | App behaviour | `static/js/app.js` plus one file per page that needs more | No inline `<script>`, `on*=` handler or `style=` attribute may appear in a template; the same test fails the build if one does. Alpine's CSP build cannot see globals (`window`, `Math`, `document`) from an `x-*` attribute, so anything of that shape goes in the JS files. |
 

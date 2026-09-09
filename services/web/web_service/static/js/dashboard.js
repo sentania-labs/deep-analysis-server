@@ -18,11 +18,7 @@
                     this.preset = ds.preset || 'all';
                     this.dateFrom = ds.dateFrom || '';
                     this.dateTo = ds.dateTo || '';
-                    try {
-                        this.bnrDates = JSON.parse(ds.bnrDates || '[]');
-                    } catch (e) {
-                        this.bnrDates = [];
-                    }
+                    this.bnrDates = JSON.parse(ds.bnrDates || '[]');
                 },
 
                 localDate: function (d) {

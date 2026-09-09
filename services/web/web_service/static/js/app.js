@@ -66,9 +66,16 @@
     // it runs before anything else and can cancel the submit.
     document.addEventListener('submit', function (e) {
         var form = e.target;
-        if (!form || !form.dataset || !form.dataset.confirm) return;
+        if (!form || !form.matches || !form.matches('form[data-confirm]')) return;
         if (!window.confirm(form.dataset.confirm)) e.preventDefault();
     }, true);
+
+    // <button data-confirm="Really?">: preserve button-scoped confirmation.
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('button[data-confirm]');
+        if (!btn) return;
+        if (!window.confirm(btn.dataset.confirm)) e.preventDefault();
+    });
 
     // <select data-autosubmit>: submit the enclosing form on change.
     document.addEventListener('change', function (e) {
@@ -142,7 +149,7 @@
         Array.prototype.forEach.call(nodes, function (el) {
             var pct = parseFloat(el.dataset.progressPercent);
             if (isNaN(pct)) return;
-            el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+            el.style.width = pct + '%';
         });
     }
     applyProgressWidths(document);
