@@ -395,8 +395,9 @@ async def test_in_place_parse_waits_for_concurrent_admin_verdict(
     assert await _load_user_matches(parser_session, user_id) == []
 
 
-def test_upgrade_migrates_existing_rejection() -> None:
-    """Root startup migration protects a rejection created before 032."""
+@pytest.mark.parametrize("review_status", ["pending_review", "rejected"])
+def test_upgrade_migrates_existing_admin_verdict(review_status: str) -> None:
+    """Root startup migration protects admin decisions created before 032."""
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         pytest.skip("DATABASE_URL not set; skipping migration integration test")
@@ -406,8 +407,9 @@ def test_upgrade_migrates_existing_rejection() -> None:
     cfg.set_main_option("sqlalchemy.url", db_url)
     engine = create_engine(db_url, future=True)
     match_id = uuid.uuid4()
-    sha256 = "9" * 64
-    raw_match_id = "pre-032-rejected-match"
+    sha256 = ("8" if review_status == "pending_review" else "9") * 64
+    raw_match_id = f"pre-032-{review_status}-match"
+    review_reason = f"admin set {review_status} before upgrade"
 
     command.downgrade(cfg, "031")
     try:
@@ -422,10 +424,16 @@ def test_upgrade_migrates_existing_rejection() -> None:
                     VALUES
                         (:id, :sha256, 9200, :raw_match_id,
                          CAST('["alice", "bob"]' AS JSONB), 1,
-                         'rejected', 'admin rejected before upgrade')
+                         :review_status, :review_reason)
                     """
                 ),
-                {"id": match_id, "sha256": sha256, "raw_match_id": raw_match_id},
+                {
+                    "id": match_id,
+                    "sha256": sha256,
+                    "raw_match_id": raw_match_id,
+                    "review_status": review_status,
+                    "review_reason": review_reason,
+                },
             )
 
         command.upgrade(cfg, "head")
@@ -444,8 +452,8 @@ def test_upgrade_migrates_existing_rejection() -> None:
             "raw_match_id",
             raw_match_id,
             sha256,
-            "rejected",
-            "admin rejected before upgrade",
+            review_status,
+            review_reason,
         )
     finally:
         command.upgrade(cfg, "head")
