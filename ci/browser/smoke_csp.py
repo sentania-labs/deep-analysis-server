@@ -447,7 +447,11 @@ class Smoke:
 
         def intercept(route) -> None:
             intercepted_methods.append(route.request.method)
-            route.fulfill(status=204, body="")
+            route.fulfill(
+                status=303,
+                headers={"Location": "/admin/bnr-events"},
+                body="",
+            )
 
         page.route(pattern, intercept)
         try:

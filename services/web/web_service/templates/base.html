@@ -8,10 +8,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Deep Analysis{% endblock %}</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    {# Every script, stylesheet and font comes from /static: the gateway CSP
-       (gateway/Caddyfile) allows no third-party origin, no inline script and
-       no inline style. Third-party files are pinned in static/vendor/manifest.json;
-       css/tailwind.css is compiled by services/web/build-css.sh. Issue #126. #}
+    {# Every executable script, stylesheet and font comes from /static: the
+       gateway CSP (gateway/Caddyfile) allows no third-party origin for them,
+       no executable inline script and no inline style. Third-party files are
+       pinned in static/vendor/manifest.json; css/tailwind.css is compiled by
+       services/web/build-css.sh. Issue #126. #}
     <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false}'>
     <link rel="stylesheet" href="/static/css/tailwind.css?v={{ app_version }}">
     <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">

@@ -1,15 +1,15 @@
 /* Deep Analysis web UI: shared behaviours.
  *
  * The gateway CSP is script-src 'self' with no 'unsafe-inline' and no
- * 'unsafe-eval' (issue #126), so nothing in a template may be an inline
- * <script> or an on*= handler. This file, loaded with `defer` from base.html
- * before Alpine's CSP build, holds:
+ * 'unsafe-eval' (issue #126), so nothing in a template may be an executable
+ * inline <script> body or an on*= handler. This file, loaded with `defer` from
+ * base.html before Alpine's CSP build, holds:
  *
  *   1. the Alpine components and stores base.html uses (registered on
  *      alpine:init, which is why this file must load before Alpine);
  *   2. small declarative behaviours that templates opt into with data-*
- *      attributes, wired once through delegated listeners so they also
- *      apply to content htmx swaps in later.
+ *      attributes. Event behaviours use delegated listeners; progress widths
+ *      are applied once when this file loads.
  *
  * Page-specific components live next to their page: dashboard.js,
  * metagame.js, profile_edit.js (loaded via the extra_head block).

@@ -3,9 +3,11 @@
     "Pinned third-party frontend assets served from this directory (issue #126).",
     "Every script, stylesheet and font the UI loads comes from /static; the gateway",
     "CSP allows no third-party origin for them. To upgrade an asset: fetch the",
-    "upstream artifact, verify upstream_integrity, copy the listed file in with the",
-    "version in its filename, record its sha256 and sri here, and update base.html.",
-    "services/web/tests/test_csp_hygiene.py checks every file against this manifest."
+    "upstream artifact; verify upstream_integrity or upstream_sha256; copy the listed",
+    "file in with the version in its filename; record its sha256 and, for scripts",
+    "loaded by templates, sri here; then update its loading reference and license.",
+    "services/web/tests/test_csp_hygiene.py verifies each listed asset and rejects",
+    "unlisted files under static/vendor and static/fonts."
   ],
   "assets": [
     {

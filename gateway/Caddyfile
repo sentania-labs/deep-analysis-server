@@ -12,10 +12,10 @@
     #
     # Content-Security-Policy (issue #126): the browser execution boundary.
     # Scripts, styles and fonts come only from this origin; there is no
-    # 'unsafe-inline', no 'unsafe-eval' and no nonce, because the web
-    # service renders no inline script or style at all (its templates are
-    # checked by services/web/tests/test_csp_hygiene.py, and ci/smoke.sh
-    # loads every page in a real browser and fails on any violation).
+    # 'unsafe-inline', no 'unsafe-eval' and no nonce, because the web service
+    # renders no executable inline script or inline style attribute (its
+    # templates are checked by services/web/tests/test_csp_hygiene.py, and
+    # ci/smoke.sh loads every page in a real browser and fails on any violation).
     # Third-party libraries are vendored under /static/vendor and pinned in
     # services/web/web_service/static/vendor/manifest.json.
     #

@@ -388,8 +388,9 @@ VALUES
 ON CONFLICT (scraper_name) DO NOTHING;
 SQL
 )
-    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q \
-        -v fixture_user_id="$fixture_user_id" -c "$sql"; then
+    if printf '%s\n' "$sql" | compose exec -T postgres \
+        psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q \
+        -v fixture_user_id="$fixture_user_id"; then
         echo "browser fixture seeded (csp-fixture@local, match, turns, scraper run)"
     else
         echo "STOP: could not seed the fixture-backed browser paths" >&2

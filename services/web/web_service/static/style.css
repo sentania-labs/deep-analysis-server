@@ -1,9 +1,9 @@
 /* Deep Analysis app stylesheet.
  *
  * Tailwind utilities are compiled separately into css/tailwind.css (see
- * services/web/build-css.sh). Everything the UI needs is served from /static
- * so the gateway can keep style-src at 'self' with no inline styles and no
- * third-party origin (issue #126).
+ * services/web/build-css.sh). Every script, stylesheet, and font the UI needs
+ * is served from /static so the gateway can keep script-src, style-src, and
+ * font-src at 'self' with no inline styles (issue #126).
  */
 
 /* Fonts: vendored copies of the upstream releases, pinned in

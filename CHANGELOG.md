@@ -14,12 +14,14 @@ API surface stabilizes.
   data: https://cards.scryfall.io; font-src 'self'; connect-src 'self';
   object-src 'none'; base-uri 'self'`: no `'unsafe-inline'`, no
   `'unsafe-eval'`, no CDN or Google Fonts origin. Tailwind is compiled ahead
-  of time (`services/web/build-css.sh`) instead of the play CDN; htmx, Alpine.js (its CSP build) and Chart.js plus
-  the Inter and JetBrains Mono fonts are vendored under
+  of time (`services/web/build-css.sh`) instead of the play CDN; htmx,
+  Alpine.js (its CSP build), Chart.js, and the Inter and JetBrains Mono fonts
+  are vendored under
   `services/web/web_service/static/` and pinned in
-  `static/vendor/manifest.json`; every inline script, `on*=` handler and
-  `style=` attribute in the templates moved to `static/js/`. Card images on
-  `/cards` (Scryfall) were already blocked by the old `img-src` and now load.
+  `static/vendor/manifest.json`; every executable inline script, `on*=`
+  handler, and `style=` attribute in the templates moved to `static/js/`.
+  Card images on `/cards` (Scryfall) were already blocked by the old `img-src`
+  and now load.
   New guards: `services/web/tests/test_csp_hygiene.py`, the `frontend-assets`
   CI job (stylesheet drift), and `ci/browser/smoke_csp.py`, a Playwright pass
   over every page and control that fails on any CSP violation (part of

@@ -126,6 +126,7 @@ Jobs and where each one runs (issue #161 set the placement, per the `github-ci` 
 | `docker-build` (all five images) | `lab` | Builds through the shared in-cluster BuildKit. |
 | `test-integration` | `ubuntu-latest` | Needs real PostgreSQL 16 and Redis 7 daemons, via Actions `services:`. |
 | `compose-smoke`, `smoke-ui` | `ubuntu-latest` | Needs a real Docker daemon for `docker compose`. |
+| `frontend-assets` | `ubuntu-latest` | Needs Node to rebuild the committed Tailwind stylesheet and check it for drift. |
 | `diagram-drift` | `ubuntu-latest` | The lab runner image is missing chromium's NSS libraries (sentania-labs/homelab-runner#1). |
 
 ### Pre-push smoke test (run this locally)
@@ -165,15 +166,9 @@ Useful knobs, all optional:
 
 ### Frontend assets and the Content Security Policy
 
-The gateway sends `script-src 'self'; style-src 'self'` with no `'unsafe-inline'`, no `'unsafe-eval'` and no third-party origin (`gateway/Caddyfile`, issue #126). Everything the browser loads therefore lives under `services/web/web_service/static/`:
-
-| What | Where | How it is kept honest |
-|---|---|---|
-| Tailwind utilities | `static/css/tailwind.css`, compiled and committed | `bash services/web/build-css.sh` rebuilds it from the templates with the Tailwind CLI pinned in `services/web/package-lock.json`; the `frontend-assets` CI job rebuilds and fails on drift. Run it after editing any template, static JS file or `tailwind.config.js`. |
-| htmx, Alpine.js (CSP build), Chart.js, Inter, JetBrains Mono | `static/vendor/`, `static/fonts/` | Pinned with upstream URL, integrity and sha256 in `static/vendor/manifest.json`; `services/web/tests/test_csp_hygiene.py` verifies every file against it. |
-| App behaviour | `static/js/app.js` plus one file per page that needs more | No inline `<script>`, `on*=` handler or `style=` attribute may appear in a template; the same test fails the build if one does. Alpine's CSP build cannot see globals (`window`, `Math`, `document`) from an `x-*` attribute, so anything of that shape goes in the JS files. |
-
-Small behaviours are opt-in data attributes handled once in `app.js`: `data-confirm` on a form (prompt before submit), `data-autosubmit` on a select, `data-href` on a row, `data-toggle-target`, `data-copy-target`, `data-submit-once`, and `data-progress-percent`. To upgrade a vendored library, follow the steps at the top of the manifest.
+Frontend asset and CSP authoring rules, including the Tailwind rebuild and
+vendored-library upgrade procedures, are maintained in
+[`services/web/README.md`](services/web/README.md#frontend-assets-and-the-csp).
 
 `ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits. If it dies partway through its password section against a stack you kept with `DA_SMOKE_KEEP=1`, the admin password is left as `ui-smoke-<original>`; tear the stack down and start again.
 
