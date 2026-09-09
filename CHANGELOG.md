@@ -5,6 +5,31 @@ project follows [Semantic Versioning](https://semver.org/) loosely while
 in pre-1.0; expect minor versions to introduce breaking changes until the
 API surface stabilizes.
 
+## Unreleased
+
+### Security
+
+- **Browser execution boundary hardened (#126).** The gateway CSP is now
+  `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'
+  data:; font-src 'self'; connect-src 'self'; object-src 'none';
+  base-uri 'self'`: no `'unsafe-inline'`, no
+  `'unsafe-eval'`, no CDN or Google Fonts origin. Tailwind is compiled ahead
+  of time (`services/web/build-css.sh`) instead of the play CDN; htmx,
+  Alpine.js (its CSP build), Chart.js, and the Inter and JetBrains Mono fonts
+  are vendored under
+  `services/web/web_service/static/` and pinned in
+  `static/vendor/manifest.json`; every executable inline script, `on*=`
+  handler, and `style=` attribute in the templates moved to `static/js/`.
+  Card art on `/cards` stays blocked by `img-src`, unchanged from `main`;
+  that is a pre-existing product bug tracked as its own follow-up issue
+  (#173), not part of this hardening.
+  New guards: `services/web/tests/test_csp_hygiene.py`, the `frontend-assets`
+  CI job (stylesheet drift), and `ci/browser/smoke_csp.py`, a Playwright pass
+  over every page and control that fails on any CSP violation (part of
+  `bash ci/smoke.sh ui`). Rollback is reverting `gateway/Caddyfile` and the
+  web service templates and static files together; nothing else depends on
+  them.
+
 ## v0.7.12 — 2026-05-10
 
 ### Added

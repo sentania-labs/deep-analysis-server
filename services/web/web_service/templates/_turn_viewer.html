@@ -42,12 +42,12 @@
                 {% endfor %}
                 <td class="px-3 py-2 text-right">
                     <button class="border dark:border-border border-border-light dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors cursor-pointer"
-                            onclick="var el=document.getElementById('turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}'); el.style.display = el.style.display === 'none' ? 'table-row' : 'none';">
+                            data-toggle-target="turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}">
                         Details
                     </button>
                 </td>
             </tr>
-            <tr id="turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}" style="display: none;">
+            <tr id="turn-detail-{{ turns_data.game_number }}-{{ turn.turn_number }}" hidden>
                 <td colspan="{{ 3 + turn.player_states|length }}" class="dark:bg-surface-2 bg-surface-light-2 px-4 py-3">
                     {% for ps in turn.player_states %}
                     <div class="mb-2 last:mb-0">

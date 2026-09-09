@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en" class="dark"
-      x-data="themeManager()"
+      x-data="themeManager"
       :class="{ 'dark': isDark }"
 >
 <head>
@@ -8,59 +8,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Deep Analysis{% endblock %}</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            base: { DEFAULT: '#0a0a0f', light: '#f4f4f8' },
-            surface: { DEFAULT: '#12121a', 2: '#1a1a24', 3: '#22222e', light: '#ffffff', 'light-2': '#f9f9fb', 'light-3': '#eeeef2' },
-            border: { DEFAULT: '#2a2a36', subtle: '#1e1e28', focus: '#4e7cff', light: '#dcdce4' },
-            txt: { primary: '#e8e8ed', secondary: '#8b8b9e', tertiary: '#5c5c6e', 'primary-light': '#1a1a2e', 'secondary-light': '#6b6b7e' },
-            accent: { DEFAULT: '#4e7cff', hover: '#6690ff', muted: 'rgba(78,124,255,0.1)' },
-            success: { DEFAULT: '#22c55e', muted: 'rgba(34,197,94,0.1)' },
-            danger: { DEFAULT: '#ef4444', muted: 'rgba(239,68,68,0.1)' },
-            warning: { DEFAULT: '#eab308', muted: 'rgba(234,179,8,0.1)' },
-            mtg: { white: '#f9e4b7', blue: '#5b8def', black: '#9b8ec2', red: '#e05555', green: '#3bb55a' },
-          },
-          fontFamily: {
-            ui: ['Inter', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
-          },
-        }
-      }
-    }
-    </script>
-    <link rel="stylesheet" href="/static/style.css">
+    {# Every executable script, stylesheet and font comes from /static: the
+       gateway CSP (gateway/Caddyfile) allows no third-party origin for them,
+       no executable inline script and no inline style. Third-party files are
+       pinned in static/vendor/manifest.json; css/tailwind.css is compiled by
+       services/web/build-css.sh. Issue #126. #}
+    <meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false}'>
+    <link rel="stylesheet" href="/static/css/tailwind.css?v={{ app_version }}">
+    <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
     {% block extra_head %}{% endblock %}
-    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <script>
-    function themeManager() {
-        return {
-            isDark: true,
-            init() {
-                var stored = localStorage.getItem('theme');
-                if (stored === 'light') {
-                    this.isDark = false;
-                } else if (stored === 'system') {
-                    this.isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                } else {
-                    this.isDark = true;
-                }
-            },
-            toggle() {
-                this.isDark = !this.isDark;
-                localStorage.setItem('theme', this.isDark ? 'dark' : 'light');
-            }
-        }
-    }
-    </script>
+    {# app.js registers the Alpine components/stores on alpine:init, so it
+       must run before Alpine: both are deferred and execute in document order. #}
+    <script defer src="/static/js/app.js?v={{ app_version }}"></script>
+    <script src="/static/vendor/htmx-2.0.4.min.js" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"></script>
+    <script defer src="/static/vendor/alpine-csp-3.17.2.min.js" integrity="sha384-kWTzsVwMm5SQeDmCv4DpGqQuKHE6MPWr6MM9R6cJg1CHF3xPbmjZX3ZTS6OB0EZu"></script>
 </head>
 <body class="font-ui text-sm dark:bg-base bg-base-light dark:text-txt-primary text-txt-primary-light min-h-screen flex flex-col">
     {# ── Header ── #}
@@ -170,23 +131,11 @@
     {% block body_layout %}
     {% if user %}
     {# ── Authenticated: sidebar + main ── #}
-    <div class="flex pt-12 min-h-screen"
-         x-data
-         x-init="
-            if (typeof $store.sidebar === 'undefined') {
-                Alpine.store('sidebar', {
-                    open: localStorage.getItem('sidebar_open') !== 'false',
-                    toggle() {
-                        this.open = !this.open;
-                        localStorage.setItem('sidebar_open', this.open);
-                    }
-                });
-            }
-         ">
+    <div class="flex pt-12 min-h-screen">
         {# Sidebar #}
         <aside :class="$store.sidebar.open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:overflow-hidden'"
                class="fixed lg:sticky top-12 left-0 z-40 h-[calc(100vh-3rem)] w-[220px] dark:bg-surface bg-surface-light border-r dark:border-border border-border-light overflow-y-auto transition-all duration-200 flex-shrink-0 lg:top-12"
-               @click.outside.window="if (window.innerWidth < 1024) $store.sidebar.open = false">
+               @click.outside.window="$store.sidebar.closeOnMobile()">
             <nav class="py-4 px-3 flex flex-col gap-1">
                 {% if user.role != "admin" %}
                 {# User nav #}

@@ -55,8 +55,7 @@
                             <a class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs no-underline transition-colors" href="/admin/archetypes/{{ a.id }}/edit">Edit</a>
                             <form method="post"
                                   action="/admin/archetypes/{{ a.id }}/delete"
-                                  class="inline"
-                                  onsubmit="return confirm('Delete archetype {{ a.name }}? Matches tagged with it will be untagged.');">
+                                  class="inline" data-confirm="Delete archetype {{ a.name }}? Matches tagged with it will be untagged.">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Delete</button>
                             </form>

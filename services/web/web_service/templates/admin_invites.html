@@ -99,8 +99,7 @@
                     <td class="px-4 py-2.5 text-right">
                         <form method="post"
                               action="/admin/invites/{{ i.id }}/revoke?page={{ page }}&per_page={{ per_page }}"
-                              class="inline"
-                              onsubmit="return confirm('Revoke this invite? It will be unusable immediately.');">
+                              class="inline" data-confirm="Revoke this invite? It will be unusable immediately.">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
                         </form>

@@ -9,12 +9,27 @@
 
 :8080 {
     # Security headers applied to all responses.
+    #
+    # Content-Security-Policy (issue #126): the browser execution boundary.
+    # Scripts, styles and fonts come only from this origin; there is no
+    # 'unsafe-inline', no 'unsafe-eval' and no nonce, because the web service
+    # renders no executable inline script or inline style attribute (its
+    # templates are checked by services/web/tests/test_csp_hygiene.py, and
+    # ci/smoke.sh loads every page in a real browser and fails on any violation).
+    # Third-party libraries are vendored under /static/vendor and pinned in
+    # services/web/web_service/static/vendor/manifest.json.
+    #
+    #   object-src 'none' and base-uri 'self' close the plugin and
+    #   <base>-hijack script execution vectors.
+    #
+    # Rollback: restore this header block and the templates from the parent
+    # of the commit that introduced it; nothing else depends on it.
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'"
     }
 
     handle /health {

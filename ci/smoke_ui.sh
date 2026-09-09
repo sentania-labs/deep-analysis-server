@@ -41,7 +41,7 @@ check_contains() {
     local label="$1"
     local needle="$2"
     local haystack="$3"
-    if echo "$haystack" | grep -q -- "$needle"; then
+    if [[ "$haystack" == *"$needle"* ]]; then
         echo "  PASS: $label (contains '$needle')"
         PASS=$((PASS + 1))
     else

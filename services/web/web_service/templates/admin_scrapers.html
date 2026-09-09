@@ -118,8 +118,7 @@
                     Running...
                 </button>
                 {% else %}
-                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/trigger" class="inline"
-                      onsubmit="return confirm('Trigger {{ s.scraper_name }} scrape now?');">
+                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/trigger" class="inline" data-confirm="Trigger {{ s.scraper_name }} scrape now?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="bg-accent text-white hover:bg-accent-hover rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
                         Run Now
@@ -129,8 +128,7 @@
 
                 {# Reset health — only when broken #}
                 {% if s.is_broken %}
-                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/reset" class="inline"
-                      onsubmit="return confirm('Reset health counters for {{ s.scraper_name }}?');">
+                <form method="post" action="/admin/scrapers/{{ s.scraper_name }}/reset" class="inline" data-confirm="Reset health counters for {{ s.scraper_name }}?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="bg-warning text-white hover:bg-yellow-600 rounded-md px-3 py-1.5 text-xs font-medium transition-colors">
                         Reset Health

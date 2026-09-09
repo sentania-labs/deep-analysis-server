@@ -1,0 +1,3 @@
+# Docker build context for every service is the repo root; keep the Tailwind
+# build tooling (services/web/build-css.sh) out of the images.
+**/node_modules

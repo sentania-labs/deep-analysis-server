@@ -126,6 +126,7 @@ Jobs and where each one runs (issue #161 set the placement, per the `github-ci` 
 | `docker-build` (all five images) | `lab` | Builds through the shared in-cluster BuildKit. |
 | `test-integration` | `ubuntu-latest` | Needs real PostgreSQL 16 and Redis 7 daemons, via Actions `services:`. |
 | `compose-smoke`, `smoke-ui` | `ubuntu-latest` | Needs a real Docker daemon for `docker compose`. |
+| `frontend-assets` | `ubuntu-latest` | Needs Node to rebuild the committed Tailwind stylesheet and check it for drift. |
 | `diagram-drift` | `ubuntu-latest` | The lab runner image is missing chromium's NSS libraries (sentania-labs/homelab-runner#1). |
 
 ### Pre-push smoke test (run this locally)
@@ -140,7 +141,9 @@ bash ci/smoke.sh
 
 That is the whole sequence. The script creates the external `edge-slots` network, writes a throwaway compose env file (it never touches your `.env`), generates the JWT keypair the compose override bind-mounts, brings the stack up, waits for container health and for the bootstrap admin to answer, runs both smoke suites, dumps logs if anything failed, and tears the stack down. It needs `docker`, `uv`, `curl` and `python3` on your PATH, and Docker Compose **v2.24.4 or newer** (the compose override uses the `!override` / `!reset` merge tags). The script checks the Compose version up front and tells you if it is too old.
 
-Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD, `ci/smoke_ui.sh`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
+Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD via curl in `ci/smoke_ui.sh`, then every rendered page and control driven in a real Chromium under the production Content Security Policy by `ci/browser/smoke_csp.py`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
+
+The browser pass needs Playwright's Chromium. `ci/smoke.sh` installs the browser binary itself (`uv run playwright install chromium`, cached under `~/.cache/ms-playwright`), but on a bare machine the system libraries Chromium links against have to be present; `cd ci/browser && uv run playwright install --with-deps chromium` adds them (it uses `sudo apt`, which is why CI does that step in the workflow rather than in the script).
 
 Useful knobs, all optional:
 
@@ -156,8 +159,16 @@ Useful knobs, all optional:
 > `=== Smoke result: 23 PASS, 0 FAIL ===` and exits 0. `ci/smoke_ui.sh` ends
 > `0 FAIL`; its PASS count moves between roughly 62 and 66 because a few of
 > its admin checks only run when the stack already has an agent row to act
-> on. Read the FAIL count, not the PASS count: any FAIL line is a real
-> regression. `ci/smoke.sh` exits non-zero if either suite reports a FAIL.
+> on. `ci/browser/smoke_csp.py` ends `=== Browser CSP smoke result: N PASS,
+> 0 FAIL ===`; its PASS count also moves with the rows the stack has. Read
+> the FAIL count, not the PASS count: any FAIL line is a real regression.
+> `ci/smoke.sh` exits non-zero if any suite reports a FAIL.
+
+### Frontend assets and the Content Security Policy
+
+Frontend asset and CSP authoring rules, including the Tailwind rebuild and
+vendored-library upgrade procedures, are maintained in
+[`services/web/README.md`](services/web/README.md#frontend-assets-and-the-csp).
 
 `ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits. If it dies partway through its password section against a stack you kept with `DA_SMOKE_KEEP=1`, the admin password is left as `ui-smoke-<original>`; tear the stack down and start again.
 

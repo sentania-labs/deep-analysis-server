@@ -12,7 +12,8 @@
 #   3. write a throwaway compose env file (never touches your .env)
 #   4. generate a throwaway JWT keypair at the path the CI overlay mounts
 #   5. bring the stack up and wait for it to actually be healthy
-#   6. run the requested smoke suite(s)
+#   6. run the requested smoke suite(s); the ui suite ends with a real
+#      browser pass under the production CSP (ci/browser/smoke_csp.py)
 #   7. dump logs on failure, then tear the stack down
 #
 # Usage:
@@ -207,12 +208,22 @@ fi
 
 echo ""
 echo "--- waiting for the bootstrap admin ---"
+admin_login_json=$(python3 -c '
+import json, os, sys
+json.dump(
+    {
+        "email": os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL"],
+        "password": os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD"],
+    },
+    sys.stdout,
+)
+')
 code=""
 for i in $(seq 1 60); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' \
+    code=$(printf '%s' "$admin_login_json" | curl -s -o /dev/null -w '%{http_code}' \
         -X POST "$BASE_URL/auth/login" \
         -H 'Content-Type: application/json' \
-        -d "{\"email\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL}\",\"password\":\"${DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD}\"}" || true)
+        --data-binary @- || true)
     if [ "$code" = "200" ]; then
         echo "bootstrap admin ready after ${i} tries"
         break
@@ -228,6 +239,174 @@ fi
 # --------------------------------------------------------------------------
 # 6. the smoke runs
 # --------------------------------------------------------------------------
+# The /metagame/<format> page is the UI's most involved piece of client-side
+# rendering (Alpine x-for/x-if, a :style binding, a Chart.js chart, JSON API
+# refreshes) and a fresh stack has no scraped data to render it with. Seed
+# one mtgtop8 event with three results straight into analytics.* so the
+# browser pass can exercise that page; the fixture is inert for every other
+# suite. A seed failure is a hard failure: the ui suite never runs the
+# browser pass without the fixture, and the browser pass is always told to
+# expect it, so a /metagame page that renders nothing is a FAIL, not a SKIP.
+seed_metagame_fixture() {
+    local sql
+    sql=$(cat <<'SQL'
+INSERT INTO analytics.mtgtop8_events (event_name, format, event_date, event_url, player_count)
+VALUES ('CSP Smoke Challenge', 'Pauper', CURRENT_DATE - 3, 'https://smoke.local/mtgtop8/csp-smoke', 3)
+ON CONFLICT (event_url) DO NOTHING;
+INSERT INTO analytics.mtgtop8_results (event_id, player_name, placement, deck_name, decklist_main, decklist_sideboard)
+SELECT e.id, r.player_name, r.placement, r.deck_name,
+       '{"Island": 20, "Counterspell": 4}'::jsonb, '{"Hydroblast": 4}'::jsonb
+FROM analytics.mtgtop8_events e
+CROSS JOIN (VALUES ('smoke_alpha', 1, 'Mono Blue Faeries'),
+                   ('smoke_beta', 2, 'Boros Synthesizer'),
+                   ('smoke_gamma', 3, 'Mono Blue Faeries')) AS r(player_name, placement, deck_name)
+WHERE e.event_url = 'https://smoke.local/mtgtop8/csp-smoke'
+  AND NOT EXISTS (SELECT 1 FROM analytics.mtgtop8_results x WHERE x.event_id = e.id);
+SQL
+)
+    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q -c "$sql"; then
+        echo "metagame fixture seeded (analytics.mtgtop8_events: CSP Smoke Challenge)"
+    else
+        echo "STOP: could not seed the metagame fixture; the browser pass needs /metagame/<format> to render" >&2
+        return 1
+    fi
+}
+
+# The match detail and scraper event paths need owned rows on a fresh stack.
+# Create a dedicated ordinary user through auth, then seed deterministic rows
+# in the same schemas the parser and analytics services own. Any setup failure
+# is fatal because the browser pass must never skip these paths.
+seed_csp_browser_fixture() {
+    local login_response admin_jwt fixture_user_json create_response fixture_user_id
+    local list_response sql
+
+    if ! login_response=$(printf '%s' "$admin_login_json" | curl -fsS \
+        -X POST "$BASE_URL/auth/login" \
+        -H 'Content-Type: application/json' \
+        --data-binary @-); then
+        echo "STOP: could not log in as the bootstrap admin for the browser fixture" >&2
+        return 1
+    fi
+    admin_jwt=$(printf '%s' "$login_response" | python3 -c \
+        'import json, sys; print(json.load(sys.stdin).get("access_token", ""))')
+    if [ -z "$admin_jwt" ]; then
+        echo "STOP: bootstrap admin login returned no JWT for the browser fixture" >&2
+        return 1
+    fi
+
+    fixture_user_json=$(python3 -c '
+import json, sys
+json.dump(
+    {
+        "email": "csp-fixture@local",
+        "password": "CspFixtureUserPw2026!",
+        "role": "user",
+        "must_change_password": False,
+    },
+    sys.stdout,
+)
+')
+    if ! create_response=$(printf '%s\n%s\n' "$admin_jwt" "$fixture_user_json" \
+        | compose exec -T auth sh -c '
+read -r token
+read -r payload
+curl -sS -X POST http://localhost:8000/admin/users \
+    -H "Authorization: Bearer ${token}" \
+    -H "Content-Type: application/json" \
+    --data-binary "${payload}"
+'); then
+        echo "STOP: could not create csp-fixture@local through the auth admin API" >&2
+        return 1
+    fi
+    fixture_user_id=$(printf '%s' "$create_response" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("id", ""))
+except json.JSONDecodeError:
+    pass
+')
+
+    if [ -z "$fixture_user_id" ]; then
+        if ! list_response=$(printf '%s\n' "$admin_jwt" | compose exec -T auth sh -c '
+read -r token
+curl -sS -H "Authorization: Bearer ${token}" http://localhost:8000/admin/users?limit=200
+'); then
+            echo "STOP: could not look up csp-fixture@local through the auth admin API" >&2
+            return 1
+        fi
+        fixture_user_id=$(printf '%s' "$list_response" | python3 -c '
+import json, sys
+for user in json.load(sys.stdin).get("users", []):
+    if user.get("email") == "csp-fixture@local":
+        print(user["id"])
+        break
+')
+    fi
+    if ! [[ "$fixture_user_id" =~ ^[0-9]+$ ]]; then
+        echo "STOP: auth returned no numeric id for csp-fixture@local" >&2
+        return 1
+    fi
+
+    sql=$(cat <<'SQL'
+INSERT INTO parser.matches
+    (sha256, user_id, format, players, game_count, played_at, parsed_at, review_status)
+VALUES
+    (repeat('c', 64), :'fixture_user_id'::integer, 'Pauper',
+     '["csp_fixture", "csp_opponent"]'::jsonb, 1, now() - interval '1 day',
+     now() - interval '1 day', NULL)
+ON CONFLICT (sha256, user_id) DO NOTHING;
+
+INSERT INTO parser.games (match_id, game_number, winner)
+SELECT id, 1, 'csp_fixture'
+FROM parser.matches
+WHERE sha256 = repeat('c', 64) AND user_id = :'fixture_user_id'::integer
+ON CONFLICT (match_id, game_number) DO NOTHING;
+
+INSERT INTO parser.game_states
+    (game_id, turn_number, active_player, player_states, stack)
+SELECT g.id, s.turn_number, s.active_player, s.player_states, s.stack
+FROM parser.games g
+JOIN parser.matches m ON m.id = g.match_id
+CROSS JOIN (VALUES
+    (1, 'csp_fixture',
+     '{"csp_fixture":{"life":20,"zones":{"hand":["Island"]}},"csp_opponent":{"life":20,"zones":{"hand":["Mountain"]}}}'::jsonb,
+     '[]'::jsonb),
+    (2, 'csp_opponent',
+     '{"csp_fixture":{"life":18,"zones":{"battlefield":["Island"]}},"csp_opponent":{"life":20,"zones":{"battlefield":["Mountain"]}}}'::jsonb,
+     '["Counterspell"]'::jsonb)
+) AS s(turn_number, active_player, player_states, stack)
+WHERE m.sha256 = repeat('c', 64)
+  AND m.user_id = :'fixture_user_id'::integer
+  AND g.game_number = 1
+ON CONFLICT (game_id, turn_number, active_player) DO NOTHING;
+
+-- One archetype and one B&R event so /admin/archetypes and /admin/bnr-events
+-- render an edit link each. Without a row those list pages carry no link and
+-- the browser pass cannot reach the edit templates at all. Both ids are
+-- UUIDs, which is why the browser pass matches a UUID path segment.
+INSERT INTO analytics.archetypes (name, format, defining_cards)
+SELECT 'CSP Smoke Archetype', 'Pauper', '["Counterspell"]'::jsonb
+WHERE NOT EXISTS (
+    SELECT 1 FROM analytics.archetypes WHERE name = 'CSP Smoke Archetype'
+);
+
+INSERT INTO analytics.bnr_events (format, effective_date, description, card_actions)
+VALUES
+    ('Pauper', DATE '2026-01-01', 'CSP smoke B&R event',
+     '[{"card": "Counterspell", "action": "banned"}]'::jsonb)
+ON CONFLICT (format, effective_date) DO NOTHING;
+SQL
+)
+    if printf '%s\n' "$sql" | compose exec -T postgres \
+        psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q \
+        -v fixture_user_id="$fixture_user_id"; then
+        echo "browser fixture seeded (csp-fixture@local, match, turns)"
+    else
+        echo "STOP: could not seed the fixture-backed browser paths" >&2
+        return 1
+    fi
+}
+
 rc=0
 if [ "$SUITE" = "e2e" ] || [ "$SUITE" = "all" ]; then
     echo ""
@@ -236,6 +415,22 @@ fi
 if [ "$SUITE" = "ui" ] || [ "$SUITE" = "all" ]; then
     echo ""
     bash ci/smoke_ui.sh "$BASE_URL" || rc=1
+
+    # Browser pass (issue #126). ci/smoke_ui.sh is curl-only; this drives a
+    # real Chromium through every rendered page under the production CSP
+    # and fails on any violation, console error or broken control. It is a
+    # hard requirement of the ui suite, not an optional extra: a stack whose
+    # pages render but whose scripts are refused by the CSP is broken.
+    echo ""
+    echo "--- browser CSP smoke (ci/browser/smoke_csp.py) ---"
+    if ! seed_metagame_fixture || ! seed_csp_browser_fixture; then
+        rc=1
+    elif (cd ci/browser && uv sync --quiet && uv run playwright install chromium >/dev/null); then
+        (cd ci/browser && uv run smoke_csp.py "$BASE_URL") || rc=1
+    else
+        echo "STOP: could not install Playwright's Chromium for ci/browser (see README, pre-push smoke test)" >&2
+        rc=1
+    fi
 fi
 
 echo ""

@@ -40,3 +40,6 @@ docker-compose.override.yml
 # creates it empty on a fresh install; real data lives elsewhere and is
 # pointed at with DA_LEGACY_ARCHIVE_SOURCE.
 .legacy-archive/
+
+# Tailwind build tooling (services/web/build-css.sh)
+node_modules/

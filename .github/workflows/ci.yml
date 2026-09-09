@@ -15,6 +15,8 @@ name: CI
 #                             provides directly.
 #   diagram-drift             ubuntu-latest. The lab runner image is missing
 #                             chromium's NSS libraries (see the job).
+#   frontend-assets           ubuntu-latest. Needs only Node to rebuild the
+#                             committed Tailwind stylesheet and diff it.
 #   lint, typecheck,          lab. These fall under "needs none of the above
 #   test-common, docker-build -> either", and keeping them on the lab pool
 #                             is a deliberate choice: it exercises the pool
@@ -214,8 +216,38 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install uv
         uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+      # The ui suite ends with ci/browser/smoke_csp.py, which drives a real
+      # Chromium through every page under the production CSP (issue #126).
+      # --with-deps needs apt and therefore sudo, which only a GitHub-hosted
+      # runner has; the lab pool could not run this job (no daemon, no root).
+      - name: Install Chromium for the browser CSP smoke
+        working-directory: ci/browser
+        run: |
+          uv sync
+          uv run playwright install --with-deps chromium
       - name: Browser UI smoke
         run: bash ci/smoke.sh ui
+
+  # The Tailwind stylesheet is compiled ahead of time and committed (issue
+  # #126: no play CDN, no 'unsafe-eval'). This job rebuilds it with the CLI
+  # pinned in services/web/package-lock.json and fails if the committed file
+  # is stale, so a template edit that forgot `bash services/web/build-css.sh`
+  # cannot ship missing utility classes. Needs only Node, which ubuntu-latest
+  # has; nothing about it is a lab job.
+  frontend-assets:
+    name: frontend-assets
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Rebuild the Tailwind stylesheet
+        run: bash services/web/build-css.sh
+      - name: Check for drift
+        run: |
+          if ! git diff --exit-code -- services/web/web_service/static/css/tailwind.css; then
+            echo "::error::services/web/web_service/static/css/tailwind.css is stale. Run 'bash services/web/build-css.sh' and commit the result."
+            exit 1
+          fi
 
   # Stays on ubuntu-latest: the shared lab runner image is missing chromium's
   # NSS runtime libraries (libnspr4.so, libnss3.so, libnssutil3.so), so the
