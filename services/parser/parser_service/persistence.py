@@ -336,10 +336,8 @@ async def persist_match(
     ``review_status`` carries the consumer's verdict on the incoming
     parse — ``None`` for conclusive parses, ``'pending_review'`` for
     holding-pen parses (winner-less but at least one game observed).
-    On reparse, the new status wins so a later, conclusive snapshot
-    upgrades a ``pending_review`` row back to NULL. Admin rejections
-    are reapplied from ``match_review_verdicts`` even when a force-reparse
-    replaced the match row. See :func:`_update_match_row`.
+    Status precedence is defined in :func:`_update_match_row`; a stored
+    admin decision also applies when force-reparse replaced the match row.
     """
     now = datetime.now(UTC)
     raw_match_id = parsed.raw_match_id

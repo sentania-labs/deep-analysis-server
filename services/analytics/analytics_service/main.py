@@ -807,10 +807,7 @@ async def admin_list_matches(
 # ---------------------------------------------------------------------------
 
 
-# Values an admin can set via POST /admin/matches/{id}/review. ``None``
-# (encoded as ``null`` in JSON) accepts a held-back parse and makes it
-# user-visible. ``'pending_review'`` re-flags a normal row. ``'rejected'``
-# permanently discards a held parse from users + analytics.
+# Accepted values are documented by admin_update_match_review_status below.
 _VALID_REVIEW_VERDICTS: set[str | None] = {None, "pending_review", "rejected"}
 
 
@@ -823,7 +820,7 @@ async def admin_update_match_review_status(
     """Set the holding-pen verdict on a single match.
 
     ``review_status=null`` accepts the parse (back to user-visible).
-    ``'rejected'`` permanently discards. ``'pending_review'`` flags a
+    ``'rejected'`` hides the match until restored. ``'pending_review'`` flags a
     normal row for admin re-review. Other values are 422.
     """
     verdict = body.review_status

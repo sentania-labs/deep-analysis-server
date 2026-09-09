@@ -59,7 +59,7 @@ Requirements: Docker Engine 24+ with the Compose v2 plugin.
 | `auth`     | User accounts, sessions, agent registrations       |
 | `ingest`   | File upload, deduplication, event publishing       |
 | `parser`   | Async parse worker: `.dat`/`.log` → match records  |
-| `analytics`| Read-only stats and win-rate query API             |
+| `analytics`| Stats, win-rate queries, and admin match review             |
 | `web`      | Dashboard UI                                       |
 
 Shared infrastructure: PostgreSQL (single instance, per-service schemas), Redis (event bus + cache), Caddy (TLS).
@@ -74,6 +74,19 @@ docker compose up -d
 ```
 
 Full deployment documentation will live in `docs/` once services are implemented.
+
+## Match review and force-reparse
+
+Admins can Reject a match from the Matches page to hide it from the user's
+stats and match history without deleting it. Restore makes it visible again.
+Review decisions survive ordinary reparses and user-scoped, agent-scoped, and
+global force-reparses, including a parser restart between deletion and rebuilding.
+
+Force-reparse removes parsed matches and lets the backfill scanner rebuild them
+from archived files asynchronously. Its result reports matches deleted and
+review verdicts carried forward. The latter counts selected matches already
+protected by a stored admin decision, not completed rebuilds. The dashboard
+may be temporarily unavailable while rebuilding runs.
 
 ## Releases and rollout
 

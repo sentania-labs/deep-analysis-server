@@ -87,13 +87,9 @@ services:
   # `service_completed_successfully`:
   #   postgres healthy → root-migrate → auth-migrate → ingest-migrate → services.
   #
-  # `root-migrate` runs the root alembic head, which creates the four
-  # logical schemas (auth/ingest/parser/analytics) and the unprivileged
-  # service roles. `auth-migrate` then applies auth's own tables (users,
-  # sessions, agent_registrations). `ingest-migrate` must run after
-  # `auth-migrate` because ingest migration 001 FK-references auth.users.
-  # parser still has no migrate service of its own — that lands when parser
-  # grows tables.
+  # Migration ownership is documented in docs/migrations.md.
+  # `ingest-migrate` must run after `auth-migrate` because ingest migration
+  # 001 FK-references auth.users.
   #
   # DATABASE_URL must be a sync psycopg URL (alembic env.py uses the sync
   # engine), e.g. postgresql+psycopg://USER:PASS@postgres:5432/deep_analysis.

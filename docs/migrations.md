@@ -1,17 +1,17 @@
 # Database migrations
 
 Deep Analysis uses Alembic with a **multi-head** layout. The root head
-(this repo's `alembic/` directory) owns only the cross-cutting
-infrastructure — the four logical schemas (`auth`, `ingest`, `parser`,
-`analytics`) and the four unprivileged service roles
-(`deep_analysis_auth`, `deep_analysis_ingest`, `deep_analysis_parser`,
-`deep_analysis_analytics`).
+(this repo's `alembic/` directory) owns the logical schemas, service roles,
+and the parser and analytics tables. Auth and ingest have separate heads
+under `services/<name>/alembic/`. Apply the root head before service heads;
+Docker Compose runs these as migration jobs before the dependent services start.
 
-Starting in W2, each service adds its own Alembic head under
-`services/<name>/alembic/` and manages only its own schema's tables. This
-keeps services independently migratable: the `parser` service can ship
-a schema change without coordinating with `analytics`, and vice-versa.
-Each service's README documents its migration head.
+Root revision `032` creates the durable match review verdict table and copies
+existing rejected matches into it. Apply it before running the updated services
+or force-reparse. Prior accept/restore decisions cannot be backfilled because
+the old normal status did not distinguish an admin decision from a normal parse.
+Downgrading below `032` drops the durable records and removes force-reparse
+verdict protection. See [match review usage](../README.md#match-review-and-force-reparse).
 
 ## Role credentials
 
@@ -22,7 +22,7 @@ keeps credentials out of migration history and out of the repo.
 
 ## Common commands
 
-Root head (schemas + roles):
+Root head:
 
 ```
 uv run alembic upgrade head       # apply all pending migrations
@@ -55,8 +55,8 @@ sync psycopg driver for migrations, not asyncpg.
 
 ## Service-scoped heads
 
-Each service owns its own Alembic config under
-`services/<name>/alembic/` with its own `alembic.ini`. Per-service
+Auth and ingest own separate Alembic configs under
+`services/<name>/alembic/`, each with its own `alembic.ini`. Per-service
 heads:
 
 - use their own `version_table` (e.g. `auth_alembic_version`) inside

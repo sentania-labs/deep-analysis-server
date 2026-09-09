@@ -59,7 +59,7 @@ async def delete_my_matches(
     """Delete parsed matches for the authenticated user.
 
     When *agent_id* is provided, only matches uploaded by that agent
-    are deleted.  Returns the count of deleted matches.
+    are deleted. Returns deletion and carried-forward verdict counts.
     """
     params: dict[str, str] = {}
     if agent_id is not None:
