@@ -1,0 +1,6 @@
+/* Source for web_service/static/css/tailwind.css. Do not edit the output by
+   hand; run services/web/build-css.sh. App-level rules that are not Tailwind
+   utilities (fonts, x-cloak, htmx indicator) live in web_service/static/style.css. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

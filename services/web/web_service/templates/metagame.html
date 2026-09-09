@@ -2,6 +2,11 @@
 
 {% block title %}Metagame{% if selected_format %} &middot; {{ selected_format }}{% endif %} &middot; Deep Analysis{% endblock %}
 
+{% block extra_head %}
+<script defer src="/static/js/metagame.js?v={{ app_version }}"></script>
+<script defer src="/static/vendor/chart-4.5.1.umd.js" integrity="sha384-hfkuqrKeWFmnTMWN31VWyoe8xgdTADD11kgxmdpx2uyE6j5Az5uZq6u6AKYYmAOw"></script>
+{% endblock %}
+
 {% block content %}
 <div class="mb-6">
     <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Metagame</h1>
@@ -35,7 +40,18 @@
 {% endif %}
 
 {% if selected_format and tiers is defined %}
-<div x-data="metagameData()" x-init="init()">
+{# Behaviour lives in static/js/metagame.js (Alpine component metagame).
+   The payload below is a JSON data block: not executed, so not a script
+   under CSP; tojson escapes < > & so it cannot break out of the tag. #}
+<div x-data="metagame">
+<script type="application/json" data-metagame>{{ {
+    "window": window|default("30d"),
+    "format": selected_format,
+    "tiers": tiers.tiers if tiers else [],
+    "total_results": (tiers.total_results|default(0)) if tiers else 0,
+    "trend_labels": trends.labels if trends else [],
+    "trend_datasets": trends.datasets if trends else []
+}|tojson }}</script>
 
 {# Time-window selector #}
 <div class="flex gap-2 mb-6">
@@ -79,7 +95,7 @@
                         <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">
                             <div class="flex items-center justify-end gap-2">
                                 <div class="w-16 h-1.5 rounded-full dark:bg-surface-3 bg-surface-light-3 overflow-hidden">
-                                    <div class="h-full bg-accent rounded-full" :style="'width:' + Math.min(tier.popularity_pct, 100) + '%'"></div>
+                                    <div class="h-full bg-accent rounded-full" :style="popularityStyle(tier)"></div>
                                 </div>
                                 <span x-text="tier.popularity_pct.toFixed(1) + '%'"></span>
                             </div>
@@ -105,7 +121,7 @@
         <template x-if="!trendsLoading && trendLabels.length === 0">
             <p class="text-sm dark:text-txt-secondary text-txt-secondary-light text-center py-8">No trend data for this window.</p>
         </template>
-        <div x-show="!trendsLoading && trendLabels.length > 0" style="position:relative; height:300px;">
+        <div x-show="!trendsLoading && trendLabels.length > 0" class="relative h-[300px]">
             <canvas id="trendsChart"></canvas>
         </div>
     </div>
@@ -171,100 +187,5 @@
 
 </div>{# /x-data #}
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-var _chartColors = [
-    '#4e7cff', '#22c55e', '#ef4444', '#eab308', '#a855f7',
-    '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#64748b'
-];
-
-function metagameData() {
-    return {
-        currentWindow: '{{ window|default("30d") }}',
-        windows: ['14d', '30d', '90d', 'all'],
-        format: '{{ selected_format }}',
-        tierRows: {{ tiers.tiers|tojson if tiers else '[]' }},
-        totalResults: {{ tiers.total_results|default(0) if tiers else 0 }},
-        tiersLoading: false,
-        trendLabels: {{ trends.labels|tojson if trends else '[]' }},
-        trendDatasets: {{ trends.datasets|tojson if trends else '[]' }},
-        trendsLoading: false,
-        chart: null,
-
-        init() {
-            this.$nextTick(() => { this.renderChart(); });
-        },
-
-        async switchWindow(w) {
-            if (w === this.currentWindow) return;
-            this.currentWindow = w;
-            this.tiersLoading = true;
-            this.trendsLoading = true;
-            try {
-                var tiersResp = await fetch('/metagame/api/tiers/' + encodeURIComponent(this.format) + '?window=' + w);
-                if (tiersResp.ok) {
-                    var tiersData = await tiersResp.json();
-                    this.tierRows = tiersData.tiers || [];
-                    this.totalResults = tiersData.total_results || 0;
-                }
-            } catch(e) { console.error('Failed to fetch tiers', e); }
-            this.tiersLoading = false;
-
-            try {
-                var trendsResp = await fetch('/metagame/api/trends/' + encodeURIComponent(this.format) + '?window=' + w);
-                if (trendsResp.ok) {
-                    var trendsData = await trendsResp.json();
-                    this.trendLabels = trendsData.labels || [];
-                    this.trendDatasets = trendsData.datasets || [];
-                }
-            } catch(e) { console.error('Failed to fetch trends', e); }
-            this.trendsLoading = false;
-            this.$nextTick(() => { this.renderChart(); });
-        },
-
-        renderChart() {
-            var canvas = document.getElementById('trendsChart');
-            if (!canvas) return;
-            if (this.chart) { this.chart.destroy(); }
-            if (!this.trendLabels.length) return;
-            var isDark = document.documentElement.classList.contains('dark');
-            var gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
-            var textColor = isDark ? '#8b8b9e' : '#6b6b7e';
-            this.chart = new Chart(canvas, {
-                type: 'line',
-                data: {
-                    labels: this.trendLabels,
-                    datasets: this.trendDatasets.map(function(ds, i) {
-                        return {
-                            label: ds.label,
-                            data: ds.data,
-                            borderColor: _chartColors[i % _chartColors.length],
-                            backgroundColor: _chartColors[i % _chartColors.length] + '20',
-                            borderWidth: 2,
-                            tension: 0.3,
-                            pointRadius: 2,
-                            fill: false,
-                        };
-                    })
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: { color: textColor, boxWidth: 12, padding: 16, font: { size: 11 } }
-                        }
-                    },
-                    scales: {
-                        x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
-                        y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } }, beginAtZero: true }
-                    }
-                }
-            });
-        }
-    };
-}
-</script>
 {% endif %}
 {% endblock %}

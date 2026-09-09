@@ -1,7 +1,52 @@
-/* Deep Analysis — minimal overrides for Tailwind CDN + Alpine.js */
+/* Deep Analysis app stylesheet.
+ *
+ * Tailwind utilities are compiled separately into css/tailwind.css (see
+ * services/web/build-css.sh). Everything the UI needs is served from /static
+ * so the gateway can keep style-src at 'self' with no inline styles and no
+ * third-party origin (issue #126).
+ */
+
+/* Fonts: vendored copies of the upstream releases, pinned in
+   vendor/manifest.json. Inter ships as one variable font; JetBrains Mono as
+   the three static weights the UI uses. */
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+    src: url('/static/fonts/InterVariable-4.1.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/static/fonts/JetBrainsMono-2.304-Regular.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/static/fonts/JetBrainsMono-2.304-Medium.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/static/fonts/JetBrainsMono-2.304-SemiBold.woff2') format('woff2');
+}
 
 /* Alpine.js cloak: hide elements until Alpine initialises */
 [x-cloak] { display: none !important; }
+
+/* htmx request indicator. htmx injects these three rules as an inline <style>
+   at startup unless includeIndicatorStyles is off (it is, in base.html's
+   htmx-config meta tag); an inline style element is a CSP violation. */
+.htmx-indicator { opacity: 0; }
+.htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
+.htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
 
 /* Scrollbar styling for dark mode */
 .dark ::-webkit-scrollbar { width: 8px; height: 8px; }

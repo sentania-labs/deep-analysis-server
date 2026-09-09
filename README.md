@@ -140,7 +140,9 @@ bash ci/smoke.sh
 
 That is the whole sequence. The script creates the external `edge-slots` network, writes a throwaway compose env file (it never touches your `.env`), generates the JWT keypair the compose override bind-mounts, brings the stack up, waits for container health and for the bootstrap admin to answer, runs both smoke suites, dumps logs if anything failed, and tears the stack down. It needs `docker`, `uv`, `curl` and `python3` on your PATH, and Docker Compose **v2.24.4 or newer** (the compose override uses the `!override` / `!reset` merge tags). The script checks the Compose version up front and tells you if it is too old.
 
-Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD, `ci/smoke_ui.sh`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
+Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD via curl in `ci/smoke_ui.sh`, then every rendered page and control driven in a real Chromium under the production Content Security Policy by `ci/browser/smoke_csp.py`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
+
+The browser pass needs Playwright's Chromium. `ci/smoke.sh` installs the browser binary itself (`uv run playwright install chromium`, cached under `~/.cache/ms-playwright`), but on a bare machine the system libraries Chromium links against have to be present; `cd ci/browser && uv run playwright install --with-deps chromium` adds them (it uses `sudo apt`, which is why CI does that step in the workflow rather than in the script). It writes `admin-dashboard.png`, `user-dashboard.png` and `admin-settings.png` to `ci/browser/screenshots/`.
 
 Useful knobs, all optional:
 
@@ -156,8 +158,22 @@ Useful knobs, all optional:
 > `=== Smoke result: 23 PASS, 0 FAIL ===` and exits 0. `ci/smoke_ui.sh` ends
 > `0 FAIL`; its PASS count moves between roughly 62 and 66 because a few of
 > its admin checks only run when the stack already has an agent row to act
-> on. Read the FAIL count, not the PASS count: any FAIL line is a real
-> regression. `ci/smoke.sh` exits non-zero if either suite reports a FAIL.
+> on. `ci/browser/smoke_csp.py` ends `=== Browser CSP smoke result: N PASS,
+> 0 FAIL ===`; its PASS count also moves with the rows the stack has. Read
+> the FAIL count, not the PASS count: any FAIL line is a real regression.
+> `ci/smoke.sh` exits non-zero if any suite reports a FAIL.
+
+### Frontend assets and the Content Security Policy
+
+The gateway sends `script-src 'self'; style-src 'self'` with no `'unsafe-inline'`, no `'unsafe-eval'` and no third-party origin (`gateway/Caddyfile`, issue #126). Everything the browser loads therefore lives under `services/web/web_service/static/`:
+
+| What | Where | How it is kept honest |
+|---|---|---|
+| Tailwind utilities | `static/css/tailwind.css`, compiled and committed | `bash services/web/build-css.sh` rebuilds it from the templates with the Tailwind CLI pinned in `services/web/package-lock.json`; the `frontend-assets` CI job rebuilds and fails on drift. Run it after editing any template, static JS file, Python file under `web_service/` (the content scan covers them too) or `tailwind.config.js`. |
+| htmx, Alpine.js (CSP build), Chart.js, Inter, JetBrains Mono | `static/vendor/`, `static/fonts/` | Pinned with upstream URL, integrity and sha256 in `static/vendor/manifest.json`; `services/web/tests/test_csp_hygiene.py` verifies every file against it. |
+| App behaviour | `static/js/app.js` plus one file per page that needs more | No inline `<script>`, `on*=` handler or `style=` attribute may appear in a template; the same test fails the build if one does. Alpine's CSP build cannot see globals (`window`, `Math`, `document`) from an `x-*` attribute, so anything of that shape goes in the JS files. |
+
+Small behaviours are opt-in data attributes handled once in `app.js`: `data-confirm` on a form (prompt before submit), `data-autosubmit` on a select, `data-href` on a row, `data-toggle-target`, `data-copy-target`, `data-submit-once`, and `data-progress-percent`. To upgrade a vendored library, follow the steps at the top of the manifest.
 
 `ci/smoke_ui.sh` temporarily rotates the admin password and restores it before it exits. If it dies partway through its password section against a stack you kept with `DA_SMOKE_KEEP=1`, the admin password is left as `ui-smoke-<original>`; tear the stack down and start again.
 

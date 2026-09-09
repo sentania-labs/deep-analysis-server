@@ -29,7 +29,7 @@
         <p class="mb-2">
             <button type="button"
                     class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1.5 text-xs transition-colors"
-                    onclick="copyRegistrationCode()"
+                    data-copy-target="registration-code-block"
                     id="copy-registration-code-btn">Copy</button>
         </p>
         <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">
@@ -38,30 +38,6 @@
             The code expires in 10 minutes.
         </p>
     </div>
-    <script>
-    function copyRegistrationCode() {
-        var code = {{ registration_code | tojson }};
-        var btn = document.getElementById("copy-registration-code-btn");
-        var done = function () {
-            if (btn) {
-                var original = btn.textContent;
-                btn.textContent = "Copied";
-                setTimeout(function () { btn.textContent = original; }, 1500);
-            }
-        };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(code).then(done, done);
-            return;
-        }
-        var ta = document.createElement("textarea");
-        ta.value = code;
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand("copy"); } catch (e) { /* ignore */ }
-        document.body.removeChild(ta);
-        done();
-    }
-    </script>
     {% endif %}
 </div>
 
@@ -112,11 +88,11 @@
                     <td class="px-4 py-2.5 text-right">
                         {% if not a.revoked_at %}
                         <div class="flex gap-1 justify-end">
-                            <form method="post" action="/profile/agents/{{ a.agent_id }}/revoke" class="inline revoke-form">
+                            <form method="post" action="/profile/agents/{{ a.agent_id }}/revoke" class="inline" data-confirm="Revoke this agent? It will need to be re-registered to upload again.">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="bg-danger text-white hover:bg-red-600 rounded-md px-2 py-1 text-xs font-medium transition-colors">Revoke</button>
                             </form>
-                            <form method="post" action="/profile/agents/{{ a.agent_id }}/reparse" class="inline reparse-form">
+                            <form method="post" action="/profile/agents/{{ a.agent_id }}/reparse" class="inline" data-confirm="Reparse this agent's matches? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them from the archived files.">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-2 py-1 text-xs transition-colors">Reparse</button>
                             </form>
@@ -159,20 +135,4 @@
 </div>
 {% endif %}
 
-<script>
-    document.querySelectorAll('.revoke-form').forEach(function (form) {
-        form.addEventListener('submit', function (e) {
-            if (!window.confirm('Revoke this agent? It will need to be re-registered to upload again.')) {
-                e.preventDefault();
-            }
-        });
-    });
-    document.querySelectorAll('.reparse-form').forEach(function (form) {
-        form.addEventListener('submit', function (e) {
-            if (!window.confirm('Reparse this agent\'s matches? This deletes parsed matches uploaded by this agent. The backfill scanner will re-parse them from the archived files.')) {
-                e.preventDefault();
-            }
-        });
-    });
-</script>
 {% endblock %}

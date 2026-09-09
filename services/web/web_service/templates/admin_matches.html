@@ -197,13 +197,13 @@ Review reason: {{ m.review_reason or "none recorded" }}
                     <td class="px-4 py-2.5 text-sm">
                         <div class="flex gap-1 items-center">
                         {% if m.review_status == "pending_review" %}
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'accept') }}">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline" data-confirm="{{ review_confirm(m, 'accept') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
                                 <button type="submit" class="border border-success/40 text-success hover:bg-success/10 rounded px-2 py-0.5 text-xs transition-colors" title="Accept this match: it becomes visible to the user and counts in their stats.">Accept</button>
                             </form>
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'reject') }}">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline" data-confirm="{{ review_confirm(m, 'reject') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="rejected">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
@@ -218,7 +218,7 @@ Review reason: {{ m.review_reason or "none recorded" }}
                                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded px-2 py-0.5 text-xs transition-colors" title="Restore this match: it becomes visible to the user again and counts in their stats.">Restore</button>
                             </form>
                         {% else %}
-                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline review-confirm-form" data-confirm="{{ review_confirm(m, 'flag') }}">
+                            <form method="post" action="/admin/matches/{{ m.match_id }}/review" class="inline" data-confirm="{{ review_confirm(m, 'flag') }}">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="verdict" value="pending_review">
                                 <input type="hidden" name="return_to" value="{{ return_to }}">
@@ -263,13 +263,4 @@ Review reason: {{ m.review_reason or "none recorded" }}
     {% endif %}
 </div>
 
-<script>
-    document.querySelectorAll('.review-confirm-form').forEach(function (form) {
-        form.addEventListener('submit', function (e) {
-            if (!window.confirm(form.dataset.confirm || 'Change this match\'s review status?')) {
-                e.preventDefault();
-            }
-        });
-    });
-</script>
 {% endblock %}

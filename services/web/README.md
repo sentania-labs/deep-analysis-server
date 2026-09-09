@@ -1,3 +1,15 @@
 # web
 
 The web service is the user-facing dashboard UI. In production it reaches other services only through the gateway; in development it may talk directly to `auth` and `analytics`. Initial implementation is FastAPI + Jinja templating; an SPA frontend is an option for later phases. No domain data of its own — it is a presentation layer over the analytics API.
+
+## Frontend assets and the CSP
+
+The gateway's Content Security Policy is `script-src 'self'; style-src 'self'` with no `'unsafe-inline'`, no `'unsafe-eval'` and no third-party origin (`gateway/Caddyfile`, issue #126). That shapes how templates are written:
+
+- **No inline script, handler or style.** A template may not contain a `<script>` body (JSON data blocks with `type="application/json"` are fine, they are never executed), an `on*=` attribute, or a `style=` attribute. `tests/test_csp_hygiene.py` fails on any of them. Behaviour goes in `web_service/static/js/`: `app.js` holds the shared Alpine components (`themeManager`, the `sidebar` store) and the data-attribute behaviours (`data-confirm`, `data-autosubmit`, `data-href`, `data-toggle-target`, `data-copy-target`, `data-submit-once`, `data-progress-percent`); a page that needs more gets its own file loaded from its `extra_head` block, before Alpine.
+- **Alpine.js is the CSP build** (`@alpinejs/csp`). Its expression parser handles property access, assignment, ternaries, comparisons, `!`, `&&`, `||`, method calls and object or array literals, so `@click="open = !open"` and `:class="{ 'dark': isDark }"` keep working. It refuses statements, function bodies and every global (`window`, `Math`, `document`, `localStorage`), so anything like that becomes a method on an `Alpine.data(...)` component. `:style` must bind an object, never a string: the string form is written with `setAttribute('style')`, which CSP blocks.
+- **Tailwind is compiled, not the play CDN.** `web_service/static/css/tailwind.css` is generated from the templates by `bash services/web/build-css.sh` (Tailwind CLI 3.4, pinned in `package-lock.json`; needs Node) and committed. Rebuild after touching any template, static JS file, Python file under `web_service/` (the content scan covers them too) or `tailwind.config.js`; the `frontend-assets` CI job fails on drift. The theme (custom colours, `font-ui`, `font-mono`) lives in `tailwind.config.js`.
+- **Third-party files are vendored and pinned.** htmx, Alpine, Chart.js and the Inter and JetBrains Mono fonts sit under `web_service/static/vendor/` and `static/fonts/`, each recorded in `static/vendor/manifest.json` with its upstream URL, upstream integrity and sha256. The hygiene test checks every file and every `integrity=` attribute against the manifest. The manifest header says how to upgrade one.
+- **htmx** runs with `includeIndicatorStyles`, `allowEval` and `allowScriptTags` off (the `htmx-config` meta tag in `base.html`); its indicator CSS is in `static/style.css`.
+
+`ci/browser/smoke_csp.py` (run by `bash ci/smoke.sh ui`) loads every page in a real Chromium under this policy and fails on any CSP violation or console error, so a template that slips past the static checks still cannot ship.

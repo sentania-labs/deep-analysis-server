@@ -12,7 +12,8 @@
 #   3. write a throwaway compose env file (never touches your .env)
 #   4. generate a throwaway JWT keypair at the path the CI overlay mounts
 #   5. bring the stack up and wait for it to actually be healthy
-#   6. run the requested smoke suite(s)
+#   6. run the requested smoke suite(s); the ui suite ends with a real
+#      browser pass under the production CSP (ci/browser/smoke_csp.py)
 #   7. dump logs on failure, then tear the stack down
 #
 # Usage:
@@ -25,6 +26,9 @@
 #   DA_SMOKE_PORT      host port for the gateway   (default 8080)
 #   DA_SMOKE_JWT_DIR   host dir for the keypair    (default /tmp/ci-jwt-keys)
 #   DA_SMOKE_KEEP      set to 1 to skip teardown   (default unset)
+#   DA_SMOKE_SCREENSHOT_DIR
+#                      where the browser pass writes its screenshots
+#                      (default ci/browser/screenshots)
 #   DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL / _PASSWORD
 #                      bootstrap admin used by both suites (defaults below)
 #
@@ -228,6 +232,39 @@ fi
 # --------------------------------------------------------------------------
 # 6. the smoke runs
 # --------------------------------------------------------------------------
+# The /metagame/<format> page is the UI's most involved piece of client-side
+# rendering (Alpine x-for/x-if, a :style binding, a Chart.js chart, JSON API
+# refreshes) and a fresh stack has no scraped data to render it with. Seed
+# one mtgtop8 event with three results straight into analytics.* so the
+# browser pass can exercise that page; the fixture is inert for every other
+# suite. Sets METAGAME_FLAG=--expect-metagame on success so the browser pass
+# FAILS (rather than skips) if the page then renders nothing.
+METAGAME_FLAG=""
+seed_metagame_fixture() {
+    local sql
+    sql=$(cat <<'SQL'
+INSERT INTO analytics.mtgtop8_events (event_name, format, event_date, event_url, player_count)
+VALUES ('CSP Smoke Challenge', 'Pauper', CURRENT_DATE - 3, 'https://smoke.local/mtgtop8/csp-smoke', 3)
+ON CONFLICT (event_url) DO NOTHING;
+INSERT INTO analytics.mtgtop8_results (event_id, player_name, placement, deck_name, decklist_main, decklist_sideboard)
+SELECT e.id, r.player_name, r.placement, r.deck_name,
+       '{"Island": 20, "Counterspell": 4}'::jsonb, '{"Hydroblast": 4}'::jsonb
+FROM analytics.mtgtop8_events e
+CROSS JOIN (VALUES ('smoke_alpha', 1, 'Mono Blue Faeries'),
+                   ('smoke_beta', 2, 'Boros Synthesizer'),
+                   ('smoke_gamma', 3, 'Mono Blue Faeries')) AS r(player_name, placement, deck_name)
+WHERE e.event_url = 'https://smoke.local/mtgtop8/csp-smoke'
+  AND NOT EXISTS (SELECT 1 FROM analytics.mtgtop8_results x WHERE x.event_id = e.id);
+SQL
+)
+    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q -c "$sql" >/dev/null 2>&1; then
+        echo "metagame fixture seeded (analytics.mtgtop8_events: CSP Smoke Challenge)"
+        METAGAME_FLAG="--expect-metagame"
+    else
+        echo "WARN: could not seed the metagame fixture; the browser pass will skip /metagame/<format>" >&2
+    fi
+}
+
 rc=0
 if [ "$SUITE" = "e2e" ] || [ "$SUITE" = "all" ]; then
     echo ""
@@ -236,6 +273,22 @@ fi
 if [ "$SUITE" = "ui" ] || [ "$SUITE" = "all" ]; then
     echo ""
     bash ci/smoke_ui.sh "$BASE_URL" || rc=1
+
+    # Browser pass (issue #126). ci/smoke_ui.sh is curl-only; this drives a
+    # real Chromium through every rendered page under the production CSP
+    # and fails on any violation, console error or broken control. It is a
+    # hard requirement of the ui suite, not an optional extra: a stack whose
+    # pages render but whose scripts are refused by the CSP is broken.
+    echo ""
+    echo "--- browser CSP smoke (ci/browser/smoke_csp.py) ---"
+    seed_metagame_fixture
+    if (cd ci/browser && uv sync --quiet && uv run playwright install chromium >/dev/null); then
+        (cd ci/browser && DA_SMOKE_SCREENSHOT_DIR="${DA_SMOKE_SCREENSHOT_DIR:-$REPO_ROOT/ci/browser/screenshots}" \
+            uv run smoke_csp.py "$BASE_URL" $METAGAME_FLAG) || rc=1
+    else
+        echo "STOP: could not install Playwright's Chromium for ci/browser (see README, pre-push smoke test)" >&2
+        rc=1
+    fi
 fi
 
 echo ""

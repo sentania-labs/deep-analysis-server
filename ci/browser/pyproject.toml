@@ -1,0 +1,15 @@
+[project]
+name = "deep-analysis-browser-smoke"
+version = "0.1.0"
+description = "Browser smoke for the web UI under the production CSP (ci/browser/smoke_csp.py). Own project so Playwright stays out of the service dependency set."
+requires-python = ">=3.12"
+dependencies = [
+    "playwright>=1.55",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

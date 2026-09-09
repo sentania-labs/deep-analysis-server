@@ -355,10 +355,12 @@ async def test_reject_form_confirms_with_match_context(
         _matches_response_with_reason("pending_review", "winner ambiguous"),
     )
 
-    # The reject form opts into the confirmation handler.
+    # The reject form opts into the confirmation handler: data-confirm is
+    # picked up by the delegated submit listener in static/js/app.js. There
+    # must be no inline script doing it (the gateway CSP forbids one).
     assert 'name="verdict" value="rejected"' in body
-    assert "review-confirm-form" in body
-    assert "window.confirm(form.dataset.confirm" in body
+    assert "data-confirm=" in body
+    assert "window.confirm(" not in body
 
     confirms = _confirm_attrs(body)
     assert confirms, "no data-confirm attributes rendered"

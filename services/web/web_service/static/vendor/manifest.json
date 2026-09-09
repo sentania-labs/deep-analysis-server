@@ -1,0 +1,95 @@
+{
+  "_about": [
+    "Pinned third-party frontend assets served from this directory (issue #126).",
+    "Every script, stylesheet and font the UI loads comes from /static; the gateway",
+    "CSP allows no third-party origin for them. To upgrade an asset: fetch the",
+    "upstream artifact, verify upstream_integrity, copy the listed file in with the",
+    "version in its filename, record its sha256 and sri here, and update base.html.",
+    "services/web/tests/test_csp_hygiene.py checks every file against this manifest."
+  ],
+  "assets": [
+    {
+      "path": "vendor/htmx-2.0.4.min.js",
+      "package": "htmx.org",
+      "version": "2.0.4",
+      "upstream": "https://registry.npmjs.org/htmx.org/-/htmx.org-2.0.4.tgz",
+      "upstream_integrity": "sha512-HLxMCdfXDOJirs3vBZl/ZLoY+c7PfM4Ahr2Ad4YXh6d22T5ltbTXFFkpx9Tgb2vvmWFMbIc3LqN2ToNkZJvyYQ==",
+      "upstream_file": "package/dist/htmx.min.js",
+      "sha256": "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447",
+      "sri": "sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+",
+      "license": "0BSD",
+      "license_file": "vendor/LICENSE-htmx.txt",
+      "note": "Same file and SRI hash base.html loaded from unpkg before vendoring."
+    },
+    {
+      "path": "vendor/alpine-csp-3.17.2.min.js",
+      "package": "@alpinejs/csp",
+      "version": "3.17.2",
+      "upstream": "https://registry.npmjs.org/@alpinejs/csp/-/csp-3.17.2.tgz",
+      "upstream_integrity": "sha512-jJXIzBaplTu1xVuhtNXEYDQDbQrdVJbXHYSVeF22fz4Vzm+g0X2XMb4pY1ywEpYLsFRx7ZcBE5gMyyuJpKPfHg==",
+      "upstream_file": "package/dist/cdn.min.js",
+      "sha256": "34a9a402fb8cc4904f411f17321a43fb3c55b825d3f57e9103c0e10cbb7ed8be",
+      "sri": "sha384-kWTzsVwMm5SQeDmCv4DpGqQuKHE6MPWr6MM9R6cJg1CHF3xPbmjZX3ZTS6OB0EZu",
+      "license": "MIT",
+      "license_file": "vendor/LICENSE-alpinejs.md",
+      "note": "CSP build: evaluates x-* expressions with its own parser instead of new Function, so script-src needs no 'unsafe-eval'. It resolves identifiers from component scope only (no window, Math, document); keep such logic in static/js."
+    },
+    {
+      "path": "vendor/chart-4.5.1.umd.js",
+      "package": "chart.js",
+      "version": "4.5.1",
+      "upstream": "https://registry.npmjs.org/chart.js/-/chart.js-4.5.1.tgz",
+      "upstream_integrity": "sha512-GIjfiT9dbmHRiYi6Nl2yFCq7kkwdkp1W/lp2J99rX0yo9tgJGn3lKQATztIjb5tVtevcBtIdICNWqlq5+E8/Pw==",
+      "upstream_file": "package/dist/chart.umd.js",
+      "sha256": "ecc3cd1eeb8c34d2178e3f59fd63ec5a3d84358c11730af0b9958dc886d7652a",
+      "sri": "sha384-hfkuqrKeWFmnTMWN31VWyoe8xgdTADD11kgxmdpx2uyE6j5Az5uZq6u6AKYYmAOw",
+      "license": "MIT",
+      "license_file": "vendor/LICENSE-chartjs.md",
+      "note": "Only loaded by metagame.html. The jsdelivr URL it replaced was unpinned (chart.js latest)."
+    },
+    {
+      "path": "fonts/InterVariable-4.1.woff2",
+      "package": "Inter",
+      "version": "4.1",
+      "upstream": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "upstream_sha256": "9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e",
+      "upstream_file": "web/InterVariable.woff2",
+      "sha256": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3",
+      "license": "SIL OFL 1.1",
+      "license_file": "fonts/LICENSE-Inter.txt"
+    },
+    {
+      "path": "fonts/JetBrainsMono-2.304-Regular.woff2",
+      "package": "JetBrains Mono",
+      "version": "2.304",
+      "upstream": "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip",
+      "upstream_sha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+      "upstream_file": "fonts/webfonts/JetBrainsMono-Regular.woff2",
+      "sha256": "a9cb1cd82332b23a47e3a1239d25d13c86d16c4220695e34b243effa999f45f2",
+      "license": "SIL OFL 1.1",
+      "license_file": "fonts/LICENSE-JetBrainsMono-OFL.txt"
+    },
+    {
+      "path": "fonts/JetBrainsMono-2.304-Medium.woff2",
+      "package": "JetBrains Mono",
+      "version": "2.304",
+      "upstream": "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip",
+      "upstream_sha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+      "upstream_file": "fonts/webfonts/JetBrainsMono-Medium.woff2",
+      "sha256": "086c48dfbea9ddaff1320f7e09399b8e2924e88ce67453721255db3bdbb5a353",
+      "license": "SIL OFL 1.1",
+      "license_file": "fonts/LICENSE-JetBrainsMono-OFL.txt"
+    },
+    {
+      "path": "fonts/JetBrainsMono-2.304-SemiBold.woff2",
+      "package": "JetBrains Mono",
+      "version": "2.304",
+      "upstream": "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip",
+      "upstream_sha256": "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf",
+      "upstream_file": "fonts/webfonts/JetBrainsMono-SemiBold.woff2",
+      "sha256": "918edad542a1da608fd2ba8daebaff9ac802309103fe760eed465b8b4e47faf1",
+      "license": "SIL OFL 1.1",
+      "license_file": "fonts/LICENSE-JetBrainsMono-OFL.txt"
+    }
+  ]
+}

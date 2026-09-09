@@ -1,0 +1,12 @@
+{
+  "name": "deep-analysis-web-assets",
+  "private": true,
+  "description": "Build tooling for the web service's compiled Tailwind stylesheet (issue #126). Not published; run build-css.sh.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.js -i tailwind.input.css -o web_service/static/css/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.19"
+  }
+}

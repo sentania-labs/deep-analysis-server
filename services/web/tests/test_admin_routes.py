@@ -380,7 +380,11 @@ async def test_post_reset_password_renders_temp(
     assert "TempStrongPwGoesHere1234" in r.text
     # It is also presented in a code/strong block (we expect the
     # template to wrap it visibly — assert one of the common markers).
-    assert "<code>" in r.text or "monospace" in r.text.lower() or 'class="temp-password"' in r.text
+    # The temp-password class is the marker; the old fallback on "monospace"
+
+    # only matched the Tailwind config that base.html no longer inlines.
+
+    assert 'class="temp-password' in r.text
     # The page must say the sessions were revoked, otherwise the admin
     # cannot tell whether they still need to click "Revoke sessions".
     assert "2 active sessions revoked" in r.text
