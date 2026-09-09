@@ -866,8 +866,8 @@ async def admin_set_match_review_status(
 ) -> tuple[AdminMatchItem | None, str | None]:
     """Set the holding-pen verdict on a match.
 
-    ``review_status`` may be ``None`` (accept), ``'pending_review'``
-    (flag for review), or ``'rejected'`` (permanently discard). Returns
+    Verdict semantics are documented by
+    ``analytics_service.main.admin_update_match_review_status``. Returns
     ``(item, None)`` on success, ``(None, "match_not_found")`` on 404,
     or ``(None, "invalid_review_status")`` on 422.
     """

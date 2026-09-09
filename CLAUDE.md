@@ -44,7 +44,7 @@ sanctioned cross-system channel.
 | `auth`     | Users, sessions, agent registrations, admin endpoints, TTL/rotation      | deep-analysis-auth      |
 | `ingest`   | Upload endpoints, sha256 dedup, raw file archive, publishes `file.ingested` | deep-analysis-ingest |
 | `parser`   | Async worker: consumes ingest events, parses `.dat`/`.log`, populates match/game tables | deep-analysis-parser |
-| `analytics`| Read-only query API: stats, win rate, device-attribution cuts            | deep-analysis-analytics |
+| `analytics`| Query and administration API (see services/analytics/README.md)            | deep-analysis-analytics |
 | `web`      | Dashboard UI, talks only through gateway                                 | deep-analysis-web       |
 
 Shared infra containers: `postgres`, `redis`, `caddy`.
@@ -100,7 +100,7 @@ deep-analysis-server/
 │   ├── auth/           # User accounts, sessions, agent registration
 │   ├── ingest/         # Upload, dedup, event publish
 │   ├── parser/         # Async worker: parse .dat/.log
-│   ├── analytics/      # Read-only query API
+│   ├── analytics/      # Query and administration API
 │   └── web/            # Dashboard UI
 ├── openapi/            # OpenAPI spec (source of truth)
 ├── alembic/            # Database migrations (all schemas)

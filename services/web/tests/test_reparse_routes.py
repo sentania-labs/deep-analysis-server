@@ -93,7 +93,10 @@ async def test_admin_user_reparse_success(
     ) -> parser_client.DeletedCountResult:
         captured["user_id"] = user_id
         captured["agent_id"] = agent_id
-        return parser_client.DeletedCountResult(deleted_count=11)
+        return parser_client.DeletedCountResult(
+            deleted_count=11,
+            verdicts_carried_forward=4,
+        )
 
     async def fake_list(
         _url: str, _token: str, limit: int = 50, offset: int = 0
@@ -115,6 +118,7 @@ async def test_admin_user_reparse_success(
     # Success banner is rendered on the admin users page.
     assert "Reparse complete for user #7" in r.text
     assert "11 matches deleted" in r.text
+    assert "4 review verdicts carried forward" in r.text
 
 
 @pytest.mark.asyncio
@@ -170,7 +174,10 @@ async def test_profile_reparse_success(
     from web_service import main as _main
 
     async def fake_self(_url: str, _token: str) -> parser_client.DeletedCountResult:
-        return parser_client.DeletedCountResult(deleted_count=3)
+        return parser_client.DeletedCountResult(
+            deleted_count=3,
+            verdicts_carried_forward=1,
+        )
 
     async def fake_me(_url: str, _token: str) -> auth_client.MeResult:
         return auth_client.MeResult(
@@ -189,6 +196,7 @@ async def test_profile_reparse_success(
     assert r.status_code == 200
     assert "Reparse complete" in r.text
     assert "3 matches deleted" in r.text
+    assert "1 review verdict carried forward" in r.text
 
 
 @pytest.mark.asyncio

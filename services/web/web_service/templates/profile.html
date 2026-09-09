@@ -16,7 +16,7 @@
     {% endif %}
     {% if reparse_result is defined and reparse_result %}
         <div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
-            Reparse complete: {{ reparse_result.deleted_count }} match{{ "" if reparse_result.deleted_count == 1 else "es" }} deleted. The backfill scanner will re-parse them from the archived files shortly; your dashboard will be unavailable for a few minutes.
+            Reparse complete: {{ reparse_result.deleted_count }} match{{ "" if reparse_result.deleted_count == 1 else "es" }} deleted. {{ reparse_result.verdicts_carried_forward }} review verdict{{ "" if reparse_result.verdicts_carried_forward == 1 else "s" }} carried forward. The backfill scanner will re-parse them from the archived files shortly; your dashboard will be unavailable for a few minutes.
         </div>
     {% endif %}
     {% if me %}

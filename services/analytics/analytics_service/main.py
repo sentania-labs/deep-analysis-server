@@ -34,6 +34,7 @@ from analytics_service.mtgo_scraper import reset_health as reset_scraper_health_
 from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
 from analytics_service.mtgtop8_scraper import SCRAPER_NAME as MTGTOP8_SCRAPER_NAME
 from analytics_service.mtgtop8_scraper import run_scrape as run_mtgtop8_scrape
+from analytics_service.review_verdicts import set_match_review_verdict
 from analytics_service.schemas import (
     AdminMatchItem,
     AdminMatchListResponse,
@@ -806,10 +807,7 @@ async def admin_list_matches(
 # ---------------------------------------------------------------------------
 
 
-# Values an admin can set via POST /admin/matches/{id}/review. ``None``
-# (encoded as ``null`` in JSON) accepts a held-back parse and makes it
-# user-visible. ``'pending_review'`` re-flags a normal row. ``'rejected'``
-# permanently discards a held parse from users + analytics.
+# Accepted values are documented by admin_update_match_review_status below.
 _VALID_REVIEW_VERDICTS: set[str | None] = {None, "pending_review", "rejected"}
 
 
@@ -822,7 +820,7 @@ async def admin_update_match_review_status(
     """Set the holding-pen verdict on a single match.
 
     ``review_status=null`` accepts the parse (back to user-visible).
-    ``'rejected'`` permanently discards. ``'pending_review'`` flags a
+    ``'rejected'`` hides the match until restored. ``'pending_review'`` flags a
     normal row for admin re-review. Other values are 422.
     """
     verdict = body.review_status
@@ -836,29 +834,15 @@ async def admin_update_match_review_status(
         )
     sm = get_sessionmaker()
     async with sm() as session:
-        result = await session.execute(
-            text("UPDATE parser.matches SET review_status = :rs WHERE id = :mid RETURNING id"),
-            {"rs": verdict, "mid": match_id},
-        )
-        updated = result.one_or_none()
-        if updated is None:
+        owner_row = await set_match_review_verdict(session, match_id, verdict)
+        if owner_row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": "match_not_found"},
             )
-        await session.commit()
         # Cache invalidation — clear the match's user's analytics
         # summary so the dashboard recomputes with the new visibility.
         # Best-effort; the user-facing endpoints already filter live.
-        try:
-            owner_row = (
-                await session.execute(
-                    text("SELECT user_id FROM parser.matches WHERE id = :mid"),
-                    {"mid": match_id},
-                )
-            ).scalar_one_or_none()
-        except Exception:  # noqa: BLE001
-            owner_row = None
         # Re-read the row so the caller gets a coherent post-update view
         # alongside the user_email and computed is_draw flag.
         row = (
@@ -893,6 +877,7 @@ async def admin_update_match_review_status(
                 {"mid": match_id},
             )
         ).all()
+        await session.commit()
     wins_by_player = {str(w): int(n) for w, n in game_win_rows}
     is_draw_flag = _is_true_draw(wins_by_player, match_tied=bool(row[11]))
     if owner_row is not None:

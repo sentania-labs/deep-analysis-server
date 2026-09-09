@@ -16,12 +16,12 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import delete, select, text
+from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from parser_service.db import get_session
 from parser_service.deps import AuthenticatedUser, require_admin, require_user
-from parser_service.models import Game, GamePlayer, GameState, Match
+from parser_service.models import Game, GamePlayer, GameState, Match, MatchReviewVerdict
 
 _log = logging.getLogger("parser.reparse")
 
@@ -40,6 +40,38 @@ def _now() -> datetime:
 
 class DeletedCountResponse(BaseModel):
     deleted_count: int
+    verdicts_carried_forward: int = 0
+
+
+async def _count_carried_forward_verdicts(
+    db: AsyncSession,
+    match_ids: list[uuid.UUID],
+) -> int:
+    """Count selected matches protected by a durable admin verdict."""
+    if not match_ids:
+        return 0
+    result = await db.execute(
+        select(func.count(func.distinct(Match.id)))
+        .select_from(Match)
+        .join(
+            MatchReviewVerdict,
+            and_(
+                MatchReviewVerdict.user_id == Match.user_id,
+                or_(
+                    and_(
+                        MatchReviewVerdict.identity_kind == "raw_match_id",
+                        MatchReviewVerdict.identity_value == Match.raw_match_id,
+                    ),
+                    and_(
+                        MatchReviewVerdict.identity_kind == "source_sha256",
+                        MatchReviewVerdict.identity_value == Match.sha256,
+                    ),
+                ),
+            ),
+        )
+        .where(Match.id.in_(match_ids))
+    )
+    return int(result.scalar_one())
 
 
 # Atomic check-and-set: INSERT a fresh row, or on conflict, UPDATE
@@ -144,12 +176,16 @@ async def self_service_reparse(
             },
         )
 
-    count = await _delete_matches_for_user(db, user.user_id, None, None, agent_id=None)
+    result = await _delete_matches_for_user(db, user.user_id, None, None, agent_id=None)
     _log.info(
         "parser.reparse.user_self_service",
-        extra={"user_id": user.user_id, "deleted_count": count},
+        extra={
+            "user_id": user.user_id,
+            "deleted_count": result.deleted_count,
+            "verdicts_carried_forward": result.verdicts_carried_forward,
+        },
     )
-    return DeletedCountResponse(deleted_count=count)
+    return result
 
 
 @router.delete("/parser/matches", response_model=DeletedCountResponse)
@@ -170,12 +206,17 @@ async def delete_my_matches(
     provided, only matches whose sha256 was uploaded by that agent
     are deleted.
     """
-    count = await _delete_matches_for_user(db, user.user_id, after, before, agent_id=agent_id)
+    result = await _delete_matches_for_user(db, user.user_id, after, before, agent_id=agent_id)
     _log.info(
         "parser.reparse.user",
-        extra={"user_id": user.user_id, "agent_id": agent_id, "deleted_count": count},
+        extra={
+            "user_id": user.user_id,
+            "agent_id": agent_id,
+            "deleted_count": result.deleted_count,
+            "verdicts_carried_forward": result.verdicts_carried_forward,
+        },
     )
-    return DeletedCountResponse(deleted_count=count)
+    return result
 
 
 @router.delete("/parser/admin/matches/{user_id}", response_model=DeletedCountResponse)
@@ -195,12 +236,17 @@ async def admin_delete_user_matches(
     When ``agent_id`` is provided, only matches whose sha256 was
     uploaded by that agent are deleted.
     """
-    count = await _delete_matches_for_user(db, user_id, after, before, agent_id=agent_id)
+    result = await _delete_matches_for_user(db, user_id, after, before, agent_id=agent_id)
     _log.info(
         "parser.reparse.admin_user",
-        extra={"target_user_id": user_id, "agent_id": agent_id, "deleted_count": count},
+        extra={
+            "target_user_id": user_id,
+            "agent_id": agent_id,
+            "deleted_count": result.deleted_count,
+            "verdicts_carried_forward": result.verdicts_carried_forward,
+        },
     )
-    return DeletedCountResponse(deleted_count=count)
+    return result
 
 
 @router.delete("/parser/admin/matches", response_model=DeletedCountResponse)
@@ -211,12 +257,15 @@ async def admin_delete_all_matches(
     db: AsyncSession = Depends(get_session),
 ) -> DeletedCountResponse:
     """Admin nuclear: delete ALL parsed matches across all users."""
-    count = await _delete_all_matches(db, after, before)
+    result = await _delete_all_matches(db, after, before)
     _log.info(
         "parser.reparse.admin_all",
-        extra={"deleted_count": count},
+        extra={
+            "deleted_count": result.deleted_count,
+            "verdicts_carried_forward": result.verdicts_carried_forward,
+        },
     )
-    return DeletedCountResponse(deleted_count=count)
+    return result
 
 
 def _validate_uuid(value: str, field: str) -> None:
@@ -237,7 +286,7 @@ async def _delete_matches_for_user(
     before_raw: str | None,
     *,
     agent_id: str | None = None,
-) -> int:
+) -> DeletedCountResponse:
     """Delete matches (and cascaded children) for a single user.
 
     When *agent_id* is provided, only matches whose ``sha256`` exists
@@ -270,7 +319,7 @@ async def _delete_matches_for_user(
         )
         agent_shas = [r[0] for r in sha_rows.all()]
         if not agent_shas:
-            return 0
+            return DeletedCountResponse(deleted_count=0)
         conditions = [Match.user_id == user_id, Match.sha256.in_(agent_shas)]
     else:
         conditions = [Match.user_id == user_id]
@@ -280,11 +329,13 @@ async def _delete_matches_for_user(
     if before_dt is not None:
         conditions.append(Match.played_at <= before_dt)
 
-    match_ids_result = await db.execute(select(Match.id).where(*conditions))
+    match_ids_result = await db.execute(select(Match.id).where(*conditions).with_for_update())
     match_ids = [row[0] for row in match_ids_result.all()]
 
     if not match_ids:
-        return 0
+        return DeletedCountResponse(deleted_count=0)
+
+    verdict_count = await _count_carried_forward_verdicts(db, match_ids)
 
     # Delete children first (game_states -> games -> matches)
     game_ids_result = await db.execute(select(Game.id).where(Game.match_id.in_(match_ids)))
@@ -297,14 +348,17 @@ async def _delete_matches_for_user(
     await db.execute(delete(Match).where(Match.id.in_(match_ids)))
     await db.commit()
 
-    return len(match_ids)
+    return DeletedCountResponse(
+        deleted_count=len(match_ids),
+        verdicts_carried_forward=verdict_count,
+    )
 
 
 async def _delete_all_matches(
     db: AsyncSession,
     after_raw: str | None,
     before_raw: str | None,
-) -> int:
+) -> DeletedCountResponse:
     """Delete ALL matches (and cascaded children)."""
     after_dt = _parse_iso_dt(after_raw)
     if after_raw is not None and after_dt is None:
@@ -320,13 +374,15 @@ async def _delete_all_matches(
         conditions.append(Match.played_at <= before_dt)
 
     if conditions:
-        match_ids_result = await db.execute(select(Match.id).where(*conditions))
+        match_ids_result = await db.execute(select(Match.id).where(*conditions).with_for_update())
     else:
-        match_ids_result = await db.execute(select(Match.id))
+        match_ids_result = await db.execute(select(Match.id).with_for_update())
     match_ids = [row[0] for row in match_ids_result.all()]
 
     if not match_ids:
-        return 0
+        return DeletedCountResponse(deleted_count=0)
+
+    verdict_count = await _count_carried_forward_verdicts(db, match_ids)
 
     game_ids_result = await db.execute(select(Game.id).where(Game.match_id.in_(match_ids)))
     game_ids = [row[0] for row in game_ids_result.all()]
@@ -338,4 +394,7 @@ async def _delete_all_matches(
     await db.execute(delete(Match).where(Match.id.in_(match_ids)))
     await db.commit()
 
-    return len(match_ids)
+    return DeletedCountResponse(
+        deleted_count=len(match_ids),
+        verdicts_carried_forward=verdict_count,
+    )

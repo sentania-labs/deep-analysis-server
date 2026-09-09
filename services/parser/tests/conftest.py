@@ -84,7 +84,10 @@ async def parser_session() -> AsyncIterator[AsyncSession]:
 
         async with engine.begin() as conn:
             await conn.execute(
-                text("TRUNCATE parser.matches, parser.deck_compositions RESTART IDENTITY CASCADE")
+                text(
+                    "TRUNCATE parser.matches, parser.match_review_verdicts, "
+                    "parser.deck_compositions RESTART IDENTITY CASCADE"
+                )
             )
         sm = async_sessionmaker(engine, expire_on_commit=False)
         async with sm() as session:

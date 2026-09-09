@@ -7,6 +7,7 @@ The web service calls parser directly over the backend compose network
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from web_service.http_helper import raw_request
 
@@ -39,6 +40,14 @@ _ERR_RAW = {"error_cls": ParserClientError}
 @dataclass
 class DeletedCountResult:
     deleted_count: int
+    verdicts_carried_forward: int = 0
+
+
+def _deleted_count_result(data: dict[str, Any]) -> DeletedCountResult:
+    return DeletedCountResult(
+        deleted_count=int(data.get("deleted_count", 0)),
+        verdicts_carried_forward=int(data.get("verdicts_carried_forward", 0)),
+    )
 
 
 async def delete_my_matches(
@@ -50,7 +59,7 @@ async def delete_my_matches(
     """Delete parsed matches for the authenticated user.
 
     When *agent_id* is provided, only matches uploaded by that agent
-    are deleted.  Returns the count of deleted matches.
+    are deleted. Returns deletion and carried-forward verdict counts.
     """
     params: dict[str, str] = {}
     if agent_id is not None:
@@ -71,7 +80,7 @@ async def delete_my_matches(
             f"parser DELETE /parser/matches returned {resp.status_code}: {resp.text}"
         )
     data = resp.json()
-    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+    return _deleted_count_result(data)
 
 
 async def admin_delete_all_matches(
@@ -94,7 +103,7 @@ async def admin_delete_all_matches(
             f"parser DELETE /parser/admin/matches returned {resp.status_code}: {resp.text}"
         )
     data = resp.json()
-    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+    return _deleted_count_result(data)
 
 
 async def admin_delete_user_matches(
@@ -131,7 +140,7 @@ async def admin_delete_user_matches(
             f" returned {resp.status_code}: {resp.text}"
         )
     data = resp.json()
-    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+    return _deleted_count_result(data)
 
 
 async def user_self_service_reparse(
@@ -169,4 +178,4 @@ async def user_self_service_reparse(
             f"parser POST /parser/me/reparse returned {resp.status_code}: {resp.text}"
         )
     data = resp.json()
-    return DeletedCountResult(deleted_count=int(data.get("deleted_count", 0)))
+    return _deleted_count_result(data)

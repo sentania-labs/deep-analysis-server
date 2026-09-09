@@ -11,6 +11,8 @@ Tables in the ``parser`` schema:
   stack at the start of that turn.
 - ``deck_compositions`` — one row per parsed MTGO grouping XML file.
 - ``deck_composition_items`` — individual card entries within a deck.
+- ``match_review_verdicts`` stores admin review decisions independently
+  from the replaceable match row.
 
 Cross-schema columns (``sha256``, ``user_id``) are stored as plain
 columns rather than foreign keys: parser is built from the root
@@ -120,6 +122,42 @@ class Match(Base):
             "review_status IS NULL OR review_status IN ('pending_review', 'rejected')",
             name="ck_matches_review_status_valid",
         ),
+    )
+
+
+class MatchReviewVerdict(Base):
+    """Durable admin decision for one logical match.
+
+    ``raw_match_id`` is the canonical identity when the parser can read
+    it. Legacy rows fall back to the source SHA. ``source_sha256`` is
+    retained on both kinds as provenance for the decision.
+    """
+
+    __tablename__ = "match_review_verdicts"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    identity_kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    identity_value: Mapped[str] = mapped_column(Text, primary_key=True)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "identity_kind IN ('raw_match_id', 'source_sha256')",
+            name="ck_match_review_verdicts_identity_kind_valid",
+        ),
+        CheckConstraint(
+            "verdict IN ('accepted', 'pending_review', 'rejected')",
+            name="ck_match_review_verdicts_verdict_valid",
+        ),
+        Index("ix_match_review_verdicts_source_sha256", "source_sha256"),
     )
 
 

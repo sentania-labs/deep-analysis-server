@@ -687,7 +687,10 @@ async def test_post_reparse_success_renders_result(
     async def fake_delete(
         _url: str, _token: str, user_id: int, *, agent_id: str | None = None
     ) -> parser_client.DeletedCountResult:
-        return parser_client.DeletedCountResult(deleted_count=7)
+        return parser_client.DeletedCountResult(
+            deleted_count=7,
+            verdicts_carried_forward=2,
+        )
 
     async def fake_list(
         _url: str, _token: str, limit: int = 50, offset: int = 0
@@ -706,6 +709,7 @@ async def test_post_reparse_success_renders_result(
 
     assert r.status_code == 200
     assert "7 matches deleted" in r.text
+    assert "2 review verdicts carried forward" in r.text
 
 
 @pytest.mark.asyncio
@@ -813,7 +817,10 @@ async def test_post_reparse_all_success(
     from web_service import main as _main
 
     async def fake_delete_all(_url: str, _token: str) -> parser_client.DeletedCountResult:
-        return parser_client.DeletedCountResult(deleted_count=42)
+        return parser_client.DeletedCountResult(
+            deleted_count=42,
+            verdicts_carried_forward=9,
+        )
 
     async def fake_list(
         _url: str, _token: str, limit: int = 50, offset: int = 0
@@ -830,6 +837,7 @@ async def test_post_reparse_all_success(
         _main.app.dependency_overrides.clear()
     assert r.status_code == 200
     assert "42 matches deleted" in r.text
+    assert "9 review verdicts carried forward" in r.text
 
 
 @pytest.mark.asyncio
