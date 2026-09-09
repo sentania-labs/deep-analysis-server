@@ -123,10 +123,8 @@ Named volumes (managed by Docker):
 - `raw_archive`: the pre-object-store archive, on hosts upgraded from
   it. Declared `external: true` with its name in
   `DA_LEGACY_ARCHIVE_VOLUME`, so Compose neither creates nor removes it
-  and `down -v` leaves it alone. Only the one-shot backfill job mounts
-  it. The automatic migration reads the same data through a read-only
-  bind path (`DA_LEGACY_ARCHIVE_SOURCE`) instead, so a fresh install
-  that has no such volume still comes up. See "Raw archive" below.
+  and `down -v` leaves it alone. For manual and automatic migration
+  mounts, see [Backfill from the old volume](#backfill-from-the-old-volume).
 - `caddy_data` — Caddy's internal CA, issued certs, and OCSP state.
 - `auth_secrets` — mounted into the `auth` container at `/data/secrets`.
   Holds `initial_admin.txt` (mode `0600`) when the auto-generate
@@ -257,7 +255,7 @@ there:
 
 - **Everything is present** (the archive was migrated earlier, or the
   mount was removed after a completed migration): it records `complete`
-  and never asks again. That is what makes step 4 safe.
+  and later automatic starts skip it. That is what makes step 4 safe.
 - **Files are missing**: it says so, specifically, on the admin page and
   in the logs, and waits for the mount to be fixed. A forgotten mount is
   never papered over as "done".
@@ -295,8 +293,11 @@ the value used by the running process, the page shows that a restart is
 needed. Disabling automatic start does not cancel a migration already in
 flight, and **Run migration now** remains available.
 
-`DA_S3_AUTO_BACKFILL=false` supplies the fallback before the GUI setting
-has been saved. The one-shot job is unchanged and still supported:
+`DA_S3_AUTO_BACKFILL` supplies the fallback only when no GUI setting
+has been saved. If reading the saved setting fails or its value is invalid,
+ingest leaves automatic migration off for that process and logs a warning.
+After restoring access to a valid setting, restart ingest to apply it, or
+use **Run migration now**. The one-shot job is still supported:
 
 ```bash
 docker compose --profile backfill run --rm raw-backfill
@@ -318,7 +319,8 @@ see the plan without writing.
 #### Why it is safe to leave running
 
 - **It does not delay startup.** The migration is a background task
-  created after the app is serving. `/healthz` answers and uploads work
+  scheduled during startup without waiting for it to finish. `/healthz`
+  answers and uploads work
   while thousands of objects are still moving.
 - **Only one replica does it.** The run holds a Postgres lock row
   (`ingest.job_runs`, the same heartbeat mechanism the analytics
@@ -351,8 +353,8 @@ Once Admin > Settings reports **complete**:
 1. Stop passing `-f docker-compose.legacy-archive.yml` (or unset
    `DA_LEGACY_ARCHIVE_SOURCE`).
 2. Redeploy. Nothing re-checks: the recorded `complete` state means the
-   migration never runs again, and the ingest container no longer
-   touches the old archive at all.
+   automatic migration skips the archive, and the ingest container no
+   longer touches the old archive. Manual runs can still recheck completion.
 
 Leaving the mount in place is harmless, just untidy. Removing it before
 the migration finishes is safe too: `ingest` notices the files are not

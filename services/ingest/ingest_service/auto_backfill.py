@@ -654,7 +654,7 @@ async def _startup_body(
     retry_seconds: float,
     max_attempts: int,
 ) -> None:
-    """Run the migration, retrying only while another owner holds it."""
+    """Retry transient failures and lock contention within bounded budgets."""
     attempts = 0
     # Bounded separately from `attempts`: waiting out somebody else's
     # lock is not a failed attempt, but it still must not loop forever

@@ -316,6 +316,7 @@ async def test_lifespan_returns_and_healthz_answers_while_migrating(
     monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "true")
     _settings.reset_settings()
     job_lock.set_store(lock_store)
+    monkeypatch.setattr(_main, "get_sessionmaker", lambda: sessionmaker_factory)
 
     try:
         t0 = time.monotonic()
@@ -360,6 +361,7 @@ async def test_disabled_by_config_does_not_run(
     monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "false")
     _settings.reset_settings()
     job_lock.set_store(lock_store)
+    monkeypatch.setattr(_main, "get_sessionmaker", lambda: sessionmaker_factory)
 
     try:
         async with _main.lifespan(_main.app):
@@ -404,6 +406,7 @@ async def test_persisted_disabled_setting_overrides_enabled_environment(
     monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "true")
     _settings.reset_settings()
     job_lock.set_store(lock_store)
+    monkeypatch.setattr(_main, "get_sessionmaker", lambda: sessionmaker_factory)
 
     try:
         async with _main.lifespan(_main.app):
@@ -438,6 +441,7 @@ async def test_disabling_automatic_start_does_not_cancel_inflight_migration(
     monkeypatch.setenv("DA_S3_AUTO_BACKFILL", "true")
     _settings.reset_settings()
     job_lock.set_store(lock_store)
+    monkeypatch.setattr(_main, "get_sessionmaker", lambda: sessionmaker_factory)
 
     try:
         async with _main.lifespan(_main.app):

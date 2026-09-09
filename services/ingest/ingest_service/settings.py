@@ -34,9 +34,9 @@ class IngestSettings(S3StorageSettings):
     # Settings page.
     s3_auto_backfill: bool = True
 
-    # Where the legacy archive is mounted inside the container. Empty or
-    # absent means there is nothing to migrate, which is the normal case
-    # for a fresh install.
+    # An empty or absent source is normal on a fresh install, but when
+    # archive rows exist, auto_backfill must verify them in object storage
+    # before recording completion.
     legacy_archive_path: Path = Path("/data/raw")
 
     # How long the startup task waits before re-checking a lock another

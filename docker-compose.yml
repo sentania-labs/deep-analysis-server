@@ -304,9 +304,8 @@ services:
       <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
-      # Automatic migration of the pre-object-store archive (issue
-      # #161). On by default so a deploy closes the gap with no
-      # operator step; set false to drive the one-shot job by hand.
+      # Environment fallback for the Admin Settings toggle. Precedence
+      # and restart behavior: docs/deploy.md, "Turning it off, and driving it by hand".
       DA_S3_AUTO_BACKFILL: ${DA_S3_AUTO_BACKFILL:-true}
       DA_LEGACY_ARCHIVE_PATH: /data/raw
     expose:
