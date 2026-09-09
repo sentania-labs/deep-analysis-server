@@ -26,9 +26,6 @@
 #   DA_SMOKE_PORT      host port for the gateway   (default 8080)
 #   DA_SMOKE_JWT_DIR   host dir for the keypair    (default /tmp/ci-jwt-keys)
 #   DA_SMOKE_KEEP      set to 1 to skip teardown   (default unset)
-#   DA_SMOKE_SCREENSHOT_DIR
-#                      where the browser pass writes its screenshots
-#                      (default ci/browser/screenshots)
 #   DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL / _PASSWORD
 #                      bootstrap admin used by both suites (defaults below)
 #
@@ -237,9 +234,9 @@ fi
 # refreshes) and a fresh stack has no scraped data to render it with. Seed
 # one mtgtop8 event with three results straight into analytics.* so the
 # browser pass can exercise that page; the fixture is inert for every other
-# suite. Sets METAGAME_FLAG=--expect-metagame on success so the browser pass
-# FAILS (rather than skips) if the page then renders nothing.
-METAGAME_FLAG=""
+# suite. A seed failure is a hard failure: the ui suite never runs the
+# browser pass without the fixture, and the browser pass is always told to
+# expect it, so a /metagame page that renders nothing is a FAIL, not a SKIP.
 seed_metagame_fixture() {
     local sql
     sql=$(cat <<'SQL'
@@ -257,11 +254,11 @@ WHERE e.event_url = 'https://smoke.local/mtgtop8/csp-smoke'
   AND NOT EXISTS (SELECT 1 FROM analytics.mtgtop8_results x WHERE x.event_id = e.id);
 SQL
 )
-    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q -c "$sql" >/dev/null 2>&1; then
+    if compose exec -T postgres psql -v ON_ERROR_STOP=1 -U da -d deep_analysis -q -c "$sql"; then
         echo "metagame fixture seeded (analytics.mtgtop8_events: CSP Smoke Challenge)"
-        METAGAME_FLAG="--expect-metagame"
     else
-        echo "WARN: could not seed the metagame fixture; the browser pass will skip /metagame/<format>" >&2
+        echo "STOP: could not seed the metagame fixture; the browser pass needs /metagame/<format> to render" >&2
+        return 1
     fi
 }
 
@@ -281,10 +278,10 @@ if [ "$SUITE" = "ui" ] || [ "$SUITE" = "all" ]; then
     # pages render but whose scripts are refused by the CSP is broken.
     echo ""
     echo "--- browser CSP smoke (ci/browser/smoke_csp.py) ---"
-    seed_metagame_fixture
-    if (cd ci/browser && uv sync --quiet && uv run playwright install chromium >/dev/null); then
-        (cd ci/browser && DA_SMOKE_SCREENSHOT_DIR="${DA_SMOKE_SCREENSHOT_DIR:-$REPO_ROOT/ci/browser/screenshots}" \
-            uv run smoke_csp.py "$BASE_URL" $METAGAME_FLAG) || rc=1
+    if ! seed_metagame_fixture; then
+        rc=1
+    elif (cd ci/browser && uv sync --quiet && uv run playwright install chromium >/dev/null); then
+        (cd ci/browser && uv run smoke_csp.py "$BASE_URL" --expect-metagame) || rc=1
     else
         echo "STOP: could not install Playwright's Chromium for ci/browser (see README, pre-push smoke test)" >&2
         rc=1

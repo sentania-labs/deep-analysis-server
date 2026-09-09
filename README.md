@@ -142,7 +142,7 @@ That is the whole sequence. The script creates the external `edge-slots` network
 
 Run one suite at a time with `bash ci/smoke.sh e2e` (the API and gateway happy path, `ci/smoke_e2e.sh`) or `bash ci/smoke.sh ui` (the browser UI: login, dashboard, profile, admin CRUD via curl in `ci/smoke_ui.sh`, then every rendered page and control driven in a real Chromium under the production Content Security Policy by `ci/browser/smoke_csp.py`). Those are exactly what the `compose-smoke` and `smoke-ui` CI jobs invoke.
 
-The browser pass needs Playwright's Chromium. `ci/smoke.sh` installs the browser binary itself (`uv run playwright install chromium`, cached under `~/.cache/ms-playwright`), but on a bare machine the system libraries Chromium links against have to be present; `cd ci/browser && uv run playwright install --with-deps chromium` adds them (it uses `sudo apt`, which is why CI does that step in the workflow rather than in the script). It writes `admin-dashboard.png`, `user-dashboard.png` and `admin-settings.png` to `ci/browser/screenshots/`.
+The browser pass needs Playwright's Chromium. `ci/smoke.sh` installs the browser binary itself (`uv run playwright install chromium`, cached under `~/.cache/ms-playwright`), but on a bare machine the system libraries Chromium links against have to be present; `cd ci/browser && uv run playwright install --with-deps chromium` adds them (it uses `sudo apt`, which is why CI does that step in the workflow rather than in the script).
 
 Useful knobs, all optional:
 

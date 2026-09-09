@@ -227,13 +227,6 @@ jobs:
           uv run playwright install --with-deps chromium
       - name: Browser UI smoke
         run: bash ci/smoke.sh ui
-      - name: Keep the CSP smoke screenshots
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: csp-smoke-screenshots
-          path: ci/browser/screenshots/
-          if-no-files-found: ignore
 
   # The Tailwind stylesheet is compiled ahead of time and committed (issue
   # #126: no play CDN, no 'unsafe-eval'). This job rebuilds it with the CLI

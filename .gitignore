@@ -43,6 +43,3 @@ docker-compose.override.yml
 
 # Tailwind build tooling (services/web/build-css.sh)
 node_modules/
-
-# Browser CSP smoke output (ci/browser/smoke_csp.py)
-ci/browser/screenshots/

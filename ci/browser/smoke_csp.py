@@ -13,16 +13,13 @@ control the pages have, and fails on:
   failed asset loads there), any uncaught exception, any failed request,
 * any control that does not do what it did before the CSP tightened.
 
-It also writes three screenshots (admin dashboard, user dashboard, settings)
-so a human can see the pages rendered with the vendored stylesheet.
-
 Runs against a stack started by ci/smoke.sh, which is the only supported
 caller; it needs the bootstrap admin credentials in the environment, the same
 way ci/smoke_ui.sh does.
 
 Usage:
     DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL=... DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD=... \\
-    uv run smoke_csp.py http://localhost:8080 [--screenshots DIR] [--expect-metagame]
+    uv run smoke_csp.py http://localhost:8080 [--expect-metagame]
 
 --expect-metagame: ci/smoke.sh passes it after seeding a metagame fixture, so a
 /metagame page that renders no tier table is a FAIL instead of a SKIP.
@@ -39,7 +36,6 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from playwright.sync_api import (
     Browser,
@@ -164,9 +160,8 @@ class Recorder:
 
 
 class Smoke:
-    def __init__(self, base_url: str, shots: Path, expect_metagame: bool) -> None:
+    def __init__(self, base_url: str, expect_metagame: bool) -> None:
         self.base = base_url.rstrip("/")
-        self.shots = shots
         self.expect_metagame = expect_metagame
         self.t = Tally()
         self.admin_email = os.environ["DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL"]
@@ -281,12 +276,6 @@ class Smoke:
         self.audit(page, rec, f"login as {email}")
         return ok
 
-    def screenshot(self, page: Page, name: str) -> None:
-        self.shots.mkdir(parents=True, exist_ok=True)
-        target = self.shots / name
-        page.screenshot(path=str(target), full_page=True)
-        print(f"  screenshot: {target}")
-
     # ------------------------------------------------------------- public
     def run_public(self, browser: Browser) -> None:
         print("")
@@ -344,7 +333,6 @@ class Smoke:
         print("")
         print("--- shared chrome (base.html) ---")
         self.visit(page, rec, "/admin/users")
-        self.screenshot(page, "admin-dashboard.png")
 
         # Theme toggle flips <html class="dark"> and persists to localStorage.
         was_dark = page.evaluate("document.documentElement.classList.contains('dark')")
@@ -397,7 +385,6 @@ class Smoke:
         print("")
         print("--- /admin/settings controls ---")
         self.visit(page, rec, "/admin/settings")
-        self.screenshot(page, "admin-settings.png")
 
         bars = page.locator("[data-progress-percent]")
         if bars.count():
@@ -577,7 +564,6 @@ class Smoke:
         print("--- user controls ---")
         # Dashboard: the date preset select navigates with date_from/date_to.
         self.visit(page, rec, "/dashboard")
-        self.screenshot(page, "user-dashboard.png")
         with page.expect_navigation(wait_until="domcontentloaded"):
             page.select_option('[x-data="dateRangeFilter"] select', "7")
         self.settle(page)
@@ -677,19 +663,13 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("base_url", nargs="?", default="http://localhost:8080")
-    ap.add_argument(
-        "--screenshots",
-        default=os.environ.get(
-            "DA_SMOKE_SCREENSHOT_DIR", str(Path(__file__).parent / "screenshots")
-        ),
-    )
     ap.add_argument("--expect-metagame", action="store_true")
     args = ap.parse_args()
     for var in ("DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL", "DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD"):
         if not os.environ.get(var):
             print(f"FAIL: {var} must be set", file=sys.stderr)
             return 1
-    return Smoke(args.base_url, Path(args.screenshots), args.expect_metagame).run()
+    return Smoke(args.base_url, args.expect_metagame).run()
 
 
 if __name__ == "__main__":
