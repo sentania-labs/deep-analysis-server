@@ -75,6 +75,18 @@ docker compose up -d
 
 Full deployment documentation will live in `docs/` once services are implemented.
 
+## Releases and rollout
+
+A release builds and publishes the five service images to GHCR, then creates a
+GitHub Release. That is the end of this repository's release path. The published
+image digest is the handoff artifact.
+
+Lab rollout is owned by
+[`sentania-labs/lab-deployment`](https://github.com/sentania-labs/lab-deployment).
+That repository pins the selected image digest under `apps/deep-analysis/`, and
+Argo CD reconciles the cluster to that declared state. This repository does not
+deploy a release to the lab.
+
 ## Observability
 
 Each service emits structured JSON logs and exposes a `/metrics` endpoint (Prometheus text format).

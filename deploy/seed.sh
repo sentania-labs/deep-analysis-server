@@ -4,8 +4,8 @@
 # Idempotency: this script is intended to run ONCE on a fresh slot.
 # It generates a Postgres password and a JWT keypair and pushes them to
 # the slot dir. Re-running will overwrite the .env and the keys, which
-# would break any existing data + tokens. The CI deploy.sh handles
-# subsequent rollouts.
+# would break any existing data + tokens. It does not manage subsequent
+# rollouts.
 #
 # Required env:
 #   DOCKER_DEPLOY_HOST   ssh target, e.g. deploy@edge.int

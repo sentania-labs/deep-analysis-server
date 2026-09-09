@@ -15,7 +15,8 @@ Previously roadmapped items that are now in production.
 - **Archetype detection & management** — Admin catalog, ML classifier, metagame browser, per-match archetype display. Shipped v0.9.6.
 - **Game state reconstruction** — Per-turn structured snapshots (zones, life, stack), turn viewer in match detail. Shipped v0.9.0.
 - **Admin invite + role management** — Role at invite time, agent key rotation/deletion. Shipped v0.9.1.
-- **CI auto-deploy on release** — Tag push → Release workflow → Deploy workflow → SSH compose pull/up on edge.int. Shipped v0.7.5.
+- **CI auto-deploy on release (retired)**: Shipped in v0.7.5 and retired by
+  #137 when rollout ownership moved to `lab-deployment` and Argo CD.
 - **Cross-user agent management** — Admin key rotation, deletion, revoke across all users. Shipped v0.9.1.
 - **Admin match detail + review** — Admin-scoped match detail view, hold-reason display, read-only inspection. Shipped v0.9.15.
 - **Holding pen for inconclusive parses** — Partial matches flagged `pending_review`, admin accept/reject flow. Shipped v0.9.7.
