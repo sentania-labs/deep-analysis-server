@@ -396,9 +396,39 @@ async def test_in_place_parse_waits_for_concurrent_admin_verdict(
     assert await _load_user_matches(parser_session, user_id) == []
 
 
-@pytest.mark.parametrize("review_status", ["pending_review", "rejected"])
-def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_status: str) -> None:
-    """Root startup migration protects admin decisions created before 032."""
+@pytest.mark.parametrize(
+    ("review_status", "review_reason", "expected_status", "sha_digit"),
+    [
+        pytest.param(
+            "pending_review",
+            "No game winners resolved (1 game observed)",
+            None,
+            "7",
+            id="automatic-hold",
+        ),
+        pytest.param(
+            "pending_review",
+            None,
+            "pending_review",
+            "8",
+            id="admin-flagged-pending",
+        ),
+        pytest.param(
+            "rejected",
+            "admin rejected",
+            "rejected",
+            "9",
+            id="admin-rejected",
+        ),
+    ],
+)
+def test_upgrade_distinguishes_admin_verdicts_from_automatic_holds(
+    review_status: str,
+    review_reason: str | None,
+    expected_status: str | None,
+    sha_digit: str,
+) -> None:
+    """Root migration keeps admin decisions but not automatic parser holds."""
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         pytest.skip("DATABASE_URL not set; skipping migration integration test")
@@ -408,9 +438,8 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
     cfg.set_main_option("sqlalchemy.url", db_url)
     engine = create_engine(db_url, future=True)
     match_id = uuid.uuid4()
-    sha256 = ("8" if review_status == "pending_review" else "9") * 64
-    raw_match_id = f"pre-032-{review_status}-match"
-    review_reason = "incomplete snapshot" if review_status == "pending_review" else "admin rejected"
+    sha256 = sha_digit * 64
+    raw_match_id = f"pre-032-{sha_digit}-match"
 
     command.downgrade(cfg, "031")
     try:
@@ -449,7 +478,7 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
                     """
                 )
             ).one_or_none()
-        if review_status == "pending_review":
+        if expected_status is None:
             assert row is None
         else:
             assert row is not None
@@ -457,7 +486,7 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
                 "raw_match_id",
                 raw_match_id,
                 sha256,
-                review_status,
+                expected_status,
                 review_reason,
             )
 
@@ -466,7 +495,6 @@ def test_upgrade_preserves_rejections_without_freezing_pending_holds(review_stat
                 make_url(db_url).set(drivername="postgresql+asyncpg")
             )
             sessions = async_sessionmaker(async_engine, expire_on_commit=False)
-            expected_status = "rejected" if review_status == "rejected" else None
             try:
                 async with sessions() as session:
                     completed = await persist_match(

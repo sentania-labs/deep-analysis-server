@@ -7,13 +7,15 @@ under `services/<name>/alembic/`. Apply the root head before service heads;
 Docker Compose runs these as migration jobs before the dependent services start.
 
 Root revision `032` creates the durable match review verdict table and copies
-existing rejected matches into it. Pending-review rows are excluded because
-they can represent automatic holds rather than admin decisions. Apply it before running
-the updated services or force-reparse. Prior accept/restore decisions cannot be
+existing rejected matches and admin-set `pending_review` flags into it.
+Automatic parser holds, identified by the `No game winners resolved (...)`
+reason written by the parser consumer, are left out so a later complete
+snapshot can resolve them normally. Apply the revision before running the
+updated services or force-reparse. Prior accept/restore decisions cannot be
 backfilled because the old normal status did not distinguish an admin decision
-from a normal parse.
-Downgrading below `032` drops the durable records and removes force-reparse
-verdict protection. See [match review usage](../README.md#match-review-and-force-reparse).
+from a normal parse. Downgrading below `032` drops the durable records and
+removes force-reparse verdict protection. See
+[match review usage](../README.md#match-review-and-force-reparse).
 
 ## Role credentials
 

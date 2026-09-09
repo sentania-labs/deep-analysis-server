@@ -10,9 +10,11 @@ fallback. This table stores the same identity outside ``parser.matches``
 so force-reparse can replace match rows without losing admin decisions.
 The source SHA remains as provenance even for canonical identities.
 
-Existing rejected matches are copied during the normal
-root migration that runs before services start. This protects current
-admin decisions on the first force-reparse after deployment.
+Existing rejected matches and admin-set pending-review flags are copied
+during the normal root migration that runs before services start. Automatic
+parser holds are identified by the reason written by ``consumer.py`` and are
+not made durable. This protects current admin decisions on the first
+force-reparse after deployment without freezing incomplete snapshots.
 """
 
 from __future__ import annotations
@@ -81,6 +83,14 @@ def upgrade() -> None:
                review_reason
           FROM parser.matches
          WHERE review_status = 'rejected'
+            OR (
+                review_status = 'pending_review'
+                AND (
+                    review_reason IS NULL
+                    OR review_reason NOT LIKE
+                        'No game winners resolved (% game% observed)%'
+                )
+            )
         ON CONFLICT (user_id, identity_kind, identity_value) DO UPDATE
             SET source_sha256 = EXCLUDED.source_sha256,
                 verdict = EXCLUDED.verdict,
