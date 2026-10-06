@@ -7,6 +7,6 @@
     "build:css": "tailwindcss -c tailwind.config.js -i tailwind.input.css -o web_service/static/css/tailwind.css --minify"
   },
   "devDependencies": {
-    "tailwindcss": "3.4.19"
+    "tailwindcss": "4.3.3"
   }
 }
