@@ -30,6 +30,7 @@ from analytics_service.ml_classifier import retrain as ml_retrain
 from analytics_service.models import ArchetypeLabelMapping, CanonicalArchetype
 from analytics_service.mtgo_scraper import SCRAPER_NAME as MTGO_SCRAPER_NAME
 from analytics_service.mtgo_scraper import get_health as get_scraper_health_row
+from analytics_service.mtgo_scraper import get_run_history as get_scraper_run_history
 from analytics_service.mtgo_scraper import reset_health as reset_scraper_health_row
 from analytics_service.mtgo_scraper import run_scrape as run_mtgo_scrape
 from analytics_service.mtgtop8_scraper import SCRAPER_NAME as MTGTOP8_SCRAPER_NAME
@@ -577,6 +578,22 @@ async def scraper_health(
     }
 
 
+@admin_router.get("/scraper-health/{scraper_name}/history")
+async def scraper_run_history(
+    scraper_name: str,
+    _admin: AuthenticatedUser = Depends(require_admin),
+) -> dict[str, Any]:
+    """Return the retained completed-run diagnostics for one scraper."""
+    if scraper_name not in _KNOWN_SCRAPERS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "unknown scraper"},
+        )
+    async with get_sessionmaker()() as session:
+        runs = await get_scraper_run_history(session, scraper_name)
+    return {"scraper_name": scraper_name, "runs": runs}
+
+
 @admin_router.get("/cards-status")
 async def cards_status(
     _admin: AuthenticatedUser = Depends(require_admin),
@@ -948,6 +965,7 @@ async def list_scrapers(
                     consecutive_failures=health.get("consecutive_failures", 0),
                     is_broken=health.get("is_broken", False),
                     last_error=health.get("last_error"),
+                    last_raw_snippet=(health.get("last_raw_snippet") or "")[:2000] or None,
                     is_running=bool(run["is_running"]),
                     running_since=run["running_since"],
                     run_trigger=run["run_trigger"],
@@ -1026,6 +1044,7 @@ async def update_scraper_config(
         consecutive_failures=health.get("consecutive_failures", 0),
         is_broken=health.get("is_broken", False),
         last_error=health.get("last_error"),
+        last_raw_snippet=(health.get("last_raw_snippet") or "")[:2000] or None,
         is_running=bool(run["is_running"]),
         running_since=run["running_since"],
         run_trigger=run["run_trigger"],

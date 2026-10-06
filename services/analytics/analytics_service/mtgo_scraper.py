@@ -36,7 +36,7 @@ import dataclasses
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import urljoin
 
@@ -54,6 +54,7 @@ POLITE_DELAY_SECONDS = 2.0
 BROKEN_THRESHOLD = 3
 SCRAPER_NAME = "mtgo"
 _SNIPPET_CHARS = 2000
+RUN_HISTORY_LIMIT = 20
 
 _EVENT_HREF_RE = re.compile(r"/decklist/", re.IGNORECASE)
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -893,12 +894,93 @@ async def get_health(session: AsyncSession, scraper_name: str) -> dict[str, Any]
     return dict(row)
 
 
+_RUN_HISTORY_INSERT_SQL = text(
+    """
+    INSERT INTO analytics.scraper_run_history
+        (scraper_name, started_at, finished_at, duration_seconds, status,
+         events_found, events_new, events_empty, results_stored)
+    VALUES
+        (:scraper_name, :started_at, :finished_at, :duration_seconds, :status,
+         :events_found, :events_new, :events_empty, :results_stored)
+    """
+)
+
+_RUN_HISTORY_PRUNE_SQL = text(
+    """
+    DELETE FROM analytics.scraper_run_history
+     WHERE scraper_name = :scraper_name
+       AND id NOT IN (
+           SELECT id FROM analytics.scraper_run_history
+            WHERE scraper_name = :scraper_name
+            ORDER BY started_at DESC, id DESC
+            LIMIT :history_limit
+       )
+    """
+)
+
+_RUN_HISTORY_SELECT_SQL = text(
+    """
+    SELECT id, scraper_name, started_at, finished_at, duration_seconds, status,
+           events_found, events_new, events_empty, results_stored
+      FROM analytics.scraper_run_history
+     WHERE scraper_name = :scraper_name
+     ORDER BY started_at DESC, id DESC
+     LIMIT :history_limit
+    """
+)
+
+
+async def record_run_history(
+    session: AsyncSession,
+    scraper_name: str,
+    result: ScrapeResult,
+    started_at: datetime,
+    finished_at: datetime,
+) -> None:
+    """Store a completed run and retain only the newest rows for the scraper."""
+    await session.execute(
+        _RUN_HISTORY_INSERT_SQL,
+        {
+            "scraper_name": scraper_name,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_seconds": max(0.0, (finished_at - started_at).total_seconds()),
+            "status": "failed" if result.error else "success",
+            "events_found": result.events_found,
+            "events_new": result.events_new,
+            "events_empty": result.events_empty,
+            "results_stored": result.results_stored,
+        },
+    )
+    await session.execute(
+        _RUN_HISTORY_PRUNE_SQL,
+        {"scraper_name": scraper_name, "history_limit": RUN_HISTORY_LIMIT},
+    )
+    await session.commit()
+
+
+async def get_run_history(
+    session: AsyncSession,
+    scraper_name: str,
+    *,
+    limit: int = RUN_HISTORY_LIMIT,
+) -> list[dict[str, Any]]:
+    """Return the newest completed runs for one scraper."""
+    rows = (
+        await session.execute(
+            _RUN_HISTORY_SELECT_SQL,
+            {"scraper_name": scraper_name, "history_limit": min(limit, RUN_HISTORY_LIMIT)},
+        )
+    ).mappings()
+    return [dict(row) for row in rows]
+
+
 # --------------------------------------------------------------------------- #
 # Orchestrator
 # --------------------------------------------------------------------------- #
 
 
-async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
+async def _run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
     """Run one full scrape. Never raises — failures land in ScrapeResult."""
     _log.info("mtgo scrape starting")
     result = ScrapeResult()
@@ -1012,7 +1094,6 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
             },
         )
         return result
-
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 — orchestrator must never raise
@@ -1033,3 +1114,16 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
         except Exception:  # noqa: BLE001 — never raise from orchestrator
             _log.exception("mtgo scrape: failed to record health")
         return result
+
+
+async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
+    """Run the scraper and persist its completed outcome for admin diagnostics."""
+    started_at = datetime.now(UTC)
+    result = await _run_scrape(sm)
+    finished_at = datetime.now(UTC)
+    try:
+        async with sm() as session:
+            await record_run_history(session, SCRAPER_NAME, result, started_at, finished_at)
+    except Exception:  # noqa: BLE001 - history failure must not hide the scrape outcome
+        _log.exception("mtgo scrape: failed to record run history")
+    return result
