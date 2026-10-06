@@ -7,6 +7,31 @@ API surface stabilizes.
 
 ## Unreleased
 
+### Fixed
+
+- **Analytics background loops are safe to run on more than one replica
+  (#155).** The Scryfall sync, the card stats materializer and the card
+  stats backfill scan now run under the shared Postgres job lock
+  (`common.job_lock`, the mechanism the scrapers got in #127), each under
+  its own name in `analytics.scraper_runs`: `scryfall_sync`,
+  `card_materializer`, `card_stats_backfill`. Two analytics replicas
+  booting together run each of them once; a replica killed mid-run is
+  replaced after the lock's stale window (`STALE_AFTER_SECONDS`, 180s).
+  The materializer is held as a long-lived lease with the other replica
+  standing by (new `run_locked_standby`); the sync and the backfill are
+  locked per pass. The cache invalidator is deliberately left unlocked,
+  because every replica serves the cache and a duplicate key delete is a
+  no-op. The per-loop decisions are written down in the
+  `analytics_service.main` module docstring and in `docs/deploy.md`.
+  `POST /analytics/admin/sync-cards` now takes the same lock before
+  answering 202 and answers 409 `sync_already_running` while a sync is
+  live, as the scraper triggers already did; the admin Cards page shows
+  "already running" instead of "Sync started" in that case. Housekeeping
+  on the way: the empty `__init__.py` markers in the analytics, parser
+  and web test directories are gone, so the suites can be collected in a
+  single pytest invocation (pytest 9 refused the duplicate
+  `tests.conftest` they produced); CI's per-suite runs are unaffected.
+
 ### Security
 
 - **Browser execution boundary hardened (#126).** The gateway CSP is now

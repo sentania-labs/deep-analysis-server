@@ -4836,6 +4836,7 @@ def _render_admin_cards(
     cards_status_view: dict[str, Any] | None,
     error: str | None,
     synced: bool,
+    sync_running: bool,
     status_code: int,
 ) -> Response:
     return templates.TemplateResponse(
@@ -4846,6 +4847,7 @@ def _render_admin_cards(
             "cards_status": cards_status_view,
             "error": error,
             "synced": synced,
+            "sync_running": sync_running,
         },
         status_code=status_code,
     )
@@ -4857,6 +4859,7 @@ async def admin_cards_page(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     synced: Annotated[int, Query(ge=0, le=1)] = 0,
+    sync_running: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -4882,6 +4885,7 @@ async def admin_cards_page(
         cards_status_view=cards_status_view,
         error=error,
         synced=synced == 1,
+        sync_running=sync_running == 1,
         status_code=code,
     )
 
@@ -4901,6 +4905,12 @@ async def admin_cards_sync(
     except analytics_client.AnalyticsForbidden:
         _log.info("admin.cards.sync.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsConflict:
+        # A sync is already in progress (scheduler or another admin).
+        # Say so instead of pretending the click started one.
+        return RedirectResponse(
+            url="/admin/cards?sync_running=1", status_code=status.HTTP_303_SEE_OTHER
+        )
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics POST /admin/sync-cards call failed")
         return Response(

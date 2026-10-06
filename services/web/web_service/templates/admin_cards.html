@@ -29,6 +29,12 @@
 </div>
 {% endif %}
 
+{% if sync_running %}
+<div class="bg-accent-muted border border-accent/20 text-accent rounded-md p-3 text-sm mb-4" role="status">
+    A card sync is already running. Nothing new was started; reload in a few minutes to see updated totals.
+</div>
+{% endif %}
+
 {# Card mirror #}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-6 mb-6">
     <h2 class="text-sm font-semibold dark:text-txt-primary text-txt-primary-light mb-3">Card Mirror</h2>

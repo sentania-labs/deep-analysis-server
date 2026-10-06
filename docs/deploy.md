@@ -374,6 +374,31 @@ docker volume rm "$DA_LEGACY_ARCHIVE_VOLUME"   # or the name from `docker volume
 That is the only step that destroys the old copy, and nothing does it
 for you.
 
+## Running more than one analytics replica
+
+Compose runs one container per service and needs none of this. On
+Kubernetes (`sentania-labs/lab-deployment`) the analytics service can be
+scaled to several replicas. Its request path is stateless, but every
+replica also runs the same background loops at startup, so each loop
+had to be decided on its own (issue #155). The lock, where there is one,
+is the Postgres heartbeat row in `analytics.scraper_runs` that the
+scrapers have used since #127 (`common/job_lock.py`); a replica killed
+mid-run is replaced once its row is older than `STALE_AFTER_SECONDS`
+(180 seconds).
+
+| Loop | Lock row | Decision |
+|---|---|---|
+| MTGO and mtgtop8 scrapers | `mtgo`, `mtgtop8` | Locked per run since #127. Unchanged. |
+| Scryfall card sync | `scryfall_sync` | Locked per tick. Two replicas booting together download the bulk file once; the due check is repeated inside the lock so the loser does nothing. The manual **Sync now** on the admin Cards page takes the same lock and reports "already running" when it is. |
+| Card stats materializer (`match.parsed` subscriber) | `card_materializer` | Locked as a lease: one replica is subscribed, the others stand by and retry every `STANDBY_RETRY_SECONDS` (60 seconds). Failover after a kill takes at most 180 + 60 seconds; events published in that window are caught by the backfill scan. |
+| Card stats backfill scan | `card_stats_backfill` | Locked per pass. Every replica keeps its five minute timer; a pass that finds the lock held skips its turn. |
+| Cache invalidator (`match.parsed` subscriber) | none | Deliberately unlocked. Every replica serves the cache, so every replica should drop the keys as soon as it hears the event. A duplicate delete is a no-op and the keys expire on a TTL anyway. Locking it would only leave a stale cache after a holder died. |
+
+The lock rows are visible in `analytics.scraper_runs` (one row per
+running job; `owner` is `hostname:pid`). The same per-loop reasoning,
+in more detail, is in the module docstring of
+`services/analytics/analytics_service/main.py`.
+
 ## Port publishing
 
 - `127.0.0.1:5432` — Postgres, bound to localhost only (never exposed on a routable interface).

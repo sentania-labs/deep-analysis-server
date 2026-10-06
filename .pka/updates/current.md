@@ -1,3 +1,9 @@
+## 2026-10-06 04:10: analytics-loop-locks  [batch]
+
+**Type:** status
+
+Issue #155 (analytics background loops not multi-replica safe) implemented on `crucible/FDY-0390` off `main` `b39b1a5`. The Scryfall scheduler, the card stats materializer and the card stats backfill scan now run under the shared Postgres job lock from `common/job_lock.py` (#127 mechanism, generalised under #161), reusing `analytics.scraper_runs` through `analytics_service.scraper_lock` with job names `scryfall_sync`, `card_materializer`, `card_stats_backfill`. Decided per loop, not blanket: the sync and the backfill are locked per pass (a contender skips its tick, a dead holder's row is taken over after `STALE_AFTER_SECONDS`), the materializer is held as a long-lived lease with a standby replica retrying every `STANDBY_RETRY_SECONDS` (new `common.job_lock.run_locked_standby`), and the cache invalidator is deliberately unlocked because every replica serves the cache and a duplicate key delete is a no-op. The Scryfall due check moved inside the lock (`scryfall_sync.sync_if_due`) so a replica queued behind a finished sync does nothing. `POST /analytics/admin/sync-cards` takes the same lock before its 202 and answers 409 `sync_already_running` otherwise; the web Cards page maps that to an "already running" banner (`?sync_running=1`). Decisions are written in the `analytics_service.main` module docstring and in `docs/deploy.md`. New `services/analytics/tests/test_loop_job_locks.py` (12 tests on `InMemoryJobLockStore`: two replicas run each locked loop once, a killed holder is taken over after `STALE_AFTER_SECONDS`, the invalidator runs on every replica) plus three web tests for the conflict path. Not run here: the compose smoke scripts (no Docker in the worker image); CI covers lint, mypy and the unit suites.
+
 ## 2026-09-09 00:35: csp-hardening  [batch]
 
 **Type:** status
