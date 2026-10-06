@@ -259,8 +259,22 @@ def reset_store() -> None:
     reset_object_store()
 
 
+@app.get("/livez")
+@app.get("/ingest/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("ingest"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/ingest/healthz")
+@app.get("/ingest/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_db, check_object_store, check_redis, evaluate
     from ingest_service.db import get_sessionmaker as _get_sm
