@@ -1582,8 +1582,22 @@ async def delete_label_mapping(
 app.include_router(admin_router)
 
 
+@app.get("/livez")
+@app.get("/analytics/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("analytics"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/analytics/healthz")
+@app.get("/analytics/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_db, check_redis, evaluate
 

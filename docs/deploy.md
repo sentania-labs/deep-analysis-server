@@ -513,3 +513,12 @@ would leave the system with no way to recover admin access:
 If you hit one of these errors the fix is to first create or
 promote a second admin, then retry. There is no super-admin
 override; the invariant is enforced by the auth service itself.
+
+## Health and Readiness Probes
+
+All services provide HTTP health checks:
+
+* **Readiness (`/healthz` or `/readyz`)**: Checks the service and its backing dependencies (Postgres, Redis, Object Store) and returns `200 OK` only when all required stores are reachable. Returns `503 Service Unavailable` if a backend is unreachable. Use this for the Kubernetes **readiness probe** so traffic is not routed to a pod that cannot serve it. The `compose` stack and `fleet-caddy` rely on `/healthz` for readiness.
+* **Liveness (`/livez`)**: Checks only that the service's HTTP loop is running and accepting connections. It does not check Postgres or Redis. It will return `200 OK` even if the database is down. Use this for the Kubernetes **liveness probe** to prevent restart loops during transient database outages.
+
+For both probes, services also expose a prefixed alias (e.g. `/analytics/livez`, `/ingest/healthz`, etc.) primarily used by the API Gateway to route checks per service, but the bare endpoints (`/healthz`, `/readyz`, `/livez`) work directly on the container port.

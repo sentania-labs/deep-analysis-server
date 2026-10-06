@@ -143,8 +143,27 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
+@app.get("/livez")
+@app.get("/auth/livez")
+async def livez() -> Response:
+    import json
+
+    from fastapi import Response
+
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return Response(
+        content=json.dumps(report.to_dict("auth")),
+        media_type="application/json",
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/auth/healthz")
+@app.get("/auth/readyz")
 async def healthz() -> Response:
     from auth_service.db import get_sessionmaker as _get_sm
     from common.health import check_db, check_redis, evaluate

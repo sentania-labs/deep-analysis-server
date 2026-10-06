@@ -132,8 +132,22 @@ from parser_service.reparse import router as _reparse_router  # noqa: E402
 app.include_router(_reparse_router)
 
 
+@app.get("/livez")
+@app.get("/parser/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("parser"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/parser/healthz")
+@app.get("/parser/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_db, check_object_store, check_redis, evaluate
 

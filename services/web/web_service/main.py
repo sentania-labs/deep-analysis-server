@@ -151,8 +151,22 @@ def _patched_template_response(
 templates.TemplateResponse = _patched_template_response  # type: ignore[assignment]
 
 
+@app.get("/livez")
+@app.get("/web/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("web"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/web/healthz")
+@app.get("/web/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_http, evaluate
 
