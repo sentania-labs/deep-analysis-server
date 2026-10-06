@@ -388,6 +388,42 @@ class Smoke:
         backdrop.click(position={"x": 700, "y": 600})
         self.wait_until(page, "Alpine.store('sidebar').open === false", timeout=5_000)
         self.t.check("backdrop click closes the sidebar", True)
+
+        # Mobile viewport checks (375px, issue #171):
+        # AC1: tapping the hamburger leaves the sidebar open.
+        # AC2: tapping outside the sidebar closes it; an open profile dropdown closes
+        # when hamburger is tapped.
+        page.set_viewport_size({"width": 375, "height": 667})
+        page.evaluate("Alpine.store('sidebar').open = false")
+
+        hamburger = page.locator('button[aria-label="Toggle sidebar"]')
+        hamburger.click()
+        page.wait_for_timeout(200)
+        opened = page.evaluate("Alpine.store('sidebar').open")
+        self.t.check("hamburger leaves sidebar open at 375px", opened is True, f"open={opened}")
+
+        # Tapping outside the sidebar closes it.
+        backdrop.wait_for(state="visible", timeout=5_000)
+        backdrop.click(position={"x": 300, "y": 300})
+        self.wait_until(page, "Alpine.store('sidebar').open === false", timeout=5_000)
+        self.t.check("tapping outside the sidebar closes it at 375px", True)
+
+        # An open profile dropdown closes when the hamburger is tapped.
+        page.click('button[aria-haspopup="true"]')
+        menu.wait_for(state="visible", timeout=5_000)
+        self.t.check("profile menu opens at 375px", menu.is_visible())
+        hamburger.click()
+        page.wait_for_timeout(200)
+        menu.wait_for(state="hidden", timeout=5_000)
+        self.t.check("open profile dropdown closes when hamburger is tapped", not menu.is_visible())
+        opened_after = page.evaluate("Alpine.store('sidebar').open")
+        self.t.check(
+            "hamburger tap leaves sidebar open after closing dropdown",
+            opened_after is True,
+            f"open={opened_after}",
+        )
+
+        page.evaluate("Alpine.store('sidebar').open = false")
         page.set_viewport_size({"width": 1280, "height": 900})
         self.audit(page, rec, "shared chrome interactions")
 
