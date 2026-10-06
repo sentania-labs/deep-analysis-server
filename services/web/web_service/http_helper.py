@@ -27,7 +27,6 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-import structlog
 
 # ---------------------------------------------------------------------------
 # Shared datetime parser (was duplicated in analytics_client + auth_client)
@@ -73,9 +72,9 @@ async def raw_request(
         headers["Authorization"] = f"Bearer {token}"
     # Propagate X-Request-ID so the backend service sees the same
     # correlation id that the gateway stamped on the original request.
-    from common.request_id import REQUEST_ID_HEADER
+    from common.request_id import REQUEST_ID_HEADER, get_request_id_header
 
-    request_id_val = structlog.contextvars.get_contextvars().get(REQUEST_ID_HEADER)
+    request_id_val = get_request_id_header()
     if request_id_val:
         headers[REQUEST_ID_HEADER] = request_id_val
     try:

@@ -1,8 +1,13 @@
 """ASGI middleware that manages X-Request-ID across the request lifecycle.
 
 Reads X-Request-ID from the incoming request headers, generates a UUID4 when
-absent, binds it into the structlog context-var context, and echoes it back
-on every response so the full gateway->service chain is traceable.
+absent, binds it into the context-var context, and echoes it back on every
+response so the full gateway->service chain is traceable.
+
+This middleware depends only on stdlib ``contextvars`` and Starlette ASGI
+primitives — it never imports structlog, sqlalchemy, or any other heavy
+package so that services without a database (the web service) can use it
+without triggering a ``greenlet`` import error.
 
 Usage
 -----
@@ -20,20 +25,28 @@ This is a Starlette ``ASGiHTTPRouter``-compatible middleware class.
 
 from __future__ import annotations
 
+import contextvars
 import uuid
 
-import structlog
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "x-request-id"
+
+#: Context-var that carries the request-id for the duration of each
+#: ASGI request.  Set by :class:`RequestIDMiddleware`; read by any
+#: downstream code (``http_helper`` requests-forwarding, custom
+#: structlog processors, etc.).
+_request_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_request_id_ctx", default=None
+)
 
 
 class RequestIDMiddleware:
     """ASGI middleware that manages X-Request-ID.
 
     * Reads X-Request-ID from request headers; generates a UUID4 when absent.
-    * Binds the value into the structlog context-var context.
+    * Binds the value into the stdlib context-var context.
     * Echoes X-Request-ID on the response header.
     """
 
@@ -66,14 +79,28 @@ class RequestIDMiddleware:
                 }
             )
 
+        token = _request_id_ctx.set(request_id)
         try:
-            structlog.contextvars.bind_contextvars(request_id=request_id)
             await self.app(scope, receive, inner_send)
         finally:
-            structlog.contextvars.clear_contextvars()
+            _request_id_ctx.reset(token)
 
 
-def get_request_id(scope: Scope) -> str | None:
-    """Return the X-Request-ID from an ASGI scope, or None."""
+def get_request_id() -> str | None:
+    """Return the current X-Request-ID from the context-var, or None."""
+    return _request_id_ctx.get()
+
+
+def get_request_id_header() -> str | None:
+    """Return the X-Request-ID header value (same value, different name).
+
+    This is the public API that http_helper and other callers use to read
+    the request-id from the current context.
+    """
+    return get_request_id()
+
+
+def get_request_id_from_scope(scope: Scope) -> str | None:
+    """Return the X-Request-ID from an ASGI scope headers, or None."""
     headers = Headers(scope=scope)
     return headers.get(REQUEST_ID_HEADER)

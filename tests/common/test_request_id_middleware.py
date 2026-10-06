@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-import structlog
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -24,9 +23,10 @@ def app() -> FastAPI:
 
     @_app.get("/ping")
     async def ping() -> dict[str, str]:
-        # Read request_id from structlog context during the request
-        ctx = structlog.contextvars.get_contextvars()
-        rid = ctx.get("request_id")
+        # Read request_id from the stdlib context-var set by the middleware
+        from common.request_id import get_request_id
+
+        rid = get_request_id()
         return {"status": "ok", "request_id": rid or "unknown"}
 
     return _app
