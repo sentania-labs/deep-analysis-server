@@ -4,6 +4,8 @@ Active and planned outcomes for the Deep Analysis server. Each outcome is named 
 
 Shipped versions are recorded in [CHANGELOG.md](CHANGELOG.md). Tactical bugs live in [GitHub Issues](https://github.com/sentania-labs/deep-analysis-server/issues).
 
+The last published release is `v0.11.0`. `main` currently sits 10 commits ahead of that tag with real, tested work (the object-storage migration, the force-reparse data-integrity fix, and the CSP hardening below): none of it has gone out in a release yet, so it is not running anywhere until the next `vX.Y.Z` tag is cut.
+
 ---
 
 ## Shipped
@@ -22,6 +24,12 @@ Previously roadmapped items that are now in production.
 - **Holding pen for inconclusive parses** — Partial matches flagged `pending_review`, admin accept/reject flow. Shipped v0.9.7.
 - **Dashboard date range filter** — Preset dropdown (7/14/30d) + custom From/To date picker, composes with format filter. Shipped v0.9.13.
 - **Card analytics engine** — Card performance table with sortable columns, avg cast turn, materialized stats. Shipped v0.9.6–v0.9.12.
+- **Raw archive moved to S3-compatible object storage** (#135, #159, #167): admin-controlled migration with a GUI toggle for the automatic backfill, a manual "run now" trigger, and a configurable legacy-volume name so it points at the real volume on each host. Merged to `main`, not yet released.
+- **Force-reparse preserves admin review verdicts** (#154): rejected matches stay hidden after a force-reparse rebuild instead of quietly coming back into view. Merged to `main`, not yet released.
+- **Browser execution boundary hardened with a strict CSP** (#126): no inline scripts, no `unsafe-eval`, no third-party script/font/style origins; the gateway CSP is `'self'` only. One known side effect: card art on `/cards` is now blocked by the same policy (#173, listed below). Merged to `main`, not yet released.
+- **CI stopped deploying releases** (#137): the release workflow publishes images and cuts a GitHub Release; it no longer SSHes anywhere. `lab-deployment` and Argo CD are the only path that changes what is actually running.
+- **CI realigned to the `lab` runner pool** (#161): placement follows the `github-ci` rule: lab-only jobs need vCenter/cluster/lab CA access, everything else runs on GitHub-hosted runners.
+- **Push review gate made worktree-aware** (#160): the pre-push hook that requires a passed self-review now resolves the correct worktree instead of trusting an ambient path. A narrower gap remains, tracked as #164 below.
 
 ---
 
@@ -45,7 +53,7 @@ The core product value — per-user performance breakdowns that answer "what sho
   - Existing format and date range filters apply to all views
   - Read-only API surface so the AI add-on can query
 - **Dependencies:** Archetype detection (shipped), date filtering (shipped), card analytics engine (shipped)
-- **Status:** Not started
+- **Status:** Not started. Tracked as issue [#129](https://github.com/sentania-labs/deep-analysis-server/issues/129). The building blocks (per-user game context, pre-board/post-board win rate) exist, but no matchup route or archetype-vs-archetype query exists yet. Land the dashboard date-range bug fix (#128, in Cleanup below) first since matchup filtering will build on the same date inputs.
 
 ### 2. BNR epoch awareness
 
@@ -102,14 +110,40 @@ System-wide match-and-analysis surface for admins.
 - **Dependencies:** None (admin match detail already shipped)
 - **Status:** Not started
 
+### 6. Kubernetes-safe service behavior
+
+Two gaps that matter once `lab-deployment`/Argo CD runs this stack on the cluster instead of Compose on one host.
+
+- **Acceptance criteria:**
+  - Split `/healthz` (dependency-aware, stays as the readiness probe) from a new shallow `/livez` (process-alive only), so a brief Postgres/Redis blip doesn't restart-loop a healthy container. Tracked as [#156](https://github.com/sentania-labs/deep-analysis-server/issues/156).
+  - Lock the analytics background loops that aren't already replica-safe (Scryfall sync, card materializer, card-stat backfill) the same way the scrapers already are, so running more than one analytics replica doesn't duplicate work or race the database. Tracked as [#155](https://github.com/sentania-labs/deep-analysis-server/issues/155).
+- **Dependencies:** None
+- **Status:** Not started. Not urgent on today's single-Compose-host deployment; becomes a prerequisite the day analytics needs more than one replica.
+
+### 7. Scraper diagnostics and run history
+
+Admin UI currently shows scraper health and the last run; it does not show a history of runs.
+
+- **Acceptance criteria:**
+  - Bounded run-history list: start, finish, status, record counts, sanitized error snippet
+  - Retention policy so history doesn't grow unbounded
+  - Linked from the existing scraper admin cards
+- **Dependencies:** None
+- **Status:** Not started. Tracked as issue [#130](https://github.com/sentania-labs/deep-analysis-server/issues/130).
+
 ---
 
 ## Cleanup
 
 Tactical bugs and small tech-debt items. Resolve when convenient or alongside related work.
 
-- **Issue #4** — `change_password` form lost its inline "wrong current password" error after the AuthForbidden refactor. Falls through to a generic banner instead.
-- **Issue #5** — wrong template renders on `/profile` subpages when the auth service is unreachable. Returns a generic 503 instead of the contextual `_service_unavailable` template.
+- **Issue [#128](https://github.com/sentania-labs/deep-analysis-server/issues/128):** dashboard and match-history date filters accept an inverted or malformed range with no feedback; it just renders empty results.
+- **Issue [#141](https://github.com/sentania-labs/deep-analysis-server/issues/141):** the reset-password smoke check fails intermittently (roughly 1 run in 3) against an otherwise healthy stack; root cause not yet confirmed.
+- **Issue [#158](https://github.com/sentania-labs/deep-analysis-server/issues/158):** the parser silently skips a file when object storage is briefly unreachable; it self-heals on the next backfill pass, but nothing surfaces the skip to an admin.
+- **Issue [#164](https://github.com/sentania-labs/deep-analysis-server/issues/164):** the pre-push review gate still fails open for a few shell forms it doesn't recognize as a push. A fix has to land the same way in this repo, `deep-analysis-agent`, and `deep-analysis-ai` at once, or the three repos drift out of sync.
+- **Issue [#171](https://github.com/sentania-labs/deep-analysis-server/issues/171):** on mobile widths, the hamburger menu never opens the sidebar (an outside-click handler closes it in the same event that opened it).
+- **Issue [#173](https://github.com/sentania-labs/deep-analysis-server/issues/173):** card art on `/cards` doesn't load; the new CSP (shipped, above) blocks the Scryfall image origin. Pre-existing gap, not a regression from the CSP work.
+- **Issue [#174](https://github.com/sentania-labs/deep-analysis-server/issues/174):** the pre-push smoke steps are written out twice (README and CLAUDE.md) and the CLAUDE.md copy is now wrong; needs consolidating onto one authoritative copy.
 
 ---
 

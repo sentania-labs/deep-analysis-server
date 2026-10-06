@@ -10,6 +10,7 @@ The matching Windows agent (MIT license) lives at [sentania-labs/deep-analysis-a
 
 ## Documentation
 
+- [ROADMAP.md](ROADMAP.md): what's built, what's next, and why
 - [docs/deploy.md](docs/deploy.md) — Deployment + environment
 - [docs/admin-bootstrap.md](docs/admin-bootstrap.md) — Initial admin password flow
 - [docs/backup.md](docs/backup.md) — Backup strategy
@@ -25,9 +26,9 @@ Source: [`docs/diagrams/architecture.excalidraw`](docs/diagrams/architecture.exc
 
 ## Quickstart
 
-The current slice (W1a) stands up the infra containers only — PostgreSQL,
-Redis, and the Caddy gateway. Application services land in subsequent
-slices; the gateway will 502 on `/api/*` routes until then.
+All six services (gateway, auth, ingest, parser, analytics, web) come up
+together with `docker compose up -d`. See [ROADMAP.md](ROADMAP.md) for
+what each one currently does.
 
 ```bash
 # 1. Clone and enter the repo
@@ -66,14 +67,11 @@ Shared infrastructure: PostgreSQL (single instance, per-service schemas), Redis 
 
 ## Self-hosting
 
-> **Note:** Service code is under development. This scaffolding is the foundation for v0.4.0.
-
 ```bash
-# Coming in Phase 2 — service implementations
 docker compose up -d
 ```
 
-Full deployment documentation will live in `docs/` once services are implemented.
+See [docs/deploy.md](docs/deploy.md) for full deployment documentation.
 
 ## Match review and force-reparse
 
