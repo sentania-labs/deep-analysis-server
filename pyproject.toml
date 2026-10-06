@@ -80,6 +80,7 @@ exclude = ["services/[a-z]+/alembic/"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+consider_namespace_packages = true
 
 [tool.uv.workspace]
 members = [
