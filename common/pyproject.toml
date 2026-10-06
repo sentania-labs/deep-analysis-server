@@ -37,3 +37,4 @@ bypass-selection = true
 "background_loop.py" = "common/background_loop.py"
 "job_lock.py" = "common/job_lock.py"
 "storage.py" = "common/storage.py"
+"request_id.py" = "common/request_id.py"

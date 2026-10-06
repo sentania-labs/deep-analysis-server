@@ -69,6 +69,7 @@ from auth_service.schemas import (
 from auth_service.settings import get_settings
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
+from common.request_id import RequestIDMiddleware
 
 SERVICE_NAME = "auth"
 configure_logging(SERVICE_NAME)
@@ -109,6 +110,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 from auth_service import admin  # noqa: E402
 from auth_service.admin import router as _admin_router  # noqa: E402

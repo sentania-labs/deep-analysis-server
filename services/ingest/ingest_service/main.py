@@ -34,6 +34,7 @@ from common.job_lock import TRIGGER_MANUAL, JobAlreadyRunning, acquire
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
+from common.request_id import RequestIDMiddleware
 from common.storage import (
     ObjectStorageError,
     ObjectStore,
@@ -131,6 +132,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 
 # ---------------------------------------------------------------------------

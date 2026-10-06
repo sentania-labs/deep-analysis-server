@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
+from common.request_id import RequestIDMiddleware
 from web_service import analytics_client, auth_client, ingest_client, parser_client
 from web_service import csrf as _csrf_mod
 from web_service.deps import (
@@ -55,6 +56,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
