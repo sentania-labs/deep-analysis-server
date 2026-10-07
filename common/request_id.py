@@ -5,9 +5,26 @@ absent, binds it into the context-var context, and echoes it back on every
 response so the full gateway->service chain is traceable.
 
 This middleware depends only on stdlib ``contextvars`` and Starlette ASGI
-primitives — it never imports structlog, sqlalchemy, or any other heavy
+primitives. It never imports structlog, sqlalchemy, or any other heavy
 package so that services without a database (the web service) can use it
 without triggering a ``greenlet`` import error.
+
+Scope handling
+--------------
+
+Only ``http`` scopes are touched. Every other scope type, and in particular
+``lifespan``, is forwarded to the wrapped app untouched: Starlette routes the
+lifespan scope through the whole middleware stack, so a middleware that does
+not forward it silently disables every service's startup hook (the auth
+admin bootstrap, the metrics server, the analytics background loops).
+Uvicorn's default ``--lifespan auto`` then logs "ASGI 'lifespan' protocol
+appears unsupported" and keeps serving, which is exactly how the compose
+smoke failed: no bootstrap admin was ever created, the smoke's login wait
+loop got 401 ten times and 429 from the login rate limiter after that.
+
+The ``scope`` dict itself is never copied or rewritten, so ``scope["client"]``
+and the request headers reach downstream code (such as the auth login rate
+limiter, which keys on the client address) exactly as the server set them.
 
 Usage
 -----
@@ -19,8 +36,6 @@ Usage
 
     app = FastAPI()
     app.add_middleware(RequestIDMiddleware)
-
-This is a Starlette ``ASGiHTTPRouter``-compatible middleware class.
 """
 
 from __future__ import annotations
@@ -48,6 +63,7 @@ class RequestIDMiddleware:
     * Reads X-Request-ID from request headers; generates a UUID4 when absent.
     * Binds the value into the stdlib context-var context.
     * Echoes X-Request-ID on the response header.
+    * Forwards ``lifespan`` and any other non-http scope to the app untouched.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -55,7 +71,9 @@ class RequestIDMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            await receive  # type: ignore[misc]
+            # lifespan / websocket: nothing to correlate, but the app must
+            # still see the scope or its startup and shutdown hooks never run.
+            await self.app(scope, receive, send)
             return
 
         headers = Headers(scope=scope)
@@ -67,17 +85,11 @@ class RequestIDMiddleware:
             if message["type"] != "http.response.start":
                 await send(message)
                 return
-            # Add X-Request-ID to the response headers without dropping
-            # other fields (status, etc.) required by the ASGI spec.
+            # Add X-Request-ID to the response headers while keeping every
+            # other field of the message (status, trailers, ...) intact.
             message_headers = list(message.get("headers", []))
             message_headers.append((b"x-request-id", request_id.encode("latin-1")))
-            await send(
-                {
-                    "type": message["type"],
-                    "status": message["status"],
-                    "headers": message_headers,
-                }
-            )
+            await send({**message, "headers": message_headers})
 
         token = _request_id_ctx.set(request_id)
         try:
