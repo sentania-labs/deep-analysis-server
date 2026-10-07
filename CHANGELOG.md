@@ -7,6 +7,19 @@ API surface stabilizes.
 
 ## Unreleased
 
+### Added
+
+- **The X-Request-ID header is logged and echoed by every service (#182).**
+  A shared ASGI middleware, `common.request_id.RequestIDMiddleware`, reads the
+  `X-Request-ID` that the gateway stamps on each request (generating a UUID4
+  when it is missing), adds it as `request_id` to every structured log line
+  written while that request is handled, and returns it on the response. It is
+  registered on the auth, ingest, parser, analytics and web apps. The web
+  service forwards the header on its httpx calls to the backend services, so
+  a browser request can be traced through the gateway and every service it
+  reaches with one id. Non-http ASGI scopes (lifespan, websocket) pass through
+  the middleware untouched, so service startup hooks keep running.
+
 ### Fixed
 
 - **Analytics background loops are safe to run on more than one replica

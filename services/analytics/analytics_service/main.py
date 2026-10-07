@@ -132,6 +132,7 @@ from common.cache import invalidate_user
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import get_redis
+from common.request_id import RequestIDMiddleware
 
 SERVICE_NAME = "analytics"
 configure_logging(SERVICE_NAME)
@@ -529,6 +530,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 app.include_router(archetypes_router)
 app.include_router(bnr_events_router)
 app.include_router(stats_router)

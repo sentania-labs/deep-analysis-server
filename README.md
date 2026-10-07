@@ -104,6 +104,13 @@ deploy a release to the lab.
 
 Each service emits structured JSON logs and exposes a `/metrics` endpoint (Prometheus text format).
 
+Every service reads the `X-Request-ID` header the gateway (Caddy) stamps on each
+request, generates a UUID4 when the header is absent, adds it as `request_id` to
+every structured log line written while the request is being handled, and echoes
+it in the response. The web service forwards the same header on its calls to
+auth, ingest, analytics and parser, so one gateway request can be followed across
+services with a single id. The middleware is `common.request_id.RequestIDMiddleware`.
+
 Optional Loki + Grafana + Prometheus stack:
 
 ```bash
