@@ -17,8 +17,6 @@ from typing import Any
 
 import httpx
 import redis.asyncio as aioredis
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from common.storage import ObjectStore
 
@@ -61,8 +59,16 @@ class HealthReport:
         return result
 
 
-async def check_db(sessionmaker: async_sessionmaker[AsyncSession]) -> CheckResult:
-    """Ping Postgres with ``SELECT 1``; 2-second timeout."""
+async def check_db(sessionmaker: Any) -> CheckResult:
+    """Ping Postgres with ``SELECT 1``; 2-second timeout.
+
+    Note: the web service has no database stack, so the web image must
+    not import sqlalchemy at module scope.  We therefore import
+    ``sqlalchemy`` here inside the function so that only callers that
+    actually invoke ``check_db`` trigger the import.
+    """
+    from sqlalchemy import text
+
     try:
         async with asyncio.timeout(_TIMEOUT_SECONDS):
             async with sessionmaker() as session:

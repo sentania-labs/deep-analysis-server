@@ -47,7 +47,7 @@ _SERVICES: dict[str, tuple[str, ...]] = {
     "web": ("/web/", "/admin/"),
 }
 
-_INFRA_PATHS = frozenset({"/healthz"})
+_INFRA_PATHS = frozenset({"/healthz", "/readyz", "/livez"})
 
 # Web-service browser routes that Caddy routes via the catch-all — they
 # sit outside the /web/ namespace on purpose because they are URLs a

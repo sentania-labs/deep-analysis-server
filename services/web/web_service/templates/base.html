@@ -31,6 +31,7 @@
                 {% if user %}
                 {# Mobile hamburger #}
                 <button @click="$store.sidebar.toggle()"
+                        data-sidebar-toggle
                         aria-label="Toggle sidebar"
                         class="lg:hidden dark:text-txt-secondary text-txt-secondary-light hover:dark:text-txt-primary hover:text-txt-primary-light">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -135,7 +136,7 @@
         {# Sidebar #}
         <aside :class="$store.sidebar.open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:overflow-hidden'"
                class="fixed lg:sticky top-12 left-0 z-40 h-[calc(100vh-3rem)] w-[220px] dark:bg-surface bg-surface-light border-r dark:border-border border-border-light overflow-y-auto transition-all duration-200 flex-shrink-0 lg:top-12"
-               @click.outside.window="$store.sidebar.closeOnMobile()">
+               @click.outside.window="$store.sidebar.closeOnMobile($event)">
             <nav class="py-4 px-3 flex flex-col gap-1">
                 {% if user.role != "admin" %}
                 {# User nav #}

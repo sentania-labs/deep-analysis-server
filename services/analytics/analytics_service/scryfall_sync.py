@@ -11,6 +11,19 @@ Refresh cadence is governed by ``DA_SCRYFALL_SYNC_INTERVAL_DAYS``
 re-checks on a sleep loop; an admin can also trigger a manual sync via
 ``POST /analytics/admin/sync-cards``.
 
+One sync at a time (issue #155)
+-------------------------------
+Both paths run under the ``JOB_NAME`` lock in ``analytics.scraper_runs``
+(``analytics_service.scraper_lock``). Two replicas booting together
+would otherwise each download the 80MB file and each upsert ~30,000
+rows into the same table; the second pass is pure waste and doubles the
+load on Scryfall, which asks clients not to do that. The scheduler
+calls ``sync_if_due`` *inside* the lock so a replica that queued up
+behind a finished sync re-reads ``synced_at`` and finds nothing to do,
+rather than syncing again because its pre-lock check was stale. The
+manual endpoint takes the same lock before answering 202 and returns
+409 while a run is live, matching the scrapers.
+
 Implementation note — JSON streaming
 ------------------------------------
 The bulk-data file is ~80MB and is a single top-level JSON array. We
@@ -50,6 +63,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from analytics_service.settings import get_settings
 
 _log = logging.getLogger("analytics.scryfall_sync")
+
+#: Lock name shared by the scheduled and the manual sync. Lives in the
+#: analytics lock table next to the scraper names (``mtgo``, ``mtgtop8``).
+JOB_NAME = "scryfall_sync"
 
 _BULK_DATA_URL = "https://api.scryfall.com/bulk-data/oracle-cards"
 _USER_AGENT = "DeepAnalysis/0.7.5 (self-hosted analytics; contact: admin)"
@@ -220,3 +237,20 @@ async def run_sync(sessionmaker: async_sessionmaker[AsyncSession]) -> SyncResult
         },
     )
     return result
+
+
+async def sync_if_due(sessionmaker: async_sessionmaker[AsyncSession]) -> SyncResult | None:
+    """Run a sync only if ``should_sync`` still says so.
+
+    Meant to be called while holding the ``JOB_NAME`` lock: the check
+    happens under the lock, so a contender that waited out another
+    replica's sync sees the fresh ``synced_at`` and returns ``None``
+    instead of repeating the work. Returns the ``SyncResult`` when a
+    sync ran.
+    """
+    async with sessionmaker() as session:
+        due = await should_sync(session)
+    if not due:
+        _log.debug("scryfall sync not due; skipping")
+        return None
+    return await run_sync(sessionmaker)

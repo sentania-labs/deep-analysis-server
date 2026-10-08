@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import EventPublisher, get_redis
+from common.request_id import RequestIDMiddleware
 from common.storage import ObjectStore, get_object_store, reset_object_store
 from parser_service import models as _models  # noqa: F401 — load Base.metadata
 from parser_service.backfill import backfill_loop
@@ -126,14 +127,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 from parser_service.reparse import router as _reparse_router  # noqa: E402
 
 app.include_router(_reparse_router)
 
 
+@app.get("/livez")
+@app.get("/parser/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("parser"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/parser/healthz")
+@app.get("/parser/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_db, check_object_store, check_redis, evaluate
 

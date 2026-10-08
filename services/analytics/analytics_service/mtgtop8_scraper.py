@@ -25,7 +25,7 @@ import dataclasses
 import json
 import logging
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import urljoin
 
@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from analytics_service.mtgo_scraper import (
     get_health,
     record_health,
+    record_run_history,
 )
 
 _log = logging.getLogger("analytics.mtgtop8_scraper")
@@ -734,7 +735,7 @@ async def store_event(
 # --------------------------------------------------------------------------- #
 
 
-async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
+async def _run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
     """Run one full scrape across all configured formats. Never raises."""
     _log.info("mtgtop8 scrape starting")
     result = ScrapeResult()
@@ -942,6 +943,19 @@ async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
         except Exception:  # noqa: BLE001
             _log.exception("mtgtop8 scrape: failed to record health")
         return result
+
+
+async def run_scrape(sm: async_sessionmaker[AsyncSession]) -> ScrapeResult:
+    """Run the scraper and persist its completed outcome for admin diagnostics."""
+    started_at = datetime.now(UTC)
+    result = await _run_scrape(sm)
+    finished_at = datetime.now(UTC)
+    try:
+        async with sm() as session:
+            await record_run_history(session, SCRAPER_NAME, result, started_at, finished_at)
+    except Exception:  # noqa: BLE001 - history failure must not hide the scrape outcome
+        _log.exception("mtgtop8 scrape: failed to record run history")
+    return result
 
 
 def _extract_deck_links(html: str, event_id: str) -> dict[str, dict[str, str]]:

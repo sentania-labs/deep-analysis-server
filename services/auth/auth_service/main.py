@@ -69,6 +69,7 @@ from auth_service.schemas import (
 from auth_service.settings import get_settings
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
+from common.request_id import RequestIDMiddleware
 
 SERVICE_NAME = "auth"
 configure_logging(SERVICE_NAME)
@@ -109,6 +110,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 from auth_service import admin  # noqa: E402
 from auth_service.admin import router as _admin_router  # noqa: E402
@@ -143,8 +145,27 @@ def _client_ip(request: Request) -> str | None:
     return None
 
 
+@app.get("/livez")
+@app.get("/auth/livez")
+async def livez() -> Response:
+    import json
+
+    from fastapi import Response
+
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return Response(
+        content=json.dumps(report.to_dict("auth")),
+        media_type="application/json",
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/auth/healthz")
+@app.get("/auth/readyz")
 async def healthz() -> Response:
     from auth_service.db import get_sessionmaker as _get_sm
     from common.health import check_db, check_redis, evaluate

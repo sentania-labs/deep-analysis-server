@@ -28,6 +28,10 @@ _EXEMPT_PREFIXES = (
     "/static",
     "/healthz",
     "/web/healthz",
+    "/readyz",
+    "/web/readyz",
+    "/livez",
+    "/web/livez",
 )
 
 

@@ -26,6 +26,7 @@ from fastapi.templating import Jinja2Templates
 
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
+from common.request_id import RequestIDMiddleware
 from web_service import analytics_client, auth_client, ingest_client, parser_client
 from web_service import csrf as _csrf_mod
 from web_service.deps import (
@@ -55,6 +56,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
@@ -151,8 +153,22 @@ def _patched_template_response(
 templates.TemplateResponse = _patched_template_response  # type: ignore[assignment]
 
 
+@app.get("/livez")
+@app.get("/web/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("web"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/web/healthz")
+@app.get("/web/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_http, evaluate
 
@@ -3517,6 +3533,18 @@ async def admin_scrapers_dashboard(
         scrapers = await analytics_client.admin_get_scrapers(
             settings.analytics_service_url, user.token
         )
+        for scraper in scrapers:
+            try:
+                scraper["history"] = await analytics_client.admin_get_scraper_run_history(
+                    settings.analytics_service_url, user.token, str(scraper["scraper_name"])
+                )
+            except analytics_client.AnalyticsForbidden:
+                raise
+            except analytics_client.AnalyticsClientError:
+                _log.exception(
+                    "analytics scraper history read failed for %s", scraper["scraper_name"]
+                )
+                scraper["history"] = []
     except analytics_client.AnalyticsForbidden:
         return _admin_forbidden(request, user)
     except analytics_client.AnalyticsClientError:
@@ -4968,6 +4996,7 @@ def _render_admin_cards(
     cards_status_view: dict[str, Any] | None,
     error: str | None,
     synced: bool,
+    sync_running: bool,
     status_code: int,
 ) -> Response:
     return templates.TemplateResponse(
@@ -4978,6 +5007,7 @@ def _render_admin_cards(
             "cards_status": cards_status_view,
             "error": error,
             "synced": synced,
+            "sync_running": sync_running,
         },
         status_code=status_code,
     )
@@ -4989,6 +5019,7 @@ async def admin_cards_page(
     user: BrowserUser = Depends(get_current_browser_user),
     settings: WebSettings = Depends(get_settings),
     synced: Annotated[int, Query(ge=0, le=1)] = 0,
+    sync_running: Annotated[int, Query(ge=0, le=1)] = 0,
 ) -> Response:
     blocked = _require_admin_or_403(request, user)
     if blocked is not None:
@@ -5014,6 +5045,7 @@ async def admin_cards_page(
         cards_status_view=cards_status_view,
         error=error,
         synced=synced == 1,
+        sync_running=sync_running == 1,
         status_code=code,
     )
 
@@ -5033,6 +5065,12 @@ async def admin_cards_sync(
     except analytics_client.AnalyticsForbidden:
         _log.info("admin.cards.sync.forbidden", extra={"user_id": user.user_id})
         return _admin_forbidden(request, user)
+    except analytics_client.AnalyticsConflict:
+        # A sync is already in progress (scheduler or another admin).
+        # Say so instead of pretending the click started one.
+        return RedirectResponse(
+            url="/admin/cards?sync_running=1", status_code=status.HTTP_303_SEE_OTHER
+        )
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics POST /admin/sync-cards call failed")
         return Response(

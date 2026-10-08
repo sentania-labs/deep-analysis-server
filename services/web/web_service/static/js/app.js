@@ -54,8 +54,13 @@
                 window.localStorage.setItem('sidebar_open', this.open);
             },
             // Mobile only: tapping outside the sidebar closes it.
-            closeOnMobile: function () {
-                if (window.innerWidth < 1024) this.open = false;
+            closeOnMobile: function (event) {
+                if (window.innerWidth >= 1024) return;
+                var ev = event || (typeof window !== 'undefined' ? window.event : null);
+                if (ev && ev.target && ev.target.closest && ev.target.closest('[data-sidebar-toggle], button[aria-label="Toggle sidebar"]')) {
+                    return;
+                }
+                this.open = false;
             }
         });
     });

@@ -486,7 +486,11 @@ async def admin_reset_scraper_health(
 
 
 async def admin_trigger_sync(base_url: str, token: str) -> bool:
-    """Kick off a card sync. Returns True on 202 (sync scheduled)."""
+    """Kick off a card sync. Returns True on 202 (sync scheduled).
+
+    Raises ``AnalyticsConflict`` on 409: a sync is already running,
+    started by the scheduler on some replica or by another admin.
+    """
     resp = await raw_request(
         "POST",
         f"{base_url}/analytics/admin/sync-cards",
@@ -496,6 +500,11 @@ async def admin_trigger_sync(base_url: str, token: str) -> bool:
     )
     if resp.status_code == 202:
         return True
+    if resp.status_code == 409:
+        raise AnalyticsConflict(
+            "analytics POST /admin/sync-cards returned 409",
+            _conflict_payload(resp),
+        )
     if resp.status_code in (401, 403):
         raise AnalyticsForbidden(f"analytics POST /admin/sync-cards returned {resp.status_code}")
     raise AnalyticsClientError(
@@ -1361,6 +1370,24 @@ async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
         s["is_running"] = bool(s.get("is_running"))
         s["running_since"] = _parse_dt(s.get("running_since"))
     return list(scrapers)
+
+
+async def admin_get_scraper_run_history(
+    base_url: str, token: str, name: str
+) -> list[dict[str, Any]]:
+    """Fetch retained completed-run diagnostics for one scraper."""
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scraper-health/{name}/history",
+        token=token,
+        error_prefix="analytics GET /admin/scraper-health/{name}/history ",
+        **_ERR,
+    )
+    runs = resp.json().get("runs", [])
+    for run in runs:
+        run["started_at"] = _parse_dt(run.get("started_at"))
+        run["finished_at"] = _parse_dt(run.get("finished_at"))
+    return list(runs)
 
 
 async def admin_update_scraper(

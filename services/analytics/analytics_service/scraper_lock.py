@@ -1,16 +1,31 @@
-"""Per-scraper run lock (issue #127), bound to ``analytics.scraper_runs``.
+"""Analytics binding of the shared job lock, on ``analytics.scraper_runs``.
 
-The mechanism itself now lives in ``common.job_lock`` (issue #161
-needed the same guarantee for the ingest raw-archive backfill, and
-#155 needs it for the analytics loops that are still unprotected). This
-module is the analytics binding: it owns the table name, the
-process-wide store, and the thin wrappers that default ``store`` to it
-so existing call sites read unchanged.
+Born as the per-scraper run lock (issue #127). The mechanism itself now
+lives in ``common.job_lock`` (issue #161 needed the same guarantee for
+the ingest raw-archive backfill). This module is the analytics binding:
+it owns the table name, the process-wide store, and the thin wrappers
+that default ``store`` to it so existing call sites read unchanged.
 
-The table keeps its original ``scraper_name`` primary key rather than
-being renamed to ``job_name``: renaming a live table to match a
-refactor is churn with a migration attached and no operator benefit.
-``PostgresJobLockStore`` takes the column name for exactly this reason.
+Since #155 the same table and store also lock the non-scraper
+background jobs of this service. One row per job name:
+
+======================= ================================================
+job name                owner
+======================= ================================================
+``mtgo``                ``mtgo_scraper`` (scheduled and manual)
+``mtgtop8``             ``mtgtop8_scraper`` (scheduled and manual)
+``scryfall_sync``       ``scryfall_sync.JOB_NAME`` (scheduled and manual)
+``card_materializer``   ``card_materializer.MATERIALIZER_JOB_NAME``
+``card_stats_backfill`` ``card_materializer.BACKFILL_JOB_NAME``
+======================= ================================================
+
+The per-loop lock-or-not decisions are in the ``main`` module
+docstring. The table keeps its original ``scraper_name`` primary key
+rather than being renamed to ``job_name``: renaming a live table to
+match a refactor is churn with a migration attached and no operator
+benefit. ``PostgresJobLockStore`` takes the column name for exactly
+this reason, and the column is wide enough (64 characters) for every
+name above.
 """
 
 from __future__ import annotations
