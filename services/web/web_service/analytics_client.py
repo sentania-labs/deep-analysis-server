@@ -1372,6 +1372,24 @@ async def admin_get_scrapers(base_url: str, token: str) -> list[dict[str, Any]]:
     return list(scrapers)
 
 
+async def admin_get_scraper_run_history(
+    base_url: str, token: str, name: str
+) -> list[dict[str, Any]]:
+    """Fetch retained completed-run diagnostics for one scraper."""
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/admin/scraper-health/{name}/history",
+        token=token,
+        error_prefix="analytics GET /admin/scraper-health/{name}/history ",
+        **_ERR,
+    )
+    runs = resp.json().get("runs", [])
+    for run in runs:
+        run["started_at"] = _parse_dt(run.get("started_at"))
+        run["finished_at"] = _parse_dt(run.get("finished_at"))
+    return list(runs)
+
+
 async def admin_update_scraper(
     base_url: str,
     token: str,

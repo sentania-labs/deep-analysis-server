@@ -3401,6 +3401,18 @@ async def admin_scrapers_dashboard(
         scrapers = await analytics_client.admin_get_scrapers(
             settings.analytics_service_url, user.token
         )
+        for scraper in scrapers:
+            try:
+                scraper["history"] = await analytics_client.admin_get_scraper_run_history(
+                    settings.analytics_service_url, user.token, str(scraper["scraper_name"])
+                )
+            except analytics_client.AnalyticsForbidden:
+                raise
+            except analytics_client.AnalyticsClientError:
+                _log.exception(
+                    "analytics scraper history read failed for %s", scraper["scraper_name"]
+                )
+                scraper["history"] = []
     except analytics_client.AnalyticsForbidden:
         return _admin_forbidden(request, user)
     except analytics_client.AnalyticsClientError:

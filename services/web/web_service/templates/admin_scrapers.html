@@ -100,6 +100,13 @@
             </div>
             {% endif %}
 
+            {% if s.last_raw_snippet %}
+            <details class="text-xs">
+                <summary class="dark:text-txt-tertiary text-txt-secondary-light cursor-pointer">Last raw response snippet</summary>
+                <pre class="mt-2 p-2 rounded dark:bg-surface-3 bg-surface-light-3 dark:text-txt-secondary text-txt-secondary-light whitespace-pre-wrap break-all overflow-auto max-h-48">{{ s.last_raw_snippet|truncate(2000, true) }}</pre>
+            </details>
+            {% endif %}
+
             {# Actions #}
             <div class="flex flex-wrap gap-2 pt-2 border-t dark:border-border border-border-light">
                 {# Toggle enabled #}
@@ -153,6 +160,44 @@
                 </label>
                 <button type="submit" class="border dark:border-border border-border-light dark:text-txt-primary text-txt-primary-light hover:dark:bg-surface-2 hover:bg-surface-light-3 rounded-md px-3 py-1 text-xs transition-colors">Update</button>
             </form>
+
+            <div class="pt-2 border-t dark:border-border border-border-light">
+                <h3 class="text-xs font-semibold dark:text-txt-primary text-txt-primary-light mb-2">Recent runs</h3>
+                {% if s.history %}
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                        <thead class="dark:text-txt-tertiary text-txt-secondary-light">
+                            <tr>
+                                <th class="text-left py-1 pr-2">Started</th>
+                                <th class="text-left py-1 pr-2">Finished</th>
+                                <th class="text-left py-1 pr-2">Duration</th>
+                                <th class="text-left py-1 pr-2">Status</th>
+                                <th class="text-right py-1 px-1" title="Events found">Found</th>
+                                <th class="text-right py-1 px-1" title="New events">New</th>
+                                <th class="text-right py-1 px-1" title="Empty events">Empty</th>
+                                <th class="text-right py-1 pl-1" title="Results stored">Stored</th>
+                            </tr>
+                        </thead>
+                        <tbody class="font-mono dark:text-txt-secondary text-txt-secondary-light">
+                            {% for run in s.history %}
+                            <tr class="border-t dark:border-border border-border-light">
+                                <td class="py-1 pr-2 whitespace-nowrap">{{ run.started_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                                <td class="py-1 pr-2 whitespace-nowrap">{{ run.finished_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                                <td class="py-1 pr-2 whitespace-nowrap">{{ "%.1f"|format(run.duration_seconds) }}s</td>
+                                <td class="py-1 pr-2 {% if run.status == 'failed' %}text-danger{% else %}text-success{% endif %}">{{ run.status }}</td>
+                                <td class="text-right py-1 px-1">{{ run.events_found }}</td>
+                                <td class="text-right py-1 px-1">{{ run.events_new }}</td>
+                                <td class="text-right py-1 px-1">{{ run.events_empty }}</td>
+                                <td class="text-right py-1 pl-1">{{ run.results_stored }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-xs dark:text-txt-tertiary text-txt-secondary-light">No completed runs recorded yet.</p>
+                {% endif %}
+            </div>
         </div>
     </div>
     {% endfor %}
