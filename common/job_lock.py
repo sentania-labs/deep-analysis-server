@@ -2,10 +2,26 @@
 
 This is the generalisation of what analytics grew for its scrapers in
 #127. Nothing about a heartbeat row is scraper-specific, and two other
-places now need exactly the same guarantee: the analytics loops that
-are still unprotected (#155) and the ingest raw-archive backfill that
-must not run twice when a second ingest replica starts (#161). So the
-mechanism lives here and each service binds it to its own table.
+places need exactly the same guarantee: the analytics background loops
+(Scryfall sync, card materializer, card stats backfill; #155) and the
+ingest raw-archive backfill that must not run twice when a second
+ingest replica starts (#161). So the mechanism lives here and each
+service binds it to its own table.
+
+Two shapes of job
+-----------------
+``run_locked`` is for a job with a beginning and an end: a scrape, a
+sync, one backfill pass. The caller takes the lock, runs, releases, and
+a contender that finds the lock held is told so (``JobAlreadyRunning``)
+and decides for itself whether to skip or to answer 409.
+
+``run_locked_standby`` is for a job that runs for the life of the
+process, such as a Redis subscriber. A replica that cannot take the
+lock does not give up: it stands by and retries every
+``STANDBY_RETRY_SECONDS`` so that when the holder dies and its row goes
+stale, the standby takes over within ``STALE_AFTER_SECONDS`` plus one
+retry interval. A holder that loses its lease is cancelled and goes
+back to standing by, so there is never a moment with two live runners.
 
 Why a database row and not an in-process flag
 ---------------------------------------------
@@ -83,6 +99,15 @@ STALE_AFTER_SECONDS = 180.0
 #: production 30-second interval this aborts after 90 seconds, leaving a
 #: further 90 seconds before another replica may treat the lease as stale.
 HEARTBEAT_FAILURE_LIMIT = 3
+
+#: How long a standby replica waits between attempts to take a lock that
+#: somebody else holds. Added to ``STALE_AFTER_SECONDS`` this bounds the
+#: failover time after a holder is killed without releasing.
+STANDBY_RETRY_SECONDS = 60.0
+
+# Indirection for asyncio.sleep so tests can patch the standby wait
+# without touching the event loop's clock.
+_async_sleep = asyncio.sleep
 
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"
@@ -549,3 +574,55 @@ async def run_locked[T](
         with contextlib.suppress(asyncio.CancelledError):
             await work
         raise JobLeaseLost(job_name, acquired)
+
+
+async def run_locked_standby[T](
+    job_name: str,
+    runner: Callable[[], Awaitable[T]],
+    *,
+    trigger: str,
+    store: LockStore,
+    retry_seconds: float = STANDBY_RETRY_SECONDS,
+    heartbeat_seconds: float = HEARTBEAT_SECONDS,
+) -> T:
+    """Run ``runner`` under the job's lock, standing by until it is free.
+
+    For long-lived jobs (a subscriber loop that only ends with the
+    process). The differences from ``run_locked``:
+
+    * A held lock is not an error. The caller sleeps ``retry_seconds``
+      and tries again, forever, so a second replica is a warm standby
+      rather than a skipped run.
+    * A lost lease is not fatal either. The runner is cancelled (that
+      part is ``run_locked``) and this process goes back to standing by;
+      it will take the lock again only once the new owner is gone.
+
+    Returns whatever ``runner`` returns if it ever finishes. A runner
+    that raises propagates after the lock is released, exactly as in
+    ``run_locked``; the caller decides whether that is fatal.
+    """
+    while True:
+        try:
+            return await run_locked(
+                job_name,
+                runner,
+                trigger=trigger,
+                store=store,
+                heartbeat_seconds=heartbeat_seconds,
+            )
+        except JobAlreadyRunning as exc:
+            _log.info(
+                "job lock held elsewhere; standing by",
+                extra={
+                    "job_name": job_name,
+                    "retry_seconds": retry_seconds,
+                    "holder": exc.run.owner if exc.run else None,
+                    "running_since": exc.run.started_at.isoformat() if exc.run else None,
+                },
+            )
+        except JobLeaseLost:
+            _log.warning(
+                "job lock lease lost; runner stopped, standing by for the lock",
+                extra={"job_name": job_name, "retry_seconds": retry_seconds},
+            )
+        await _async_sleep(retry_seconds)

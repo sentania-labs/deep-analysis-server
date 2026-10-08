@@ -1,3 +1,60 @@
+"""Analytics service application: routers, admin endpoints, background loops.
+
+Background loops and more than one replica (issue #155)
+-------------------------------------------------------
+This service can run as several replicas (Kubernetes via
+``sentania-labs/lab-deployment``; Compose users are unaffected). Every
+replica runs the same lifespan, so every loop below would run N times
+without a shared lock. The lock is the Postgres heartbeat row in
+``common.job_lock``, bound to ``analytics.scraper_runs`` through
+``analytics_service.scraper_lock``. Each loop was decided on its own
+merits rather than blanket-locked:
+
+``scryfall-scheduler`` (``_scryfall_tick``): **locked**, per tick,
+    job ``scryfall_sync``. A duplicated sync downloads the 80MB bulk
+    file and upserts ~30,000 rows a second time, doubling the load on
+    Scryfall and on Postgres for nothing. The tick takes the lock and
+    re-checks ``should_sync`` inside it, so a replica that queued up
+    behind a finished sync does nothing. A replica that finds the lock
+    held skips the tick. The manual ``POST /analytics/admin/sync-cards``
+    takes the same lock before answering 202 and answers 409 while a
+    sync is live, exactly as the scraper triggers do.
+
+``mtgo-scheduler``, ``mtgtop8-scheduler``: **locked** since #127, per
+    tick, jobs ``mtgo`` and ``mtgtop8``. Unchanged here.
+
+``card-materializer`` (``_start_card_materializer``): **locked**, as a
+    long-lived lease, job ``card_materializer``. Every replica
+    subscribing to ``match.parsed`` would materialize every match N
+    times. The result is identical (the write is idempotent) but each
+    copy is a full extra pass of parser reads and analytics writes per
+    event, contending on the same rows. One replica holds the lease;
+    the others stand by and retry, so a killed holder is replaced
+    within ``STALE_AFTER_SECONDS`` plus ``STANDBY_RETRY_SECONDS``.
+    Events published in that window are picked up by the backfill
+    scan, which exists for exactly this gap.
+
+``card-stats-backfill`` (``_start_card_backfill``): **locked**, per
+    pass, job ``card_stats_backfill``. Both replicas would otherwise
+    select the same 100 unmaterialized matches and materialize them
+    twice. Every replica keeps its timer; a pass that finds the lock
+    held is skipped, and a dead holder's stale row is taken over by
+    the survivor's next pass.
+
+``cache-invalidator`` (``_start_cache_invalidator``): **deliberately
+    unlocked**. It deletes Redis cache keys for a user when a match is
+    parsed. Deleting a key that is already gone is a no-op, so N
+    replicas doing it is harmless: no database access, no upstream
+    call, no write that can conflict, and the keys expire on a TTL
+    regardless. Locking it would be worse than useless. The cache is
+    served by every replica, so every replica should invalidate as soon
+    as it hears the event; a locked invalidator would leave a stale
+    cache for up to the lock's stale window after the holder died.
+
+Tests drive these paths with ``InMemoryJobLockStore`` in
+``services/analytics/tests/test_loop_job_locks.py``.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +73,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from analytics_service.archetypes import router as archetypes_router
 from analytics_service.bnr_events import router as bnr_events_router
-from analytics_service.card_materializer import card_materializer_loop, card_stats_backfill_loop
+from analytics_service.card_materializer import (
+    card_stats_backfill_loop,
+    locked_card_materializer_loop,
+)
 from analytics_service.card_stats import router as card_stats_router
 from analytics_service.cards import router as cards_router
 from analytics_service.db import get_session, get_sessionmaker
@@ -61,9 +121,11 @@ from analytics_service.scraper_lock import (
 )
 from analytics_service.scraper_lock import acquire as acquire_scraper_lock
 from analytics_service.scraper_lock import get_run as get_scraper_run
+from analytics_service.scraper_lock import get_store as get_lock_store
 from analytics_service.scraper_lock import run_locked as run_scrape_locked
 from analytics_service.scraper_lock import run_status_fields as scraper_run_status_fields
-from analytics_service.scryfall_sync import run_sync, should_sync
+from analytics_service.scryfall_sync import JOB_NAME as SCRYFALL_SYNC_JOB
+from analytics_service.scryfall_sync import run_sync, sync_if_due
 from analytics_service.settings import get_settings
 from analytics_service.stats import router as stats_router
 from common.background_loop import BackgroundLoop
@@ -71,6 +133,7 @@ from common.cache import invalidate_user
 from common.logging import configure_logging
 from common.metrics import start_metrics_server
 from common.redis_client import get_redis
+from common.request_id import RequestIDMiddleware
 
 SERVICE_NAME = "analytics"
 configure_logging(SERVICE_NAME)
@@ -92,12 +155,14 @@ _card_backfill_task: asyncio.Task[None] | None = None
 
 
 async def _scryfall_tick() -> None:
-    """Single iteration: sync if cadence threshold has elapsed."""
+    """Single iteration: sync if the cadence threshold has elapsed.
+
+    The due check happens inside the ``scryfall_sync`` lock (see
+    ``scryfall_sync.sync_if_due``), so two replicas ticking together
+    produce one sync, and the one that waited finds nothing to do.
+    """
     sm = get_sessionmaker()
-    async with sm() as session:
-        due = await should_sync(session)
-    if due:
-        await run_sync(sm)
+    await _run_job_if_idle(SCRYFALL_SYNC_JOB, lambda: sync_if_due(sm))
 
 
 async def _scryfall_interval() -> float:
@@ -142,37 +207,43 @@ async def _read_scraper_config(
 _ScrapeRunner = Callable[[async_sessionmaker[AsyncSession]], Awaitable[Any]]
 
 
+async def _run_job_if_idle(job_name: str, runner: Callable[[], Awaitable[Any]]) -> bool:
+    """Scheduler path: run the job unless a run already holds its lock.
+
+    A skipped cycle is normal, not an error: an admin kicked off a
+    manual run (or another replica got there first) and duplicating the
+    work would only double the load on the upstream site or the
+    database. Returns ``True`` when the runner ran to completion.
+    """
+    try:
+        await run_scrape_locked(job_name, runner, trigger=TRIGGER_SCHEDULED)
+    except ScrapeLeaseLost:
+        _log.warning(
+            "scheduled job aborted; lock lease was lost mid-run",
+            extra={"job_name": job_name},
+        )
+        return False
+    except ScrapeAlreadyRunning as exc:
+        _log.info(
+            "scheduled job skipped; run already in progress",
+            extra={
+                "job_name": job_name,
+                "running_since": exc.run.started_at.isoformat() if exc.run else None,
+                "run_trigger": exc.run.trigger if exc.run else None,
+                "owner": exc.run.owner if exc.run else None,
+            },
+        )
+        return False
+    return True
+
+
 async def _run_scrape_if_idle(
     scraper_name: str,
     runner: _ScrapeRunner,
     sm: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Scheduler path: run the scrape unless a run already holds the lock.
-
-    A skipped cycle is normal, not an error: an admin kicked off a
-    manual run (or another replica got there first) and duplicating the
-    fetch would only double the load on the upstream site.
-    """
-    try:
-        await run_scrape_locked(
-            scraper_name,
-            lambda: runner(sm),
-            trigger=TRIGGER_SCHEDULED,
-        )
-    except ScrapeLeaseLost:
-        _log.warning(
-            "scheduled scrape aborted; lock lease was lost mid-run",
-            extra={"scraper_name": scraper_name},
-        )
-    except ScrapeAlreadyRunning as exc:
-        _log.info(
-            "scheduled scrape skipped; run already in progress",
-            extra={
-                "scraper_name": scraper_name,
-                "running_since": exc.run.started_at.isoformat() if exc.run else None,
-                "run_trigger": exc.run.trigger if exc.run else None,
-            },
-        )
+    """Scheduler path for a scraper; see ``_run_job_if_idle``."""
+    await _run_job_if_idle(scraper_name, lambda: runner(sm))
 
 
 async def _run_scrape_holding(
@@ -278,12 +349,13 @@ _mtgtop8_loop = BackgroundLoop("mtgtop8-scheduler", _mtgtop8_tick, _mtgtop8_inte
 
 def reset_scheduler() -> None:
     """Test hook."""
-    global _cache_invalidator_task, _card_materializer_task
+    global _cache_invalidator_task, _card_materializer_task, _card_backfill_task
     _scryfall_loop.reset()
     _mtgo_loop.reset()
     _mtgtop8_loop.reset()
     _cache_invalidator_task = None
     _card_materializer_task = None
+    _card_backfill_task = None
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +442,7 @@ async def _start_card_materializer() -> None:
     settings = get_settings()
     sm = get_sessionmaker()
     _card_materializer_task = asyncio.create_task(
-        card_materializer_loop(settings.redis_url, sm),
+        locked_card_materializer_loop(settings.redis_url, sm, store=get_lock_store()),
         name="card-materializer",
     )
     _log.info("card materializer task started")
@@ -396,7 +468,7 @@ async def _start_card_backfill() -> None:
         return
     sm = get_sessionmaker()
     _card_backfill_task = asyncio.create_task(
-        card_stats_backfill_loop(sm),
+        card_stats_backfill_loop(sm, store=get_lock_store()),
         name="card-stats-backfill",
     )
     _log.info("card stats backfill task started")
@@ -459,6 +531,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
+app.add_middleware(RequestIDMiddleware)
 app.include_router(archetypes_router)
 app.include_router(bnr_events_router)
 app.include_router(stats_router)
@@ -472,19 +545,48 @@ app.include_router(metagame_router)
 admin_router = APIRouter(prefix="/analytics/admin", tags=["admin"])
 
 
+async def _run_sync_holding(sm: async_sessionmaker[AsyncSession], run: ScraperRun) -> None:
+    """Background-task path for the manual sync: the lock is already held."""
+    try:
+        await run_scrape_locked(
+            SCRYFALL_SYNC_JOB, lambda: run_sync(sm), trigger=run.trigger, run=run
+        )
+    except ScrapeLeaseLost:
+        _log.warning(
+            "manual scryfall sync aborted; lock lease was lost mid-run",
+            extra={"job_name": SCRYFALL_SYNC_JOB, "run_id": run.run_id},
+        )
+
+
 @admin_router.post("/sync-cards", status_code=202)
 async def sync_cards(
     background_tasks: BackgroundTasks,
     _admin: AuthenticatedUser = Depends(require_admin),
-) -> dict[str, str]:
+) -> Any:
     """Trigger a Scryfall card sync.
 
-    Runs in the background — the bulk-data download + parse + upsert
+    Runs in the background: the bulk-data download + parse + upsert
     takes minutes; tying up an admin request that long is the wrong
     shape. Returns 202 immediately; progress shows up in service logs.
+
+    The ``scryfall_sync`` lock is taken here, before the 202, so a
+    second click (or a click during the scheduled sync on any replica)
+    gets an honest 409 instead of a duplicate download.
     """
-    background_tasks.add_task(run_sync, get_sessionmaker())
-    return {"status": "sync_started"}
+    try:
+        run = await acquire_scraper_lock(SCRYFALL_SYNC_JOB, trigger=TRIGGER_MANUAL)
+    except ScrapeAlreadyRunning as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "error": "sync_already_running",
+                "job_name": exc.job_name,
+                "running_since": exc.run.started_at.isoformat() if exc.run else None,
+                "run_trigger": exc.run.trigger if exc.run else None,
+            },
+        )
+    background_tasks.add_task(_run_sync_holding, get_sessionmaker(), run)
+    return {"status": "sync_started", "run_id": run.run_id}
 
 
 @admin_router.post("/scrape-mtgo", status_code=202)
@@ -1501,8 +1603,22 @@ async def delete_label_mapping(
 app.include_router(admin_router)
 
 
+@app.get("/livez")
+@app.get("/analytics/livez")
+async def livez() -> JSONResponse:
+    from common.health import evaluate
+
+    report = await evaluate([])
+    return JSONResponse(
+        content=report.to_dict("analytics"),
+        status_code=report.http_status,
+    )
+
+
 @app.get("/healthz")
+@app.get("/readyz")
 @app.get("/analytics/healthz")
+@app.get("/analytics/readyz")
 async def healthz() -> JSONResponse:
     from common.health import check_db, check_redis, evaluate
 

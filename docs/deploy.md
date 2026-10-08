@@ -374,6 +374,31 @@ docker volume rm "$DA_LEGACY_ARCHIVE_VOLUME"   # or the name from `docker volume
 That is the only step that destroys the old copy, and nothing does it
 for you.
 
+## Running more than one analytics replica
+
+Compose runs one container per service and needs none of this. On
+Kubernetes (`sentania-labs/lab-deployment`) the analytics service can be
+scaled to several replicas. Its request path is stateless, but every
+replica also runs the same background loops at startup, so each loop
+had to be decided on its own (issue #155). The lock, where there is one,
+is the Postgres heartbeat row in `analytics.scraper_runs` that the
+scrapers have used since #127 (`common/job_lock.py`); a replica killed
+mid-run is replaced once its row is older than `STALE_AFTER_SECONDS`
+(180 seconds).
+
+| Loop | Lock row | Decision |
+|---|---|---|
+| MTGO and mtgtop8 scrapers | `mtgo`, `mtgtop8` | Locked per run since #127. Unchanged. |
+| Scryfall card sync | `scryfall_sync` | Locked per tick. Two replicas booting together download the bulk file once; the due check is repeated inside the lock so the loser does nothing. The manual **Sync now** on the admin Cards page takes the same lock and reports "already running" when it is. |
+| Card stats materializer (`match.parsed` subscriber) | `card_materializer` | Locked as a lease: one replica is subscribed, the others stand by and retry every `STANDBY_RETRY_SECONDS` (60 seconds). Failover after a kill takes at most 180 + 60 seconds; events published in that window are caught by the backfill scan. |
+| Card stats backfill scan | `card_stats_backfill` | Locked per pass. Every replica keeps its five minute timer; a pass that finds the lock held skips its turn. |
+| Cache invalidator (`match.parsed` subscriber) | none | Deliberately unlocked. Every replica serves the cache, so every replica should drop the keys as soon as it hears the event. A duplicate delete is a no-op and the keys expire on a TTL anyway. Locking it would only leave a stale cache after a holder died. |
+
+The lock rows are visible in `analytics.scraper_runs` (one row per
+running job; `owner` is `hostname:pid`). The same per-loop reasoning,
+in more detail, is in the module docstring of
+`services/analytics/analytics_service/main.py`.
+
 ## Port publishing
 
 - `127.0.0.1:5432` — Postgres, bound to localhost only (never exposed on a routable interface).
@@ -488,3 +513,12 @@ would leave the system with no way to recover admin access:
 If you hit one of these errors the fix is to first create or
 promote a second admin, then retry. There is no super-admin
 override; the invariant is enforced by the auth service itself.
+
+## Health and Readiness Probes
+
+All services provide HTTP health checks:
+
+* **Readiness (`/healthz` or `/readyz`)**: Checks the service and its backing dependencies (Postgres, Redis, Object Store) and returns `200 OK` only when all required stores are reachable. Returns `503 Service Unavailable` if a backend is unreachable. Use this for the Kubernetes **readiness probe** so traffic is not routed to a pod that cannot serve it. The `compose` stack and `fleet-caddy` rely on `/healthz` for readiness.
+* **Liveness (`/livez`)**: Checks only that the service's HTTP loop is running and accepting connections. It does not check Postgres or Redis. It will return `200 OK` even if the database is down. Use this for the Kubernetes **liveness probe** to prevent restart loops during transient database outages.
+
+For both probes, services also expose a prefixed alias (e.g. `/analytics/livez`, `/ingest/healthz`, etc.) primarily used by the API Gateway to route checks per service, but the bare endpoints (`/healthz`, `/readyz`, `/livez`) work directly on the container port.

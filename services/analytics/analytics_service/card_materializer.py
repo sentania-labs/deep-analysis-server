@@ -11,6 +11,32 @@ allowed) and writes to ``analytics.card_game_stats`` (its own schema).
 
 Idempotent: uses DELETE + INSERT so re-materialization on duplicate
 ``match.parsed`` events or backfill re-runs produces the same result.
+
+More than one analytics replica (issue #155)
+--------------------------------------------
+Both loops in this module are locked through ``common.job_lock`` on the
+analytics lock table (``analytics_service.scraper_lock``), each under
+its own name:
+
+``card_materializer`` (``locked_card_materializer_loop``)
+    One subscriber per deployment, held as a long-lived lease. Every
+    replica subscribing would materialize every match N times: the
+    result is the same (DELETE + INSERT is idempotent) but each extra
+    replica is a full extra pass of parser reads and analytics writes
+    per event, with the DELETE and the INSERTs of the copies queueing
+    on the same row locks. The loser stands by and takes over within
+    ``STALE_AFTER_SECONDS`` + ``STANDBY_RETRY_SECONDS`` if the holder
+    dies. Events published during that window are not lost: the
+    backfill scan below exists to catch exactly those.
+
+``card_stats_backfill`` (``card_stats_backfill_loop``)
+    Locked per pass, not per process. Every replica keeps its five
+    minute timer; each pass takes the lock, so two replicas scanning at
+    once collapse to one scan and the other skips its turn. A killed
+    replica needs no failover here: the survivor's next pass runs as
+    soon as the dead holder's row is stale. Unlocked, both replicas
+    would select the same 100 unmaterialized matches and materialize
+    each of them twice.
 """
 
 from __future__ import annotations
@@ -23,9 +49,24 @@ from typing import Any
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from common.job_lock import (
+    STANDBY_RETRY_SECONDS,
+    TRIGGER_SCHEDULED,
+    TRIGGER_STARTUP,
+    JobAlreadyRunning,
+    JobLeaseLost,
+    LockStore,
+    run_locked,
+    run_locked_standby,
+)
 from common.redis_client import get_redis
 
 _log = logging.getLogger("analytics.card_materializer")
+
+#: Lock names in the analytics lock table. Short, stable, and distinct
+#: from the scraper names that share the table.
+MATERIALIZER_JOB_NAME = "card_materializer"
+BACKFILL_JOB_NAME = "card_stats_backfill"
 
 # Indirection for asyncio.sleep so tests can patch backoff delays.
 _async_sleep = asyncio.sleep
@@ -305,15 +346,58 @@ async def backfill_card_stats(
     return processed
 
 
+async def backfill_card_stats_if_idle(
+    sessionmaker: async_sessionmaker[Any],
+    *,
+    store: LockStore,
+) -> int | None:
+    """One backfill pass under the ``BACKFILL_JOB_NAME`` lock.
+
+    Returns the processed count, or ``None`` when the pass was skipped
+    because another replica (or a not-yet-stale dead one) holds the
+    lock. A skip is routine, not an error: the other replica is doing
+    the same scan, and this replica's next timer tick will try again.
+    """
+    try:
+        return await run_locked(
+            BACKFILL_JOB_NAME,
+            lambda: backfill_card_stats(sessionmaker),
+            trigger=TRIGGER_SCHEDULED,
+            store=store,
+        )
+    except JobAlreadyRunning as exc:
+        _log.info(
+            "card stats backfill skipped; another replica holds the lock",
+            extra={
+                "job_name": BACKFILL_JOB_NAME,
+                "holder": exc.run.owner if exc.run else None,
+                "running_since": exc.run.started_at.isoformat() if exc.run else None,
+            },
+        )
+        return None
+    except JobLeaseLost:
+        _log.warning(
+            "card stats backfill pass aborted; lock lease was lost mid-pass",
+            extra={"job_name": BACKFILL_JOB_NAME},
+        )
+        return None
+
+
 async def card_stats_backfill_loop(
     sessionmaker: async_sessionmaker[Any],
     interval_seconds: int = 300,
+    *,
+    store: LockStore,
 ) -> None:
-    """Periodically scan for matches missing card_game_stats."""
+    """Periodically scan for matches missing card_game_stats.
+
+    Each pass runs under the ``BACKFILL_JOB_NAME`` lock (see the module
+    docstring), so this loop is safe to run on every replica.
+    """
     _log.info("card stats backfill scanner started interval=%ds", interval_seconds)
     while True:
         try:
-            await backfill_card_stats(sessionmaker)
+            await backfill_card_stats_if_idle(sessionmaker, store=store)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -338,6 +422,9 @@ async def card_materializer_loop(
     Runs for the lifetime of the service. Wraps the subscription in a
     retry loop with exponential backoff so that a transient Redis
     disconnect does not permanently kill materialization.
+
+    This is the unlocked subscriber. The service runs it through
+    ``locked_card_materializer_loop`` so only one replica is subscribed.
     """
     backoff = 1.0
     max_backoff = 60.0
@@ -380,3 +467,26 @@ async def card_materializer_loop(
             )
             await _async_sleep(backoff)
             backoff = min(backoff * 2, max_backoff)
+
+
+async def locked_card_materializer_loop(
+    redis_url: str,
+    sessionmaker: async_sessionmaker[Any],
+    *,
+    store: LockStore,
+    retry_seconds: float = STANDBY_RETRY_SECONDS,
+) -> None:
+    """Run ``card_materializer_loop`` as the single holder of its lock.
+
+    A replica that finds the ``MATERIALIZER_JOB_NAME`` lock held stands
+    by and retries every ``retry_seconds``; see ``run_locked_standby``.
+    Only returns by cancellation (service shutdown), which releases the
+    lock on the way out so a peer can take it over at once.
+    """
+    await run_locked_standby(
+        MATERIALIZER_JOB_NAME,
+        lambda: card_materializer_loop(redis_url, sessionmaker),
+        trigger=TRIGGER_STARTUP,
+        store=store,
+        retry_seconds=retry_seconds,
+    )
