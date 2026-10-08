@@ -72,6 +72,12 @@
         </form>
     </div>
 
+    {% if date_error %}
+    <div class="mb-4 p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+        <p class="text-sm text-red-700 dark:text-red-300">{{ date_error }}</p>
+    </div>
+    {% endif %}
+
     {% if match_list and match_list.matches %}
     <div class="overflow-x-auto">
         <table class="w-full">

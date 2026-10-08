@@ -31,6 +31,10 @@
         </table>
     </div>
 </div>
+{% elif date_error %}
+<div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
+    <p class="text-sm text-red-600 dark:text-red-400">{{ date_error }}</p>
+</div>
 {% else %}
 <div class="dark:bg-surface bg-surface-light border dark:border-border border-border-light rounded-md p-4">
     <p class="text-sm dark:text-txt-secondary text-txt-secondary-light">No play/draw data available for this format.</p>

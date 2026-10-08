@@ -14,7 +14,7 @@ import os
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlencode
@@ -344,6 +344,42 @@ _OPPONENT_DEFAULT_PER_PAGE = 20
 _OPPONENT_MAX_PER_PAGE = 100
 
 
+def validate_date_range(date_from: str, date_to: str) -> tuple[bool, str | None]:
+    """Validate *date_from* / *date_to* query strings.
+
+    Returns ``(True, None)`` when both values are valid ISO dates and
+    ``date_from <= date_to``.  On any problem returns ``(False, error_msg)``
+    so callers can reject the analytics call and re-render the page with
+    the user's original input and an inline error.
+
+    Both ``date_from`` and ``date_to`` may be empty (``""``) to signal
+    "no filter" – in that case the pair is always considered valid.
+    """
+    if not date_from and not date_to:
+        return True, None
+
+    parsed_from: date | None = None
+    parsed_to: date | None = None
+
+    if date_from:
+        try:
+            parsed_from = date.fromisoformat(date_from)
+        except (ValueError, TypeError):
+            return False, "Invalid 'From' date. Use YYYY-MM-DD."
+
+    if date_to:
+        try:
+            parsed_to = date.fromisoformat(date_to)
+        except (ValueError, TypeError):
+            return False, "Invalid 'To' date. Use YYYY-MM-DD."
+
+    # When only one side is provided the other side is free.
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        return False, "date_from must not be later than date_to."
+
+    return True, None
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
@@ -355,6 +391,31 @@ async def dashboard(
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    # Validate date range before calling analytics.
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        return templates.TemplateResponse(
+            request,
+            "dashboard.html",
+            {
+                "user": user,
+                "stats_summary": None,
+                "format_stats": [],
+                "stats_error": False,
+                "play_draw_stats": None,
+                "preboard_postboard_stats": None,
+                "mulligan_stats": None,
+                "card_stats": None,
+                "format_filter": format or None,
+                "filtered_summary": None,
+                "date_from": date_from,
+                "date_to": date_to,
+                "bnr_events": [],
+                "date_active": bool(date_from or date_to),
+                "date_error": date_error,
+            },
+        )
 
     format_filter = format or None
     df = date_from or None
@@ -491,6 +552,37 @@ async def match_history_page(
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
 
+    # Validate date range before calling analytics.
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        filters = {
+            "format": format,
+            "opponent": opponent,
+            "result": result,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        filter_qs = urlencode({k: v for k, v in filters.items() if v})
+        return templates.TemplateResponse(
+            request,
+            "match_history.html",
+            {
+                "user": user,
+                "opponent_stats": [],
+                "opponent_page": [],
+                "opp_page": 1,
+                "opp_per_page": _OPPONENT_DEFAULT_PER_PAGE,
+                "match_list": None,
+                "stats_error": False,
+                "page": 1,
+                "per_page": per_page,
+                "filters": filters,
+                "filter_qs": filter_qs,
+                "link_per_page": None,
+                "date_error": date_error,
+            },
+        )
+
     opponent_stats: list[Any] = []
     match_list: Any = None
     stats_error = False
@@ -574,6 +666,14 @@ async def dashboard_partial_play_draw(
     date_to: Annotated[str, Query()] = "",
 ) -> Response:
     """HTMX partial: play/draw stats filtered by format and date range."""
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        return templates.TemplateResponse(
+            request,
+            "_partials_play_draw.html",
+            {"play_draw_stats": None, "date_error": date_error},
+        )
+
     play_draw_stats: Any = None
     try:
         play_draw_stats = await analytics_client.get_play_draw_stats(
@@ -604,6 +704,14 @@ async def dashboard_partial_preboard_postboard(
     date_to: Annotated[str, Query()] = "",
 ) -> Response:
     """HTMX partial: pre-board vs post-board stats filtered by format and date range."""
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        return templates.TemplateResponse(
+            request,
+            "_partials_preboard_postboard.html",
+            {"preboard_postboard_stats": None, "date_error": date_error},
+        )
+
     preboard_postboard_stats: Any = None
     try:
         preboard_postboard_stats = await analytics_client.get_preboard_postboard_stats(
@@ -634,6 +742,14 @@ async def dashboard_partial_mulligans(
     date_to: Annotated[str, Query()] = "",
 ) -> Response:
     """HTMX partial: mulligan analysis filtered by format and date range."""
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        return templates.TemplateResponse(
+            request,
+            "_partials_mulligans.html",
+            {"mulligan_stats": None, "date_error": date_error},
+        )
+
     mulligan_stats: Any = None
     try:
         mulligan_stats = await analytics_client.get_mulligan_stats(
@@ -684,6 +800,22 @@ async def dashboard_partial_card_performance(
     the user clicked something we don't recognize, not a hand-crafted
     payload.
     """
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        return templates.TemplateResponse(
+            request,
+            "_partials_card_performance.html",
+            {
+                "card_stats": None,
+                "format_filter": format,
+                "current_sort": _CARD_SORT_DEFAULT,
+                "current_dir": _CARD_DIR_DEFAULT,
+                "date_from": date_from,
+                "date_to": date_to,
+                "date_error": date_error,
+            },
+        )
+
     if sort not in _CARD_SORT_COLUMNS:
         sort = _CARD_SORT_DEFAULT
     if dir not in _CARD_SORT_DIRS:
