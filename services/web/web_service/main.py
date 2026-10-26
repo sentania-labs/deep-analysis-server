@@ -652,6 +652,88 @@ async def match_history_page(
 
 
 # ---------------------------------------------------------------------------
+# Matchup analysis page (#129)
+# ---------------------------------------------------------------------------
+
+
+def _uuid_or_empty(value: str) -> str:
+    """Return ``value`` if it parses as a UUID, else ``""`` (no filter).
+
+    The archetype selects submit ``""`` for "All", and a hand-edited URL can
+    carry anything; neither should reach analytics as a 422.
+    """
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return ""
+
+
+@app.get("/matchups", response_class=HTMLResponse)
+async def matchups_page(
+    request: Request,
+    user: BrowserUser = Depends(get_current_browser_user),
+    settings: WebSettings = Depends(get_settings),
+    format: Annotated[str, Query(alias="format")] = "",
+    date_from: Annotated[str, Query()] = "",
+    date_to: Annotated[str, Query()] = "",
+    hero_archetype_id: Annotated[str, Query()] = "",
+    opponent_archetype_id: Annotated[str, Query()] = "",
+) -> Response:
+    """Hero archetype x opponent archetype win-rate table."""
+    if user.role == "admin":
+        return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    filters = {
+        "format": format,
+        "date_from": date_from,
+        "date_to": date_to,
+        "hero_archetype_id": _uuid_or_empty(hero_archetype_id),
+        "opponent_archetype_id": _uuid_or_empty(opponent_archetype_id),
+    }
+    context: dict[str, Any] = {
+        "user": user,
+        "matrix": None,
+        "archetypes": [],
+        "stats_error": False,
+        "filters": filters,
+    }
+
+    date_valid, date_error = validate_date_range(date_from, date_to)
+    if not date_valid:
+        context["date_error"] = date_error
+        return templates.TemplateResponse(request, "matchups.html", context)
+
+    try:
+        context["archetypes"], _total = await analytics_client.admin_list_archetypes(
+            settings.analytics_service_url, user.token
+        )
+        if format:
+            # The archetype selects only list the chosen format's archetypes, so an
+            # ID from another format (the user changed Format and resubmitted) is
+            # not selectable: drop it rather than filter on a value the form hides.
+            valid_ids = {a.id for a in context["archetypes"] if a.format.lower() == format.lower()}
+            for key in ("hero_archetype_id", "opponent_archetype_id"):
+                if filters[key] not in valid_ids:
+                    filters[key] = ""
+        context["matrix"] = await analytics_client.get_matchups(
+            settings.analytics_service_url,
+            user.token,
+            format_filter=format or None,
+            date_from=date_from or None,
+            date_to=date_to or None,
+            hero_archetype_id=filters["hero_archetype_id"] or None,
+            opponent_archetype_id=filters["opponent_archetype_id"] or None,
+        )
+    except analytics_client.AnalyticsForbidden:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+    except analytics_client.AnalyticsClientError:
+        _log.exception("analytics matchups call failed")
+        context["matrix"] = None
+        context["stats_error"] = True
+    return templates.TemplateResponse(request, "matchups.html", context)
+
+
+# ---------------------------------------------------------------------------
 # Dashboard HTMX partials — format drill-down cascade
 # ---------------------------------------------------------------------------
 

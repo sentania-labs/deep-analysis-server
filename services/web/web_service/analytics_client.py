@@ -779,6 +779,91 @@ async def get_stats_by_opponent(
 
 
 # ---------------------------------------------------------------------------
+# Matchup analysis — hero archetype x opponent archetype matrix (#129)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MatchupCellItem:
+    hero_archetype_id: str
+    hero_archetype: str
+    opponent_archetype_id: str
+    opponent_archetype: str
+    matches: int
+    wins: int
+    losses: int
+    draws: int
+    decided: int
+    win_rate: float
+    win_rate_low: float
+    win_rate_high: float
+    low_sample: bool
+
+
+@dataclass
+class MatchupMatrix:
+    min_sample: int = 5
+    cells: list[MatchupCellItem] = field(default_factory=list)
+    unclassified_matches: int = 0
+
+
+def _to_matchup_cell(payload: dict[str, Any]) -> MatchupCellItem:
+    return MatchupCellItem(
+        hero_archetype_id=str(payload.get("hero_archetype_id") or ""),
+        hero_archetype=str(payload.get("hero_archetype") or ""),
+        opponent_archetype_id=str(payload.get("opponent_archetype_id") or ""),
+        opponent_archetype=str(payload.get("opponent_archetype") or ""),
+        matches=int(payload.get("matches") or 0),
+        wins=int(payload.get("wins") or 0),
+        losses=int(payload.get("losses") or 0),
+        draws=int(payload.get("draws") or 0),
+        decided=int(payload.get("decided") or 0),
+        win_rate=float(payload.get("win_rate") or 0.0),
+        win_rate_low=float(payload.get("win_rate_low") or 0.0),
+        win_rate_high=float(payload.get("win_rate_high") or 0.0),
+        low_sample=bool(payload.get("low_sample", True)),
+    )
+
+
+async def get_matchups(
+    base_url: str,
+    token: str,
+    *,
+    format_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    hero_archetype_id: str | None = None,
+    opponent_archetype_id: str | None = None,
+) -> MatchupMatrix:
+    """Hero x opponent archetype matrix for the caller."""
+    params: dict[str, Any] = {}
+    if format_filter and format_filter.lower() != "all":
+        params["format"] = format_filter
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
+    if hero_archetype_id:
+        params["hero_archetype_id"] = hero_archetype_id
+    if opponent_archetype_id:
+        params["opponent_archetype_id"] = opponent_archetype_id
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/matchups",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/matchups ",
+        **_ERR,
+    )
+    d = resp.json()
+    return MatchupMatrix(
+        min_sample=int(d.get("min_sample") or 5),
+        cells=[_to_matchup_cell(c) for c in d.get("cells", [])],
+        unclassified_matches=int(d.get("unclassified_matches") or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Admin matches — system-wide match listing
 # ---------------------------------------------------------------------------
 

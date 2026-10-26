@@ -83,6 +83,7 @@ from analytics_service.db import get_session, get_sessionmaker
 from analytics_service.deps import AuthenticatedUser, require_admin
 from analytics_service.game_stats import router as game_stats_router
 from analytics_service.matches import router as matches_router
+from analytics_service.matchups import router as matchups_router
 from analytics_service.metagame import router as metagame_router
 from analytics_service.ml_classifier import get_status as ml_get_status
 from analytics_service.ml_classifier import load_model as ml_load_model
@@ -535,6 +536,7 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(archetypes_router)
 app.include_router(bnr_events_router)
 app.include_router(stats_router)
+app.include_router(matchups_router)
 app.include_router(game_stats_router)
 app.include_router(card_stats_router)
 app.include_router(cards_router)

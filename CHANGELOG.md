@@ -9,6 +9,21 @@ API surface stabilizes.
 
 ### Added
 
+- **Matchup matrix API and dashboard table, first slice (#129).** A new
+  read-only `GET /analytics/stats/matchups` returns one cell per hero
+  archetype x opponent archetype pair: matches, wins, losses, draws, win rate
+  (wins over decided matches, like `/stats/by-opponent`), a 95% Wilson range
+  around it, and a `low_sample` flag for cells under `min_sample` (5) decided
+  matches. It honours `format`, `date_from` and `date_to` through the same
+  match loader as by-opponent, can be narrowed with `hero_archetype_id` and
+  `opponent_archetype_id`, is scoped to the caller, and leaves out
+  pending-review matches. Matches missing either archetype are reported as
+  `unclassified_matches` rather than silently dropped. The web service gains a
+  `/matchups` page ("Matchups" in the sidebar) with those filters, low-sample
+  rows dimmed and badged, and archetype names that drill down by narrowing the
+  matching filter. Game-number and pre/post-board splits, per-matchup key
+  cards and sideboard effectiveness are still to do.
+
 - **The X-Request-ID header is logged and echoed by every service (#182).**
   A shared ASGI middleware, `common.request_id.RequestIDMiddleware`, reads the
   `X-Request-ID` that the gateway stamps on each request (generating a UUID4
