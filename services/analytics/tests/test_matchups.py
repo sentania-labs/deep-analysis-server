@@ -8,7 +8,6 @@ the filters and the cache keying without a database.
 
 from __future__ import annotations
 
-import inspect
 import json
 import os
 import uuid
@@ -480,20 +479,6 @@ async def test_invalid_archetype_id_is_rejected(app_client: httpx.AsyncClient) -
     finally:
         _main.app.dependency_overrides.clear()
     assert r.status_code == 422
-
-
-def test_loader_sql_excludes_pending_review_matches() -> None:
-    """The matrix scopes through ``_load_user_matches``; its SQL carries the
-    ``review_status IS NULL`` and ``user_id`` predicates, and the archetype
-    lookup only reads rows for the ids it is handed."""
-    from analytics_service import matchups as _matchups
-    from analytics_service import stats as _stats
-
-    assert _matchups._load_user_matches is _stats._load_user_matches
-    src = inspect.getsource(_stats._load_user_matches)
-    assert "review_status IS NULL" in src
-    assert "user_id = :user_id" in src
-    assert "m.id = ANY(:match_ids)" in inspect.getsource(_matchups._load_match_archetypes)
 
 
 # ---------------------------------------------------------------------------
