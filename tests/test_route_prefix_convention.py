@@ -63,6 +63,7 @@ _WEB_BROWSER_PATHS = frozenset(
         "/dashboard/partials/mulligans",
         "/dashboard/partials/card-performance",
         "/matches",
+        "/matchups",
         "/settings/password",
         "/profile",
         "/profile/edit",
