@@ -96,6 +96,7 @@ async def _get(
     matrix: Any = None,
     role: str = "user",
     raises: Exception | None = None,
+    archetypes: list[Any] | None = None,
 ) -> tuple[httpx.Response, dict[str, Any]]:
     """GET ``url`` with analytics faked; return the response and the client kwargs."""
     from web_service import analytics_client
@@ -111,7 +112,8 @@ async def _get(
         return matrix if matrix is not None else analytics_client.MatchupMatrix()
 
     async def fake_archetypes(*_a: Any, **_kw: Any) -> Any:
-        return [_archetype(HERO, "Burn"), _archetype(OPP, "Tron")], 2
+        items = archetypes or [_archetype(HERO, "Burn"), _archetype(OPP, "Tron")]
+        return items, len(items)
 
     monkeypatch.setattr(analytics_client, "get_matchups", fake_matchups)
     monkeypatch.setattr(analytics_client, "admin_list_archetypes", fake_archetypes)
@@ -142,6 +144,55 @@ async def test_filters_reach_the_client(
         "hero_archetype_id": HERO,
         "opponent_archetype_id": OPP,
     }
+
+
+@pytest.mark.asyncio
+async def test_archetype_filters_from_another_format_are_cleared(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing Format and resubmitting still posts the old format's archetype IDs.
+
+    The selects only list the new format's archetypes, so the stale IDs would
+    show as "All" while silently constraining the results.
+    """
+    r, seen = await _get(
+        app_client,
+        monkeypatch,
+        f"/matchups?format=Pauper&hero_archetype_id={HERO}&opponent_archetype_id={OPP}",
+    )
+
+    assert r.status_code == 200
+    assert seen["matchups"]["format_filter"] == "Pauper"
+    assert seen["matchups"]["hero_archetype_id"] is None
+    assert seen["matchups"]["opponent_archetype_id"] is None
+    assert f'value="{HERO}" selected' not in r.text
+    assert f'value="{OPP}" selected' not in r.text
+
+
+@pytest.mark.asyncio
+async def test_only_the_incompatible_archetype_filter_is_cleared(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, seen = await _get(
+        app_client,
+        monkeypatch,
+        f"/matchups?format=Pauper&hero_archetype_id={HERO}&opponent_archetype_id={OPP}",
+        archetypes=[_archetype(HERO, "Burn", "Modern"), _archetype(OPP, "Elves", "Pauper")],
+    )
+
+    assert r.status_code == 200
+    assert seen["matchups"]["hero_archetype_id"] is None
+    assert seen["matchups"]["opponent_archetype_id"] == OPP
+    assert f'<option value="{OPP}" selected>Elves</option>' in r.text
+
+
+@pytest.mark.asyncio
+async def test_archetype_filters_are_kept_when_no_format_is_chosen(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _r, seen = await _get(app_client, monkeypatch, f"/matchups?hero_archetype_id={HERO}")
+
+    assert seen["matchups"]["hero_archetype_id"] == HERO
 
 
 @pytest.mark.asyncio

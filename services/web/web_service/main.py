@@ -704,6 +704,17 @@ async def matchups_page(
         return templates.TemplateResponse(request, "matchups.html", context)
 
     try:
+        context["archetypes"], _total = await analytics_client.admin_list_archetypes(
+            settings.analytics_service_url, user.token
+        )
+        if format:
+            # The archetype selects only list the chosen format's archetypes, so an
+            # ID from another format (the user changed Format and resubmitted) is
+            # not selectable: drop it rather than filter on a value the form hides.
+            valid_ids = {a.id for a in context["archetypes"] if a.format.lower() == format.lower()}
+            for key in ("hero_archetype_id", "opponent_archetype_id"):
+                if filters[key] not in valid_ids:
+                    filters[key] = ""
         context["matrix"] = await analytics_client.get_matchups(
             settings.analytics_service_url,
             user.token,
@@ -712,9 +723,6 @@ async def matchups_page(
             date_to=date_to or None,
             hero_archetype_id=filters["hero_archetype_id"] or None,
             opponent_archetype_id=filters["opponent_archetype_id"] or None,
-        )
-        context["archetypes"], _total = await analytics_client.admin_list_archetypes(
-            settings.analytics_service_url, user.token
         )
     except analytics_client.AnalyticsForbidden:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
