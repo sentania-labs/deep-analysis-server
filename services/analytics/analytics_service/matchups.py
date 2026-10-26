@@ -10,8 +10,7 @@ the format and date predicates, the ``review_status IS NULL`` exclusion and
 the user scoping are the same ones ``/stats/by-opponent`` applies. Results
 are classified with the same ``_classify_match`` and win rate uses the same
 ``wins / (wins + losses)`` convention. Archetypes come from
-``parser.match_archetypes`` (one row per player per match), with the hero
-side falling back to ``parser.matches.archetype_id``.
+``parser.match_archetypes`` (one row per player per match) for both sides.
 
 Matches missing either archetype are not in the matrix; their count is
 returned as ``unclassified_matches`` so the gap is visible.
@@ -105,8 +104,8 @@ async def _load_match_archetypes(
             text(
                 """
                 SELECT m.id,
-                       COALESCE(hero_ma.archetype_id, m.archetype_id) AS hero_arch_id,
-                       COALESCE(hero_a.name, m_a.name) AS hero_arch_name,
+                       hero_ma.archetype_id AS hero_arch_id,
+                       hero_a.name AS hero_arch_name,
                        opp_ma.archetype_id AS opp_arch_id,
                        opp_a.name AS opp_arch_name
                 FROM parser.matches m
@@ -114,7 +113,6 @@ async def _load_match_archetypes(
                        ON hero_ma.match_id = m.id
                       AND hero_ma.player_name = COALESCE(m.hero_player_name, m.players->>0)
                 LEFT JOIN analytics.archetypes hero_a ON hero_a.id = hero_ma.archetype_id
-                LEFT JOIN analytics.archetypes m_a ON m_a.id = m.archetype_id
                 LEFT JOIN parser.match_archetypes opp_ma
                        ON opp_ma.match_id = m.id
                       AND opp_ma.player_name != COALESCE(m.hero_player_name, m.players->>0)

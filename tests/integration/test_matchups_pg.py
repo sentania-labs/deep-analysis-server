@@ -3,7 +3,6 @@
 The unit tests in ``services/analytics/tests/test_matchups.py`` patch the
 match loader and the archetype lookup. This module runs the SQL that ships:
 the hero/opponent joins on ``parser.match_archetypes``, the
-``parser.matches.archetype_id`` fallback for the hero, the
 ``review_status IS NULL`` exclusion and the per-user scoping.
 
 Skipped unless ``DA_DATABASE_URL`` (async driver) is set; CI sets it and runs
@@ -63,24 +62,18 @@ async def _seed_match(
     opp_arch: uuid.UUID | None,
     hero_won: bool,
     review_status: str | None = None,
-    legacy_hero_only: bool = False,
     played_at: datetime = datetime(2026, 5, 10, tzinfo=UTC),
 ) -> uuid.UUID:
-    """One 2-game match alice (hero) v bob, with the archetype rows asked for.
-
-    ``legacy_hero_only`` writes the hero archetype only to
-    ``parser.matches.archetype_id`` (no ``match_archetypes`` hero row), the
-    shape of matches parsed before migration 020.
-    """
+    """One 2-game match alice (hero) v bob, with the archetype rows asked for."""
     match_id = (
         await conn.execute(
             text(
                 """
                 INSERT INTO parser.matches
                     (sha256, user_id, format, players, hero_player_name, played_at,
-                     review_status, archetype_id)
+                     review_status)
                 VALUES (:sha, :uid, 'Modern', CAST(:players AS jsonb), 'alice', :played_at,
-                        :review, :legacy)
+                        :review)
                 RETURNING id
                 """
             ),
@@ -90,7 +83,6 @@ async def _seed_match(
                 "players": '["alice", "bob"]',
                 "played_at": played_at,
                 "review": review_status,
-                "legacy": hero_arch if legacy_hero_only else None,
             },
         )
     ).scalar_one()
@@ -100,10 +92,7 @@ async def _seed_match(
             text("INSERT INTO parser.games (match_id, game_number, winner) VALUES (:m, :n, :w)"),
             {"m": match_id, "n": n, "w": winner},
         )
-    sides = [("bob", opp_arch)]
-    if not legacy_hero_only:
-        sides.append(("alice", hero_arch))
-    for player, arch in sides:
+    for player, arch in (("alice", hero_arch), ("bob", opp_arch)):
         if arch is not None:
             await conn.execute(
                 text(
@@ -123,17 +112,10 @@ async def seeded(engine: AsyncEngine) -> AsyncIterator[dict[str, uuid.UUID]]:
             "tron": await _seed_archetype(conn, "tron"),
             "murktide": await _seed_archetype(conn, "murktide"),
         }
-        # Burn v Tron: 2 wins + 1 loss + 1 legacy-hero win (4 matches).
+        # Burn v Tron: 2 wins + 1 loss (3 matches).
         await _seed_match(conn, hero_arch=ids["burn"], opp_arch=ids["tron"], hero_won=True)
         await _seed_match(conn, hero_arch=ids["burn"], opp_arch=ids["tron"], hero_won=True)
         await _seed_match(conn, hero_arch=ids["burn"], opp_arch=ids["tron"], hero_won=False)
-        await _seed_match(
-            conn,
-            hero_arch=ids["burn"],
-            opp_arch=ids["tron"],
-            hero_won=True,
-            legacy_hero_only=True,
-        )
         # Burn v Murktide: one loss.
         await _seed_match(conn, hero_arch=ids["burn"], opp_arch=ids["murktide"], hero_won=False)
         # Excluded or uncounted: pending review, another user's, and no opponent archetype.
@@ -221,11 +203,10 @@ async def test_matrix_from_real_rows(
 
     cells = _by_pair(body)
     burn, tron, murktide = (str(seeded[k]) for k in ("burn", "tron", "murktide"))
-    # Pending-review, other-user and out-of-range matches are not in the cell;
-    # the legacy-hero match (matches.archetype_id fallback) is.
+    # Pending-review, other-user and out-of-range matches are not in the cell.
     burn_tron = cells[(burn, tron)]
-    assert (burn_tron["matches"], burn_tron["wins"], burn_tron["losses"]) == (4, 3, 1)
-    assert burn_tron["win_rate"] == 75.0
+    assert (burn_tron["matches"], burn_tron["wins"], burn_tron["losses"]) == (3, 2, 1)
+    assert burn_tron["win_rate"] == pytest.approx(200 / 3)
     assert burn_tron["low_sample"] is True
     burn_murktide = cells[(burn, murktide)]
     assert (burn_murktide["matches"], burn_murktide["wins"], burn_murktide["losses"]) == (1, 0, 1)
@@ -241,7 +222,7 @@ async def test_archetype_and_date_filters_against_real_rows(
         "/analytics/stats/matchups", params={"opponent_archetype_id": str(seeded["tron"])}
     )
     (cell,) = all_time.json()["cells"]
-    assert cell["matches"] == 5  # includes the January match
+    assert cell["matches"] == 4  # includes the January match
 
     narrowed = await client.get(
         "/analytics/stats/matchups",
