@@ -44,7 +44,7 @@ class ParserSettings(S3StorageSettings):
     # on the metrics endpoint.
     # Default 24 hours.
     storage_retry_window_seconds: int = 86400
-    # Exponential-backoff base (delay = base * 2**attempt, then jitter).
+    # Exponential-backoff base (delay = base * 2**(n-1) for attempt n, then jitter).
     storage_retry_base_delay_seconds: float = 1.0
     # Ceiling on the per-attempt delay before jitter is applied.
     storage_retry_max_delay_seconds: float = 60.0

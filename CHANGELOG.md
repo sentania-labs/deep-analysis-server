@@ -24,9 +24,8 @@ API surface stabilizes.
   `parser_storage_giveups_total`; no holding-pen row is written and the
   backfill scan parses the file once storage recovers.
   `parser_storage_retries_total` counts deferred attempts. Both counters are on
-  the metrics port. The retry
-  queue is process-local, so a restart restarts the window for in-flight
-  files; the durable `parser.*` rows and the backfill scan remain the source
+  the metrics port. The retry queue is process-local, so a restart restarts
+  the window for in-flight files; the durable `parser.*` rows and the backfill scan remain the source
   of truth. Non-transient reads keep their previous handling: a missing object
   or an oversized one is logged and skipped without a retry.
 
