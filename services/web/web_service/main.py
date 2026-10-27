@@ -708,6 +708,7 @@ async def matchups_page(
     context: dict[str, Any] = {
         "user": user,
         "matrix": None,
+        "pair_cards": None,
         "archetypes": [],
         "stats_error": False,
         "filters": filters,
@@ -739,11 +740,23 @@ async def matchups_page(
             hero_archetype_id=filters["hero_archetype_id"] or None,
             opponent_archetype_id=filters["opponent_archetype_id"] or None,
         )
+        if filters["hero_archetype_id"] and filters["opponent_archetype_id"]:
+            # One pair selected: add its key cards and sideboard view.
+            context["pair_cards"] = await analytics_client.get_matchup_cards(
+                settings.analytics_service_url,
+                user.token,
+                hero_archetype_id=filters["hero_archetype_id"],
+                opponent_archetype_id=filters["opponent_archetype_id"],
+                format_filter=format or None,
+                date_from=date_from or None,
+                date_to=date_to or None,
+            )
     except analytics_client.AnalyticsForbidden:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
     except analytics_client.AnalyticsClientError:
         _log.exception("analytics matchups call failed")
         context["matrix"] = None
+        context["pair_cards"] = None
         context["stats_error"] = True
     return templates.TemplateResponse(request, "matchups.html", context)
 

@@ -102,6 +102,8 @@ async def _get(
     role: str = "user",
     raises: Exception | None = None,
     archetypes: list[Any] | None = None,
+    pair_cards: Any = None,
+    cards_raises: Exception | None = None,
 ) -> tuple[httpx.Response, dict[str, Any]]:
     """GET ``url`` with analytics faked; return the response and the client kwargs."""
     from web_service import analytics_client
@@ -120,7 +122,14 @@ async def _get(
         items = archetypes or [_archetype(HERO, "Burn"), _archetype(OPP, "Tron")]
         return items, len(items)
 
+    async def fake_cards(*_a: Any, **kw: Any) -> Any:
+        seen["cards"] = kw
+        if cards_raises:
+            raise cards_raises
+        return pair_cards if pair_cards is not None else analytics_client.MatchupCards()
+
     monkeypatch.setattr(analytics_client, "get_matchups", fake_matchups)
+    monkeypatch.setattr(analytics_client, "get_matchup_cards", fake_cards)
     monkeypatch.setattr(analytics_client, "admin_list_archetypes", fake_archetypes)
     _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user(role)
     try:
@@ -689,3 +698,232 @@ async def test_client_sends_archetype_filters_for_match_list_and_by_opponent(
     for params in seen:
         assert params["hero_archetype_id"] == HERO
         assert params["opponent_archetype_id"] == OPP
+
+
+# ---------------------------------------------------------------------------
+# Key cards and sideboard effectiveness for one selected pair
+# ---------------------------------------------------------------------------
+
+PAIR_URL = f"/matchups?hero_archetype_id={HERO}&opponent_archetype_id={OPP}"
+
+
+def _pair_cards() -> Any:
+    from web_service import analytics_client as ac
+
+    return ac.MatchupCards(
+        matches=6,
+        matches_with_card_data=6,
+        cards=[
+            ac.MatchupCardItem(
+                card_name="Lightning Bolt",
+                games=9,
+                matches=5,
+                wins=6,
+                losses=3,
+                win_rate=66.7,
+                win_rate_low=35.0,
+                win_rate_high=88.0,
+                low_sample=False,
+                cast_count=11,
+                preboard=ac.BoardSplitItem(games=4, wins=3, losses=1, win_rate=75.0),
+                postboard=ac.BoardSplitItem(games=5, wins=3, losses=2, win_rate=60.0),
+            ),
+            ac.MatchupCardItem(card_name="Rare One-of", games=1, wins=1, win_rate=100.0),
+        ],
+        sideboard=[
+            ac.SideboardCardItem(
+                card_name="Smash to Smithereens",
+                games=6,
+                matches=3,
+                wins=5,
+                losses=1,
+                win_rate=83.3,
+                baseline_games=5,
+                baseline_wins=2,
+                baseline_win_rate=40.0,
+                delta=43.3,
+                low_sample=False,
+            ),
+            ac.SideboardCardItem(
+                card_name="Thin Card", games=2, wins=1, losses=1, win_rate=50.0, low_sample=True
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_pair_selection_fetches_cards_with_every_filter(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, seen = await _get(
+        app_client,
+        monkeypatch,
+        f"{PAIR_URL}&format=Modern&date_from=2026-05-01&date_to=2026-05-31",
+    )
+    assert r.status_code == 200
+    assert seen["cards"] == {
+        "hero_archetype_id": HERO,
+        "opponent_archetype_id": OPP,
+        "format_filter": "Modern",
+        "date_from": "2026-05-01",
+        "date_to": "2026-05-31",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/matchups",
+        f"/matchups?hero_archetype_id={HERO}",
+        f"/matchups?opponent_archetype_id={OPP}",
+        f"{PAIR_URL}&date_from=2026-06-01&date_to=2026-05-01",
+    ],
+)
+async def test_cards_are_only_fetched_for_a_full_valid_pair(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    r, seen = await _get(app_client, monkeypatch, url)
+    assert r.status_code == 200
+    assert "cards" not in seen
+    assert 'id="cards"' not in r.text
+
+
+@pytest.mark.asyncio
+async def test_cards_and_sideboard_tables_render_with_low_sample_marks(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, _ = await _get(app_client, monkeypatch, PAIR_URL, pair_cards=_pair_cards())
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="cards"' in html
+    assert "Key cards" in html and "Sideboard effectiveness" in html
+    assert "across 6 matches" in html
+    # Card rows link to the card page, with the name URL-encoded.
+    assert 'href="/cards?q=Lightning%20Bolt"' in html
+    assert 'href="/cards?q=Smash%20to%20Smithereens"' in html
+    assert "+43.3 pts" in html
+    # Thin rows are marked, well-sampled ones are not.
+    assert html.count("Low sample") == 2
+    row = re.search(r"<tr[^>]*>(?:(?!</tr>).)*Smash to Smithereens.*?</tr>", html, re.S)
+    assert row and "Low sample" not in row.group(0)
+    thin = re.search(r"<tr[^>]*>(?:(?!</tr>).)*Thin Card.*?</tr>", html, re.S)
+    assert thin and "Low sample" in thin.group(0) and "opacity-70" in thin.group(0)
+
+
+@pytest.mark.asyncio
+async def test_card_count_shows_both_when_some_matches_lack_card_data(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pc = _pair_cards()
+    pc.matches_with_card_data = 4
+    r, _ = await _get(app_client, monkeypatch, PAIR_URL, pair_cards=pc)
+    assert r.status_code == 200
+    assert "across 4 of 6 matches with card data" in r.text
+    assert "across 6 matches" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_sideboard_without_baseline_shows_no_delta(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, _ = await _get(app_client, monkeypatch, PAIR_URL, pair_cards=_pair_cards())
+    thin = re.search(r"<tr[^>]*>(?:(?!</tr>).)*Thin Card.*?</tr>", r.text, re.S)
+    assert thin
+    assert "pts" not in thin.group(0)
+    assert "no games" in thin.group(0)
+
+
+@pytest.mark.asyncio
+async def test_empty_cards_and_sideboard_say_so(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, _ = await _get(app_client, monkeypatch, PAIR_URL)
+    assert "No card data for this matchup yet." in r.text
+    assert "No sideboard cards yet" in r.text
+
+
+@pytest.mark.asyncio
+async def test_cards_failure_shows_the_error_banner(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    r, _ = await _get(
+        app_client, monkeypatch, PAIR_URL, cards_raises=analytics_client.AnalyticsClientError("x")
+    )
+    assert r.status_code == 200
+    assert "analytics service could not be reached" in r.text
+    assert 'id="cards"' not in r.text
+
+
+@pytest.mark.asyncio
+async def test_cards_session_expiry_redirects_to_login(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    r, _ = await _get(
+        app_client, monkeypatch, PAIR_URL, cards_raises=analytics_client.AnalyticsForbidden("x")
+    )
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_cell_links_to_its_cards_view(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    matrix = analytics_client.MatchupMatrix(cells=[_cell()])
+    r, _ = await _get(
+        app_client, monkeypatch, "/matchups?format=Modern", matrix=matrix, pair_cards=None
+    )
+    assert (
+        f'href="/matchups?format=Modern&amp;hero_archetype_id={HERO}'
+        f'&amp;opponent_archetype_id={OPP}#cards"'
+    ) in r.text
+
+
+@pytest.mark.asyncio
+async def test_client_sends_pair_and_filters_and_parses_cards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import analytics_client
+
+    sent: dict[str, Any] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, Any]:
+            return {
+                "min_sample": 5,
+                "matches": 2,
+                "matches_with_card_data": 1,
+                "cards": [{"card_name": "Bolt", "games": 3, "wins": 2, "losses": 1}],
+                "sideboard": [{"card_name": "Rift", "games": 1, "delta": None}],
+            }
+
+    async def fake_request(method: str, url: str, **kw: Any) -> _Resp:
+        sent.update(url=url, params=kw["params"])
+        return _Resp()
+
+    monkeypatch.setattr(analytics_client, "request", fake_request)
+    out = await analytics_client.get_matchup_cards(
+        "http://a",
+        "tok",
+        hero_archetype_id=HERO,
+        opponent_archetype_id=OPP,
+        format_filter="all",
+        date_from="2026-05-01",
+    )
+    assert sent["url"] == "http://a/analytics/stats/matchups/cards"
+    assert sent["params"] == {
+        "hero_archetype_id": HERO,
+        "opponent_archetype_id": OPP,
+        "date_from": "2026-05-01",
+    }
+    assert out.matches == 2
+    assert out.matches_with_card_data == 1
+    assert out.cards[0].card_name == "Bolt" and out.cards[0].low_sample is True
+    assert out.sideboard[0].delta is None

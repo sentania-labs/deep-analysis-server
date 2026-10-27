@@ -658,3 +658,325 @@ async def test_split_is_per_cell_and_follows_the_hero_not_the_player_order(
     assert cells["Tron"]["preboard"]["wins"] == 1
     assert (cells["Tron"]["postboard"]["wins"], cells["Tron"]["postboard"]["losses"]) == (0, 2)
     assert (cells["Murktide"]["preboard"]["wins"], cells["Murktide"]["postboard"]["wins"]) == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Key cards and sideboard effectiveness (/stats/matchups/cards)
+# ---------------------------------------------------------------------------
+
+
+def _card_match(
+    games: list[str], *, hero: uuid.UUID | None = BURN, opp: uuid.UUID | None = TRON
+) -> dict[str, Any]:
+    """A match whose game winners are ``games`` ("alice" is the hero)."""
+    wins = {p: games.count(p) for p in ("alice", "bob")}
+    return _match(
+        "Modern", datetime(2026, 5, 10, tzinfo=UTC), wins, hero_arch=hero, opp_arch=opp, games=games
+    )
+
+
+def _patch_cards(
+    monkeypatch: pytest.MonkeyPatch,
+    seen: list[tuple[dict[str, Any], int, str]],
+    *,
+    cast: int = 1,
+) -> list[list[Any]]:
+    """Patch the card-row loader; ``seen`` is ``(match, game_number, card)``.
+
+    ``won`` is derived from the match's game winners the way the materializer
+    does; a game number past the match's games has no winner (``won`` is None).
+    Returns the match-id lists the loader was called with.
+    """
+    from analytics_service import matchups as _matchups
+
+    calls: list[list[Any]] = []
+
+    async def fake_rows(_db: Any, match_ids: list[Any]) -> list[Any]:
+        calls.append(match_ids)
+        out = []
+        for m, gn, card in seen:
+            if m["id"] not in match_ids:
+                continue
+            won = m["_games"][gn - 1] == "alice" if gn <= len(m["_games"]) else None
+            out.append((m["id"], gn, card, won, cast))
+        return out
+
+    monkeypatch.setattr(_matchups, "_load_hero_card_rows", fake_rows)
+    return calls
+
+
+async def _get_cards(
+    app_client: httpx.AsyncClient, hero: uuid.UUID = BURN, opp: uuid.UUID = TRON, **params: Any
+) -> dict[str, Any]:
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get(
+            "/analytics/stats/matchups/cards",
+            params={"hero_archetype_id": str(hero), "opponent_archetype_id": str(opp), **params},
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _by_name(items: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    (found,) = [i for i in items if i["card_name"] == name]
+    return found
+
+
+async def test_key_cards_count_games_wins_and_board_split(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m1 = _card_match(["alice", "bob", "alice"])
+    m2 = _card_match(["bob", "alice", "alice"])
+    _patch_data(monkeypatch, [m1, m2])
+    _patch_cards(
+        monkeypatch,
+        [
+            (m1, 1, "Bolt"),
+            (m1, 2, "Bolt"),
+            (m1, 3, "Bolt"),
+            (m2, 1, "Bolt"),
+            (m2, 3, "Bolt"),
+            (m2, 2, "Rift"),
+        ],
+    )
+    body = await _get_cards(app_client)
+    assert body["matches"] == 2
+    bolt = _by_name(body["cards"], "Bolt")
+    # m1: W L W; m2: L . W -> 5 games, 3 wins.
+    assert (bolt["games"], bolt["wins"], bolt["losses"], bolt["matches"]) == (5, 3, 2, 2)
+    assert bolt["win_rate"] == pytest.approx(60.0)
+    assert bolt["cast_count"] == 5
+    assert bolt["preboard"]["games"] == 2
+    assert bolt["preboard"]["wins"] == 1
+    assert bolt["postboard"]["games"] == 3
+    assert bolt["postboard"]["wins"] == 2
+    assert bolt["low_sample"] is False
+    rift = _by_name(body["cards"], "Rift")
+    assert rift["games"] == 1
+    assert rift["low_sample"] is True
+    # Busiest card first.
+    assert [c["card_name"] for c in body["cards"]] == ["Bolt", "Rift"]
+
+
+async def test_undecided_games_do_not_count_for_key_cards(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m = _card_match(["alice"])
+    _patch_data(monkeypatch, [m])
+    # Game 2 has no winner, so Bolt's game 2 row is not a result.
+    _patch_cards(monkeypatch, [(m, 1, "Bolt"), (m, 2, "Bolt")])
+    bolt = _by_name((await _get_cards(app_client))["cards"], "Bolt")
+    assert bolt["games"] == 1
+    assert bolt["postboard"]["games"] == 0
+
+
+async def test_sideboard_delta_against_other_post_board_games(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m1 = _card_match(["bob", "alice", "alice"])
+    m2 = _card_match(["alice", "alice", "bob"])
+    m3 = _card_match(["bob", "bob"])
+    _patch_data(monkeypatch, [m1, m2, m3])
+    _patch_cards(
+        monkeypatch,
+        [
+            # Rift: never seen in any game 1; seen in m1 G2 (W) and m1 G3 (W).
+            (m1, 2, "Rift"),
+            (m1, 3, "Rift"),
+            # Bolt: in G1 of m2, so not a sideboard card there.
+            (m2, 1, "Bolt"),
+            (m2, 2, "Bolt"),
+            (m3, 1, "Bolt"),
+        ],
+    )
+    body = await _get_cards(app_client)
+    assert [c["card_name"] for c in body["sideboard"]] == ["Rift"]
+    rift = body["sideboard"][0]
+    assert (rift["games"], rift["wins"], rift["losses"], rift["matches"]) == (2, 2, 0, 1)
+    assert rift["win_rate"] == pytest.approx(100.0)
+    # Post-board pool: m1 G2 W, m1 G3 W, m2 G2 W, m2 G3 L, m3 G2 L.
+    # Rift is in m1 G2 and G3, leaving 3 games with one win.
+    assert rift["baseline_games"] == 3
+    assert rift["baseline_wins"] == 1
+    assert rift["baseline_win_rate"] == pytest.approx(100.0 / 3)
+    assert rift["delta"] == pytest.approx(100.0 - 100.0 / 3)
+    assert rift["low_sample"] is True
+
+
+async def test_card_in_game_one_of_the_same_match_is_not_sideboard(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m = _card_match(["alice", "alice"])
+    _patch_data(monkeypatch, [m])
+    _patch_cards(monkeypatch, [(m, 1, "Bolt"), (m, 2, "Bolt")])
+    assert (await _get_cards(app_client))["sideboard"] == []
+
+
+async def test_card_sided_in_one_match_counts_only_that_matches_games(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m1 = _card_match(["alice", "alice"])  # Rift main deck: seen G1
+    m2 = _card_match(["bob", "alice"])  # Rift sided in
+    _patch_data(monkeypatch, [m1, m2])
+    _patch_cards(monkeypatch, [(m1, 1, "Rift"), (m1, 2, "Rift"), (m2, 2, "Rift")])
+    rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
+    assert (rift["games"], rift["matches"]) == (1, 1)
+    # Baseline excludes every post-board game Rift was seen in, sided or not.
+    assert rift["baseline_games"] == 0
+
+
+async def test_unmaterialized_matches_stay_out_of_the_sideboard_baseline(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    carded = _card_match(["bob", "alice", "alice"])
+    bare = [_card_match(["alice", "bob"]) for _ in range(4)]
+    _patch_data(monkeypatch, [carded, *bare])
+    _patch_cards(monkeypatch, [(carded, 2, "Rift"), (carded, 3, "Rift")])
+    rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
+    assert rift["baseline_games"] == 0
+    assert rift["delta"] is None
+
+
+async def test_matches_with_card_data_counts_only_matches_with_card_rows(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    carded = [_card_match(["bob", "alice"]), _card_match(["alice", "alice"])]
+    bare = _card_match(["alice", "bob"])
+    _patch_data(monkeypatch, [*carded, bare])
+    _patch_cards(monkeypatch, [(carded[0], 2, "Rift"), (carded[1], 1, "Bolt")])
+    body = await _get_cards(app_client)
+    assert body["matches"] == 3
+    assert body["matches_with_card_data"] == 2
+
+
+async def test_sideboard_without_baseline_has_no_delta(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m = _card_match(["bob", "alice"])
+    _patch_data(monkeypatch, [m])
+    _patch_cards(monkeypatch, [(m, 2, "Rift")])
+    rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
+    assert rift["baseline_games"] == 0
+    assert rift["delta"] is None
+    assert rift["low_sample"] is True
+
+
+async def test_sideboard_sample_is_not_low_when_both_sides_are_large(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    sided = [_card_match(["bob", "alice"]) for _ in range(5)]
+    plain = [_card_match(["bob", "bob"]) for _ in range(5)]
+    _patch_data(monkeypatch, sided + plain)
+    _patch_cards(monkeypatch, [(m, 2, "Rift") for m in sided] + [(m, 1, "Bolt") for m in plain])
+    rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
+    assert (rift["games"], rift["baseline_games"]) == (5, 5)
+    assert rift["delta"] == pytest.approx(100.0)
+    assert rift["low_sample"] is False
+
+
+async def test_matches_without_post_board_games_give_cards_but_no_sideboard(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    m = _card_match(["alice"])
+    _patch_data(monkeypatch, [m])
+    _patch_cards(monkeypatch, [(m, 1, "Bolt")])
+    body = await _get_cards(app_client)
+    assert body["matches"] == 1
+    assert [c["card_name"] for c in body["cards"]] == ["Bolt"]
+    assert body["sideboard"] == []
+
+
+async def test_matchup_cards_only_use_the_requested_pair(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    mine = _card_match(["alice", "alice"])
+    other_opp = _card_match(["bob", "bob"], opp=MURKTIDE)
+    other_hero = _card_match(["bob", "bob"], hero=MURKTIDE)
+    unclassified = _card_match(["bob", "bob"], opp=None)
+    _patch_data(monkeypatch, [mine, other_opp, other_hero, unclassified])
+    calls = _patch_cards(
+        monkeypatch,
+        [(m, 1, "Bolt") for m in (mine, other_opp, other_hero, unclassified)],
+    )
+    body = await _get_cards(app_client)
+    assert body["matches"] == 1
+    assert calls == [[mine["id"]]]
+    assert _by_name(body["cards"], "Bolt")["games"] == 1
+
+
+async def test_matchup_cards_pass_scope_filters_to_the_loader(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    calls = _patch_data(monkeypatch, [])
+    _patch_cards(monkeypatch, [])
+    body = await _get_cards(
+        app_client, format="Modern", date_from="2026-05-01", date_to="2026-05-31"
+    )
+    assert body["matches"] == 0
+    assert body["cards"] == [] and body["sideboard"] == []
+    assert calls == [
+        {
+            "user_id": 7,
+            "date_from": date(2026, 5, 1),
+            "date_to": date(2026, 5, 31),
+            "format_": "Modern",
+            "opponent": None,
+        }
+    ]
+
+
+async def test_matchup_cards_format_all_means_no_format_filter(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    calls = _patch_data(monkeypatch, [])
+    _patch_cards(monkeypatch, [])
+    await _get_cards(app_client, format="all")
+    assert calls[0]["format_"] is None
+
+
+async def test_matchup_cards_require_both_archetypes(app_client: httpx.AsyncClient) -> None:
+    from analytics_service import deps as _deps
+    from analytics_service import main as _main
+
+    _main.app.dependency_overrides[_deps.require_user] = _override_user()
+    try:
+        r = await app_client.get(
+            "/analytics/stats/matchups/cards", params={"hero_archetype_id": str(BURN)}
+        )
+    finally:
+        _main.app.dependency_overrides.clear()
+    assert r.status_code == 422
+
+
+async def test_matchup_cards_are_cached_per_pair(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeRedis()
+    _patch_redis(monkeypatch, fake)
+    m = _card_match(["alice"])
+    calls = _patch_data(monkeypatch, [m])
+    _patch_cards(monkeypatch, [(m, 1, "Bolt")])
+    first = await _get_cards(app_client)
+    assert await _get_cards(app_client) == first
+    assert len(calls) == 1
+    await _get_cards(app_client, opp=MURKTIDE)
+    assert len(calls) == 2
