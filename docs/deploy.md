@@ -193,6 +193,20 @@ stored answers 503 `storage_unavailable` (or 507 when the store reports
 itself full) and rolls the database row back, so the table never claims
 content the archive does not have.
 
+The parser does not skip a file when a read fails on a transient store
+error. It retries with capped, jittered exponential backoff for
+`DA_STORAGE_RETRY_WINDOW_SECONDS` (default 86400, 24 hours) from the
+file's first failure, with the per-attempt delay bounded by
+`DA_STORAGE_RETRY_BASE_DELAY_SECONDS` (1) and
+`DA_STORAGE_RETRY_MAX_DELAY_SECONDS` (60). A file that outlasts the window
+lands in the review holding pen (`pending_review` in `parser.matches`, with
+a storage-outage `review_reason`) and increments
+`parser_storage_giveups_total` on the parser metrics port
+(`DA_METRICS_PORT`); `parser_storage_retries_total` counts deferred
+attempts. The retry queue is process-local, so a parser restart restarts the
+window; the backfill scan still picks up any file with no row. A missing or
+oversized object is logged and skipped without a retry.
+
 ### Backfill from the old volume
 
 On a host upgraded from the filesystem archive, the old files exist only
