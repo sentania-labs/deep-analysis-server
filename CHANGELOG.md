@@ -28,8 +28,10 @@ API surface stabilizes.
   matrix (each matrix row links there), with low-sample rows dimmed and badged
   and card names linking to card search. This completes #129. Card rows come
   only from matches already materialized into `card_game_stats`, and the
-  sideboard baseline is drawn from those same matches, and a card
-  counts as "not in game 1" when it was not logged in that game, so a card that
+  sideboard baseline is drawn from those same matches. The response's
+  `matches` stays the total in scope and `matches_with_card_data` counts the
+  ones the card tables are built from; `/matchups` reads "across N of M
+  matches with card data" when they differ. A card counts as "not in game 1" when it was not logged in that game, so a card that
   stayed in the library all game reads as sided in.
 
 - **Matchup pre-board / post-board split and drill-down links (#129).** Each

@@ -712,6 +712,7 @@ def _pair_cards() -> Any:
 
     return ac.MatchupCards(
         matches=6,
+        matches_with_card_data=6,
         cards=[
             ac.MatchupCardItem(
                 card_name="Lightning Bolt",
@@ -811,6 +812,18 @@ async def test_cards_and_sideboard_tables_render_with_low_sample_marks(
 
 
 @pytest.mark.asyncio
+async def test_card_count_shows_both_when_some_matches_lack_card_data(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pc = _pair_cards()
+    pc.matches_with_card_data = 4
+    r, _ = await _get(app_client, monkeypatch, PAIR_URL, pair_cards=pc)
+    assert r.status_code == 200
+    assert "across 4 of 6 matches with card data" in r.text
+    assert "across 6 matches" not in r.text
+
+
+@pytest.mark.asyncio
 async def test_sideboard_without_baseline_shows_no_delta(
     app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -886,6 +899,7 @@ async def test_client_sends_pair_and_filters_and_parses_cards(
             return {
                 "min_sample": 5,
                 "matches": 2,
+                "matches_with_card_data": 1,
                 "cards": [{"card_name": "Bolt", "games": 3, "wins": 2, "losses": 1}],
                 "sideboard": [{"card_name": "Rift", "games": 1, "delta": None}],
             }
@@ -910,5 +924,6 @@ async def test_client_sends_pair_and_filters_and_parses_cards(
         "date_from": "2026-05-01",
     }
     assert out.matches == 2
+    assert out.matches_with_card_data == 1
     assert out.cards[0].card_name == "Bolt" and out.cards[0].low_sample is True
     assert out.sideboard[0].delta is None

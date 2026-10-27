@@ -849,6 +849,19 @@ async def test_unmaterialized_matches_stay_out_of_the_sideboard_baseline(
     assert rift["delta"] is None
 
 
+async def test_matches_with_card_data_counts_only_matches_with_card_rows(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    carded = [_card_match(["bob", "alice"]), _card_match(["alice", "alice"])]
+    bare = _card_match(["alice", "bob"])
+    _patch_data(monkeypatch, [*carded, bare])
+    _patch_cards(monkeypatch, [(carded[0], 2, "Rift"), (carded[1], 1, "Bolt")])
+    body = await _get_cards(app_client)
+    assert body["matches"] == 3
+    assert body["matches_with_card_data"] == 2
+
+
 async def test_sideboard_without_baseline_has_no_delta(
     app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

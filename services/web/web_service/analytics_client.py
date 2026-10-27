@@ -940,6 +940,7 @@ class SideboardCardItem:
 class MatchupCards:
     min_sample: int = 5
     matches: int = 0
+    matches_with_card_data: int = 0
     cards: list[MatchupCardItem] = field(default_factory=list)
     sideboard: list[SideboardCardItem] = field(default_factory=list)
 
@@ -1013,6 +1014,7 @@ async def get_matchup_cards(
     return MatchupCards(
         min_sample=int(d.get("min_sample") or 5),
         matches=int(d.get("matches") or 0),
+        matches_with_card_data=int(d.get("matches_with_card_data") or 0),
         cards=[_to_matchup_card(c) for c in d.get("cards", [])],
         sideboard=[_to_sideboard_card(c) for c in d.get("sideboard", [])],
     )

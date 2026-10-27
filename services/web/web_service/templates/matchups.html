@@ -171,7 +171,7 @@
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
         <h2 class="text-base font-semibold dark:text-txt-primary text-txt-primary-light">Key cards</h2>
         <p class="text-xs dark:text-txt-secondary text-txt-secondary-light mt-1">
-            Your cards in this matchup across {{ pair_cards.matches }} match{{ "" if pair_cards.matches == 1 else "es" }}, by games they were seen in.
+            Your cards in this matchup across {% if pair_cards.matches_with_card_data < pair_cards.matches %}{{ pair_cards.matches_with_card_data }} of {{ pair_cards.matches }} matches with card data{% else %}{{ pair_cards.matches }} match{{ "" if pair_cards.matches == 1 else "es" }}{% endif %}, by games they were seen in.
         </p>
     </div>
     {% if pair_cards.cards %}

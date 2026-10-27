@@ -156,6 +156,9 @@ class MatchupCardsResponse(BaseModel):
     opponent_archetype_id: uuid.UUID
     # Matches in scope for this archetype pair (the matrix cell's match count).
     matches: int = 0
+    # In-scope matches with hero rows in card_game_stats: the matches the
+    # cards, sideboard and baseline are drawn from.
+    matches_with_card_data: int = 0
     cards: list[MatchupCard] = Field(default_factory=list)
     sideboard: list[SideboardCard] = Field(default_factory=list)
 
@@ -550,10 +553,12 @@ async def get_matchup_cards(
 
     cards: list[MatchupCard] = []
     sideboard: list[SideboardCard] = []
+    matches_with_card_data = 0
     if scope_ids:
         rows = await _load_hero_card_rows(db, scope_ids)
         game_winners = await _load_game_winners(db, scope_ids)
         materialized = {r[0] for r in rows}
+        matches_with_card_data = len(materialized)
         post_games: dict[tuple[Any, int], bool] = {}
         for m in in_scope:
             if m["id"] not in materialized:
@@ -571,6 +576,7 @@ async def get_matchup_cards(
         hero_archetype_id=hero_archetype_id,
         opponent_archetype_id=opponent_archetype_id,
         matches=len(in_scope),
+        matches_with_card_data=matches_with_card_data,
         cards=cards,
         sideboard=sideboard,
     )
