@@ -15,8 +15,14 @@ are classified with the same ``_classify_match`` and win rate uses the same
 Matches missing either archetype are not in the matrix; their count is
 returned as ``unclassified_matches`` so the gap is visible.
 
-Follow-ups (not in this slice): game-number and pre/post-board split per
-matchup, key cards scoped to a matchup, sideboard effectiveness.
+Each cell also carries a pre-board (game 1) vs post-board (games 2 and up)
+split of game results, built from ``parser.games`` with the same hero rule
+as the matrix. The cell's ``matches`` count and the split's ``games`` counts
+are different units: a best-of-three match contributes one match and two or
+three games.
+
+Follow-ups (not in this slice): key cards scoped to a matchup, sideboard
+effectiveness.
 """
 
 from __future__ import annotations
@@ -50,6 +56,24 @@ MATCHUP_MIN_SAMPLE = 5
 _WILSON_Z = 1.96
 
 
+class BoardSplit(BaseModel):
+    """Game results for one side of the pre-board / post-board divide.
+
+    Only games with a recorded winner count. ``games`` is therefore the
+    denominator ``win_rate`` is computed over, and ``low_sample`` applies the
+    same ``MATCHUP_MIN_SAMPLE`` threshold the cell does, to this split's own
+    count.
+    """
+
+    games: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    low_sample: bool = True
+
+
 class MatchupCell(BaseModel):
     hero_archetype_id: uuid.UUID
     hero_archetype: str
@@ -67,6 +91,11 @@ class MatchupCell(BaseModel):
     win_rate_low: float = 0.0
     win_rate_high: float = 0.0
     low_sample: bool = True
+    # Game 1 vs games 2+. A cell whose matches never went past game 1 has an
+    # empty ``postboard`` (0 games, ``low_sample`` true), never a zero win rate
+    # presented as a result.
+    preboard: BoardSplit = Field(default_factory=BoardSplit)
+    postboard: BoardSplit = Field(default_factory=BoardSplit)
 
 
 class MatchupMatrixResponse(BaseModel):
@@ -87,6 +116,44 @@ def _wilson_interval(wins: int, decided: int) -> tuple[float, float]:
     centre = (p + z2 / (2 * decided)) / denom
     margin = (_WILSON_Z * math.sqrt(p * (1 - p) / decided + z2 / (4 * decided**2))) / denom
     return max(0.0, centre - margin) * 100.0, min(1.0, centre + margin) * 100.0
+
+
+def _board_split(wins: int, losses: int) -> BoardSplit:
+    low, high = _wilson_interval(wins, wins + losses)
+    games = wins + losses
+    return BoardSplit(
+        games=games,
+        wins=wins,
+        losses=losses,
+        win_rate=(wins / games) * 100.0 if games else 0.0,
+        win_rate_low=low,
+        win_rate_high=high,
+        low_sample=games < MATCHUP_MIN_SAMPLE,
+    )
+
+
+async def _load_game_winners(
+    db: AsyncSession,
+    match_ids: list[Any],
+) -> dict[Any, list[tuple[int, str]]]:
+    """Map match id to ``(game_number, winner)`` for games with a winner."""
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT match_id, game_number, winner
+                FROM parser.games
+                WHERE match_id = ANY(:match_ids)
+                  AND winner IS NOT NULL
+                """
+            ),
+            {"match_ids": match_ids},
+        )
+    ).all()
+    out: dict[Any, list[tuple[int, str]]] = {}
+    for match_id, game_number, winner in rows:
+        out.setdefault(match_id, []).append((int(game_number), str(winner)))
+    return out
 
 
 async def _load_match_archetypes(
@@ -154,7 +221,7 @@ async def get_matchups(
     redis_client = await _get_redis_or_none()
     ck = cache_key(
         user.user_id,
-        "matchups",
+        "matchups-split",
         format=format_filter.lower() if format_filter else None,
         date_from=date_from,
         date_to=date_to,
@@ -162,7 +229,7 @@ async def get_matchups(
         opponent_archetype_id=opponent_archetype_id,
     )
     if redis_client:
-        cached = await get_cached(redis_client, ck, endpoint="matchups")
+        cached = await get_cached(redis_client, ck, endpoint="matchups-split")
         if isinstance(cached, dict):
             return MatchupMatrixResponse(**cached)
 
@@ -173,7 +240,9 @@ async def get_matchups(
         date_to=date_to,
         format_=format_filter,
     )
-    archetypes = await _load_match_archetypes(db, [m["id"] for m in matches]) if matches else {}
+    match_ids = [m["id"] for m in matches]
+    archetypes = await _load_match_archetypes(db, match_ids) if matches else {}
+    game_winners = await _load_game_winners(db, match_ids) if matches else {}
 
     buckets: dict[tuple[uuid.UUID, uuid.UUID], dict[str, Any]] = {}
     unclassified = 0
@@ -201,9 +270,19 @@ async def get_matchups(
                 "wins": 0,
                 "losses": 0,
                 "draws": 0,
+                "pre_w": 0,
+                "pre_l": 0,
+                "post_w": 0,
+                "post_l": 0,
             },
         )
         bucket["matches"] += 1
+        hero_name = m.get("hero_player_name") or (m["players"][0] if m["players"] else None)
+        for game_number, winner in game_winners.get(m["id"], []):
+            if hero_name is None:
+                break
+            side = "pre" if game_number == 1 else "post"
+            bucket[f"{side}_w" if winner.lower() == hero_name.lower() else f"{side}_l"] += 1
         if result_code == "W":
             bucket["wins"] += 1
         elif result_code == "L":
@@ -232,6 +311,8 @@ async def get_matchups(
                 win_rate_low=low,
                 win_rate_high=high,
                 low_sample=decided < MATCHUP_MIN_SAMPLE,
+                preboard=_board_split(b["pre_w"], b["pre_l"]),
+                postboard=_board_split(b["post_w"], b["post_l"]),
             )
         )
     out = MatchupMatrixResponse(cells=cells, unclassified_matches=unclassified)

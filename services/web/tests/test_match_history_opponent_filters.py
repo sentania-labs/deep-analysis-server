@@ -99,6 +99,8 @@ async def test_filters_reach_the_opponent_aggregates(
         "result": "wins",
         "date_from": "2026-05-01",
         "date_to": "2026-05-31",
+        "hero_archetype_id": None,
+        "opponent_archetype_id": None,
     }
 
 
@@ -114,7 +116,15 @@ async def test_opponent_aggregates_see_the_same_filters_as_the_match_list(
         "/matches?format=Pauper&date_from=2026-04-01",
     )
 
-    shared = ("format_filter", "opponent", "result", "date_from", "date_to")
+    shared = (
+        "format_filter",
+        "opponent",
+        "result",
+        "date_from",
+        "date_to",
+        "hero_archetype_id",
+        "opponent_archetype_id",
+    )
     for key in shared:
         assert seen["by_opponent"][key] == seen["match_list"][key], key
 
@@ -132,6 +142,8 @@ async def test_unfiltered_page_sends_no_filters(
         "result": None,
         "date_from": None,
         "date_to": None,
+        "hero_archetype_id": None,
+        "opponent_archetype_id": None,
     }
 
 

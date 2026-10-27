@@ -63,8 +63,13 @@ async def _seed_match(
     hero_won: bool,
     review_status: str | None = None,
     played_at: datetime = datetime(2026, 5, 10, tzinfo=UTC),
+    winners: list[str] | None = None,
 ) -> uuid.UUID:
-    """One 2-game match alice (hero) v bob, with the archetype rows asked for."""
+    """One match alice (hero) v bob, with the archetype rows asked for.
+
+    ``winners`` lists the winner of game 1, 2, ...; by default a 2-0 for whoever
+    ``hero_won`` says.
+    """
     match_id = (
         await conn.execute(
             text(
@@ -86,7 +91,8 @@ async def _seed_match(
             },
         )
     ).scalar_one()
-    winners = ["alice", "alice"] if hero_won else ["bob", "bob"]
+    if winners is None:
+        winners = ["alice", "alice"] if hero_won else ["bob", "bob"]
     for n, winner in enumerate(winners, start=1):
         await conn.execute(
             text("INSERT INTO parser.games (match_id, game_number, winner) VALUES (:m, :n, :w)"),
@@ -234,3 +240,84 @@ async def test_archetype_and_date_filters_against_real_rows(
     (cell,) = narrowed.json()["cells"]
     assert cell["opponent_archetype"].startswith("pytest-murktide-")
     assert cell["matches"] == 1
+
+
+async def test_split_from_real_rows(client: httpx.AsyncClient, engine: AsyncEngine) -> None:
+    async with engine.begin() as conn:
+        burn = await _seed_archetype(conn, "split-burn")
+        tron = await _seed_archetype(conn, "split-tron")
+        for winners in (
+            ["alice", "bob", "alice"],  # G1 W, G2 L, G3 W
+            ["bob", "alice", "alice"],  # G1 L, G2 W, G3 W
+            ["alice"],  # ends after G1: no post-board games
+        ):
+            await _seed_match(conn, hero_arch=burn, opp_arch=tron, hero_won=True, winners=winners)
+        # Pending-review and other-user games must not reach either split.
+        await _seed_match(
+            conn,
+            hero_arch=burn,
+            opp_arch=tron,
+            hero_won=False,
+            winners=["bob", "bob", "bob"],
+            review_status="pending_review",
+        )
+        await _seed_match(
+            conn,
+            user_id=OTHER_USER,
+            hero_arch=burn,
+            opp_arch=tron,
+            hero_won=False,
+            winners=["bob", "bob", "bob"],
+        )
+    try:
+        r = await client.get("/analytics/stats/matchups", params={"hero_archetype_id": str(burn)})
+        assert r.status_code == 200, r.text
+        (cell,) = r.json()["cells"]
+        assert cell["matches"] == 3
+        pre, post = cell["preboard"], cell["postboard"]
+        assert (pre["games"], pre["wins"], pre["losses"]) == (3, 2, 1)
+        assert (post["games"], post["wins"], post["losses"]) == (4, 3, 1)
+        assert pre["low_sample"] is True and post["low_sample"] is True
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM parser.matches WHERE user_id IN (:a, :b)"),
+                {"a": USER, "b": OTHER_USER},
+            )
+            await conn.execute(
+                text("DELETE FROM analytics.archetypes WHERE id = ANY(:ids)"),
+                {"ids": [burn, tron]},
+            )
+
+
+async def test_match_list_archetype_filter_matches_the_matrix_cell(
+    client: httpx.AsyncClient, seeded: dict[str, uuid.UUID]
+) -> None:
+    """A cell's drill-down lists exactly the matches the cell counted."""
+    params = {
+        "hero_archetype_id": str(seeded["burn"]),
+        "opponent_archetype_id": str(seeded["tron"]),
+        "date_from": "2026-05-01",
+    }
+    cell = (await client.get("/analytics/stats/matchups", params=params)).json()["cells"][0]
+    listing = (await client.get("/analytics/stats/matches", params=params)).json()
+    by_opp = (await client.get("/analytics/stats/by-opponent", params=params)).json()
+
+    # Same 3 matches; pending-review, other-user and out-of-range ones stay out.
+    assert listing["total"] == cell["matches"] == 3
+    assert sum(o["matches"] for o in by_opp) == 3
+
+    only_murktide = await client.get(
+        "/analytics/stats/matches",
+        params={
+            "hero_archetype_id": str(seeded["burn"]),
+            "opponent_archetype_id": str(seeded["murktide"]),
+        },
+    )
+    assert only_murktide.json()["total"] == 1
+
+    # An archetype the hero never played narrows to nothing, not to everything.
+    unplayed = await client.get(
+        "/analytics/stats/matches", params={"hero_archetype_id": str(seeded["tron"])}
+    )
+    assert unplayed.json()["total"] == 0

@@ -29,6 +29,10 @@
     <div class="px-4 py-3 border-b dark:border-border border-border-light">
         <form method="get" action="/matches">
             <input type="hidden" name="per_page" value="{{ per_page }}">
+            {# Matchup drill-down filters have no input of their own: keep them
+               across a Filter submit so it does not silently widen the list. #}
+            {% if filters.hero_archetype_id %}<input type="hidden" name="hero_archetype_id" value="{{ filters.hero_archetype_id }}">{% endif %}
+            {% if filters.opponent_archetype_id %}<input type="hidden" name="opponent_archetype_id" value="{{ filters.opponent_archetype_id }}">{% endif %}
             <div class="flex flex-wrap gap-3 items-end">
                 <label class="flex flex-col gap-1">
                     <span class="text-xs dark:text-txt-secondary text-txt-secondary-light">Format</span>
@@ -71,6 +75,14 @@
             </div>
         </form>
     </div>
+
+    {% if filters.hero_archetype_id or filters.opponent_archetype_id %}
+    <div class="px-4 py-2 border-b dark:border-border border-border-light flex items-center gap-3 text-sm dark:text-txt-secondary text-txt-secondary-light">
+        <span>Showing one archetype matchup.</span>
+        <a href="{{ filter_url('/matches', filters, {'hero_archetype_id': '', 'opponent_archetype_id': ''}, per_page=link_per_page) }}" class="text-accent hover:text-accent-hover">Clear matchup filter</a>
+        <a href="{{ filter_url('/matchups', filters, {'hero_archetype_id': '', 'opponent_archetype_id': '', 'result': '', 'opponent': ''}) }}" class="text-accent hover:text-accent-hover">Back to matchups</a>
+    </div>
+    {% endif %}
 
     {% if date_error %}
     <div class="mb-4 p-3 rounded-md bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">

@@ -71,6 +71,8 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, matches: list[dict[str, Any]]
         date_to: date | None = None,
         format_: str | None = None,
         opponent: str | None = None,
+        hero_archetype_id: Any = None,
+        opponent_archetype_id: Any = None,
     ) -> list[dict[str, Any]]:
         return matches
 
@@ -103,6 +105,8 @@ def _patch_loader_date_aware(
         date_to: date | None = None,
         format_: str | None = None,
         opponent: str | None = None,
+        hero_archetype_id: Any = None,
+        opponent_archetype_id: Any = None,
     ) -> list[dict[str, Any]]:
         calls.append(
             {
