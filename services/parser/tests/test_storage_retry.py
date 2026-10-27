@@ -229,6 +229,40 @@ async def test_repeated_failures_back_off_exponentially_to_the_cap(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("prior_attempts", [1023, 1024, 1025, 100000])
+async def test_huge_attempt_counts_keep_the_delay_finite(prior_attempts: int) -> None:
+    """2**n saturates the float range, so the exponent must be bounded."""
+    from parser_service.consumer import _MAX_BACKOFF_EXPONENT, _RetryRecord
+
+    clock = _Clock()
+    consumer = _make_consumer(clock=clock)
+    sha = "4" * 64
+    consumer._retry_state[sha] = _RetryRecord(
+        first_failure=0.0,
+        attempts=prior_attempts,
+        due_at=0.0,
+        kind="match-log",
+        user_id=1,
+    )
+
+    with (
+        patch(
+            "parser_service.consumer.read_raw",
+            AsyncMock(side_effect=lambda *a, **kw: _store_error()),
+        ),
+        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+    ):
+        await consumer.handle_event(sha, 1)
+
+    record = consumer._retry_state[sha]
+    assert record.attempts == prior_attempts + 1
+    delay = record.due_at - clock.now
+    assert delay == delay, "the jittered delay must be a finite float"
+    assert 0.0 <= delay <= _CAP
+    assert _MAX_BACKOFF_EXPONENT == 1023
+
+
+@pytest.mark.asyncio
 async def test_backoff_never_exceeds_the_cap_across_many_failures() -> None:
     """After enough failures the interval saturates at the cap."""
     clock = _Clock()

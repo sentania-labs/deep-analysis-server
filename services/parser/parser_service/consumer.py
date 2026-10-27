@@ -75,6 +75,10 @@ _parse_giveups_total = Counter(
     "Files given up on after exhausting the storage retry window",
 )
 
+# Largest exponent still representable as a finite float; the bounded
+# power saturates long before this against the delay cap.
+_MAX_BACKOFF_EXPONENT = 1023
+
 
 @dataclass
 class _RetryRecord:
@@ -281,9 +285,11 @@ class ParserConsumer:
         """Advance the retry schedule for one file.
 
         Exponential with full jitter and a capped interval:
-        ``delay = min(cap, base * 2**(n-1)) * random()``. When the window
-        from the file's first failure has already elapsed, the file fails
-        visibly instead of being rescheduled.
+        ``delay = min(cap, base * 2**(n-1)) * random()``. The exponent is
+        bounded so the power never leaves the float range (2**1024 already
+        saturates it), which the ``min()`` against the cap makes lossless.
+        When the window from the file's first failure has already elapsed,
+        the file fails visibly instead of being rescheduled.
         """
         settings = get_parser_settings()
         now = self._clock()
@@ -291,9 +297,10 @@ class ParserConsumer:
             await self._give_up(sha256, exc)
             return
         record.attempts += 1
+        exponent = min(record.attempts - 1, _MAX_BACKOFF_EXPONENT)
         raw = min(
             settings.storage_retry_max_delay_seconds,
-            settings.storage_retry_base_delay_seconds * (2 ** (record.attempts - 1)),
+            settings.storage_retry_base_delay_seconds * (2**exponent),
         )
         record.due_at = now + raw * random.random()
         _parse_retries_total.inc()
