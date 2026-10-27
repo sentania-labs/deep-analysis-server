@@ -25,7 +25,8 @@ three games.
 archetype pair it returns the hero's per-card results (key cards) and a
 sideboard effectiveness list (cards seen in games 2+ of a match but not in its
 game 1). Cards come from ``analytics.card_game_stats`` (hero rows only), so a
-match not yet materialized there contributes no card rows.
+match not yet materialized there contributes neither card rows nor games to
+the sideboard baseline.
 """
 
 from __future__ import annotations
@@ -552,8 +553,11 @@ async def get_matchup_cards(
     if scope_ids:
         rows = await _load_hero_card_rows(db, scope_ids)
         game_winners = await _load_game_winners(db, scope_ids)
+        materialized = {r[0] for r in rows}
         post_games: dict[tuple[Any, int], bool] = {}
         for m in in_scope:
+            if m["id"] not in materialized:
+                continue
             hero_name = m.get("hero_player_name") or (m["players"][0] if m["players"] else None)
             if hero_name is None:
                 continue

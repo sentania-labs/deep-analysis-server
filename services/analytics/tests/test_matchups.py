@@ -795,6 +795,7 @@ async def test_sideboard_delta_against_other_post_board_games(
             # Bolt: in G1 of m2, so not a sideboard card there.
             (m2, 1, "Bolt"),
             (m2, 2, "Bolt"),
+            (m3, 1, "Bolt"),
         ],
     )
     body = await _get_cards(app_client)
@@ -835,6 +836,19 @@ async def test_card_sided_in_one_match_counts_only_that_matches_games(
     assert rift["baseline_games"] == 0
 
 
+async def test_unmaterialized_matches_stay_out_of_the_sideboard_baseline(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    carded = _card_match(["bob", "alice", "alice"])
+    bare = [_card_match(["alice", "bob"]) for _ in range(4)]
+    _patch_data(monkeypatch, [carded, *bare])
+    _patch_cards(monkeypatch, [(carded, 2, "Rift"), (carded, 3, "Rift")])
+    rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
+    assert rift["baseline_games"] == 0
+    assert rift["delta"] is None
+
+
 async def test_sideboard_without_baseline_has_no_delta(
     app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -855,7 +869,7 @@ async def test_sideboard_sample_is_not_low_when_both_sides_are_large(
     sided = [_card_match(["bob", "alice"]) for _ in range(5)]
     plain = [_card_match(["bob", "bob"]) for _ in range(5)]
     _patch_data(monkeypatch, sided + plain)
-    _patch_cards(monkeypatch, [(m, 2, "Rift") for m in sided])
+    _patch_cards(monkeypatch, [(m, 2, "Rift") for m in sided] + [(m, 1, "Bolt") for m in plain])
     rift = _by_name((await _get_cards(app_client))["sideboard"], "Rift")
     assert (rift["games"], rift["baseline_games"]) == (5, 5)
     assert rift["delta"] == pytest.approx(100.0)
