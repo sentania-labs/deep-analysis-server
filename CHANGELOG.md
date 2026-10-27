@@ -9,6 +9,28 @@ API surface stabilizes.
 
 ### Added
 
+- **Matchup key cards and sideboard effectiveness (#129).** A new read-only
+  `GET /analytics/stats/matchups/cards` takes a `hero_archetype_id` and an
+  `opponent_archetype_id` (both required) and the usual `format`, `date_from`
+  and `date_to`, scoped to the caller with pending-review matches left out, and
+  returns two lists built from the hero's rows in `analytics.card_game_stats`.
+  `cards` gives each card's games seen (decided games only), wins, losses, win
+  rate, 95% Wilson range, casts, a game 1 / games 2+ split and a `low_sample`
+  flag. `sideboard` lists cards seen in a game 2 or later of a match whose game 1
+  they were not seen in, with the win rate over those games, the win rate over
+  the matchup's other decided post-board games (`baseline_*`, which excludes
+  every post-board game the card appeared in) and `delta` in percentage points;
+  `delta` is null with no baseline game, and `low_sample` is set when either
+  side has fewer than `min_sample` games. A card never seen in any game 1 is
+  always a sideboard candidate, and matches that ended after game 1 add card
+  rows but no sideboard games. On the web, choosing both archetypes on
+  `/matchups` shows Key cards and Sideboard effectiveness tables under the
+  matrix (each matrix row links there), with low-sample rows dimmed and badged
+  and card names linking to card search. This completes #129. Card rows come
+  only from matches already materialized into `card_game_stats`, and a card
+  counts as "not in game 1" when it was not logged in that game, so a card that
+  stayed in the library all game reads as sided in.
+
 - **Matchup pre-board / post-board split and drill-down links (#129).** Each
   cell of `GET /analytics/stats/matchups` now carries `preboard` (game 1) and
   `postboard` (games 2 and up) objects with `games`, `wins`, `losses`, win
@@ -21,7 +43,7 @@ API surface stabilizes.
   exactly. On the web `/matchups` table the match count and the win and loss
   figures link to Match History narrowed to that archetype pair (format and date
   range kept), and Match History shows a "clear matchup filter" note while one is
-  active. Per-matchup key cards and sideboard effectiveness are still to do.
+  active. Per-matchup key cards and sideboard effectiveness follow in the entry above.
 
 - **Matchup matrix API and dashboard table, first slice (#129).** A new
   read-only `GET /analytics/stats/matchups` returns one cell per hero

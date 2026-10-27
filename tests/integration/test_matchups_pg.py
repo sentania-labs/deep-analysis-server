@@ -321,3 +321,125 @@ async def test_match_list_archetype_filter_matches_the_matrix_cell(
         "/analytics/stats/matches", params={"hero_archetype_id": str(seeded["tron"])}
     )
     assert unplayed.json()["total"] == 0
+
+
+async def _seed_card_rows(
+    conn: Any, match_id: uuid.UUID, rows: list[tuple[int, str, bool, bool | None]]
+) -> None:
+    """``analytics.card_game_stats`` rows: ``(game_number, card, is_local, won)``."""
+    for game_number, card, is_local, won in rows:
+        game_id = (
+            await conn.execute(
+                text("SELECT id FROM parser.games WHERE match_id = :m AND game_number = :n"),
+                {"m": match_id, "n": game_number},
+            )
+        ).scalar_one()
+        await conn.execute(
+            text(
+                """
+                INSERT INTO analytics.card_game_stats
+                    (match_id, game_id, card_name, is_local, seen, "cast", played,
+                     is_postboard, won, quantity, game_number)
+                VALUES (:m, :g, :c, :loc, 1, 1, 0, :post, :won, 1, :n)
+                """
+            ),
+            {
+                "m": match_id,
+                "g": game_id,
+                "c": card,
+                "loc": is_local,
+                "post": game_number > 1,
+                "won": won,
+                "n": game_number,
+            },
+        )
+
+
+async def test_matchup_cards_from_real_rows(client: httpx.AsyncClient, engine: AsyncEngine) -> None:
+    async with engine.begin() as conn:
+        burn = await _seed_archetype(conn, "cards-burn")
+        tron = await _seed_archetype(conn, "cards-tron")
+        other = await _seed_archetype(conn, "cards-other")
+        m1 = await _seed_match(
+            conn, hero_arch=burn, opp_arch=tron, hero_won=True, winners=["bob", "alice", "alice"]
+        )
+        m2 = await _seed_match(
+            conn, hero_arch=burn, opp_arch=tron, hero_won=True, winners=["alice", "bob"]
+        )
+        await _seed_card_rows(
+            conn,
+            m1,
+            [
+                (1, "Bolt", True, False),
+                (2, "Bolt", True, True),
+                (2, "Rift", True, True),
+                (3, "Rift", True, True),
+                # Opponent's cards never reach the hero's list.
+                (1, "Karn", False, True),
+            ],
+        )
+        await _seed_card_rows(conn, m2, [(1, "Bolt", True, True), (2, "Rift", True, False)])
+        # Same pair but excluded: pending review, another user's, another opponent.
+        pending = await _seed_match(
+            conn, hero_arch=burn, opp_arch=tron, hero_won=True, review_status="pending_review"
+        )
+        await _seed_card_rows(conn, pending, [(1, "Ghost", True, True)])
+        theirs = await _seed_match(
+            conn, user_id=OTHER_USER, hero_arch=burn, opp_arch=tron, hero_won=True
+        )
+        await _seed_card_rows(conn, theirs, [(1, "Ghost", True, True)])
+        elsewhere = await _seed_match(conn, hero_arch=burn, opp_arch=other, hero_won=True)
+        await _seed_card_rows(conn, elsewhere, [(1, "Ghost", True, True)])
+        old = await _seed_match(
+            conn,
+            hero_arch=burn,
+            opp_arch=tron,
+            hero_won=True,
+            played_at=datetime(2026, 1, 5, tzinfo=UTC),
+        )
+        await _seed_card_rows(conn, old, [(1, "Ghost", True, True)])
+    try:
+        params = {
+            "hero_archetype_id": str(burn),
+            "opponent_archetype_id": str(tron),
+            "date_from": "2026-05-01",
+        }
+        r = await client.get("/analytics/stats/matchups/cards", params=params)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["matches"] == 2
+        cards = {c["card_name"]: c for c in body["cards"]}
+        assert set(cards) == {"Bolt", "Rift"}
+        assert (cards["Bolt"]["games"], cards["Bolt"]["wins"]) == (3, 2)
+        assert (cards["Rift"]["games"], cards["Rift"]["wins"]) == (3, 2)
+        # Rift is never in a game 1; Bolt is in both matches' game 1.
+        (rift,) = body["sideboard"]
+        assert rift["card_name"] == "Rift"
+        assert (rift["games"], rift["wins"], rift["matches"]) == (3, 2, 2)
+        # Post-board pool is m1 G2 W, m1 G3 W, m2 G2 L, all with Rift.
+        assert rift["baseline_games"] == 0 and rift["delta"] is None
+
+        # Without the date filter the January match comes in, and only it.
+        r = await client.get(
+            "/analytics/stats/matchups/cards",
+            params={"hero_archetype_id": str(burn), "opponent_archetype_id": str(tron)},
+        )
+        assert {c["card_name"] for c in r.json()["cards"]} == {"Bolt", "Rift", "Ghost"}
+    finally:
+        async with engine.begin() as conn:
+            # card_game_stats has no FK; clear it by match before the matches go.
+            await conn.execute(
+                text(
+                    "DELETE FROM analytics.card_game_stats WHERE match_id IN "
+                    "(SELECT id FROM parser.matches WHERE user_id IN (:a, :b))"
+                ),
+                {"a": USER, "b": OTHER_USER},
+            )
+            await conn.execute(
+                text("DELETE FROM parser.matches WHERE user_id IN (:a, :b)"),
+                {"a": USER, "b": OTHER_USER},
+            )
+            await conn.execute(
+                text("DELETE FROM analytics.archetypes WHERE id = ANY(:ids)"),
+                {"ids": [burn, tron, other]},
+            )

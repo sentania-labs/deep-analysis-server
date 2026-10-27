@@ -903,6 +903,121 @@ async def get_matchups(
     )
 
 
+@dataclass
+class MatchupCardItem:
+    card_name: str
+    games: int = 0
+    matches: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    low_sample: bool = True
+    cast_count: int = 0
+    preboard: BoardSplitItem = field(default_factory=BoardSplitItem)
+    postboard: BoardSplitItem = field(default_factory=BoardSplitItem)
+
+
+@dataclass
+class SideboardCardItem:
+    card_name: str
+    games: int = 0
+    matches: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    baseline_games: int = 0
+    baseline_wins: int = 0
+    baseline_win_rate: float = 0.0
+    delta: float | None = None
+    low_sample: bool = True
+
+
+@dataclass
+class MatchupCards:
+    min_sample: int = 5
+    matches: int = 0
+    cards: list[MatchupCardItem] = field(default_factory=list)
+    sideboard: list[SideboardCardItem] = field(default_factory=list)
+
+
+def _to_matchup_card(d: dict[str, Any]) -> MatchupCardItem:
+    return MatchupCardItem(
+        card_name=str(d.get("card_name") or ""),
+        games=int(d.get("games") or 0),
+        matches=int(d.get("matches") or 0),
+        wins=int(d.get("wins") or 0),
+        losses=int(d.get("losses") or 0),
+        win_rate=float(d.get("win_rate") or 0.0),
+        win_rate_low=float(d.get("win_rate_low") or 0.0),
+        win_rate_high=float(d.get("win_rate_high") or 0.0),
+        low_sample=bool(d.get("low_sample", True)),
+        cast_count=int(d.get("cast_count") or 0),
+        preboard=_to_board_split(d.get("preboard")),
+        postboard=_to_board_split(d.get("postboard")),
+    )
+
+
+def _to_sideboard_card(d: dict[str, Any]) -> SideboardCardItem:
+    delta = d.get("delta")
+    return SideboardCardItem(
+        card_name=str(d.get("card_name") or ""),
+        games=int(d.get("games") or 0),
+        matches=int(d.get("matches") or 0),
+        wins=int(d.get("wins") or 0),
+        losses=int(d.get("losses") or 0),
+        win_rate=float(d.get("win_rate") or 0.0),
+        win_rate_low=float(d.get("win_rate_low") or 0.0),
+        win_rate_high=float(d.get("win_rate_high") or 0.0),
+        baseline_games=int(d.get("baseline_games") or 0),
+        baseline_wins=int(d.get("baseline_wins") or 0),
+        baseline_win_rate=float(d.get("baseline_win_rate") or 0.0),
+        delta=float(delta) if delta is not None else None,
+        low_sample=bool(d.get("low_sample", True)),
+    )
+
+
+async def get_matchup_cards(
+    base_url: str,
+    token: str,
+    *,
+    hero_archetype_id: str,
+    opponent_archetype_id: str,
+    format_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> MatchupCards:
+    """Key cards and sideboard effectiveness for one hero x opponent pair."""
+    params: dict[str, Any] = {
+        "hero_archetype_id": hero_archetype_id,
+        "opponent_archetype_id": opponent_archetype_id,
+    }
+    if format_filter and format_filter.lower() != "all":
+        params["format"] = format_filter
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
+    resp = await request(
+        "GET",
+        f"{base_url}/analytics/stats/matchups/cards",
+        token=token,
+        params=params,
+        error_prefix="analytics GET /stats/matchups/cards ",
+        **_ERR,
+    )
+    d = resp.json()
+    return MatchupCards(
+        min_sample=int(d.get("min_sample") or 5),
+        matches=int(d.get("matches") or 0),
+        cards=[_to_matchup_card(c) for c in d.get("cards", [])],
+        sideboard=[_to_sideboard_card(c) for c in d.get("sideboard", [])],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Admin matches — system-wide match listing
 # ---------------------------------------------------------------------------

@@ -21,8 +21,11 @@ as the matrix. The cell's ``matches`` count and the split's ``games`` counts
 are different units: a best-of-three match contributes one match and two or
 three games.
 
-Follow-ups (not in this slice): key cards scoped to a matchup, sideboard
-effectiveness.
+``GET /stats/matchups/cards`` is the third slice: for one hero x opponent
+archetype pair it returns the hero's per-card results (key cards) and a
+sideboard effectiveness list (cards seen in games 2+ of a match but not in its
+game 1). Cards come from ``analytics.card_game_stats`` (hero rows only), so a
+match not yet materialized there contributes no card rows.
 """
 
 from __future__ import annotations
@@ -96,6 +99,64 @@ class MatchupCell(BaseModel):
     # presented as a result.
     preboard: BoardSplit = Field(default_factory=BoardSplit)
     postboard: BoardSplit = Field(default_factory=BoardSplit)
+
+
+class MatchupCard(BaseModel):
+    """One hero card's results over the games of a matchup it appeared in.
+
+    ``games`` counts games with a recorded winner in which the card was seen
+    (cast, played or otherwise logged); ``matches`` the distinct matches those
+    games belong to. ``cast_count`` totals casts across them.
+    """
+
+    card_name: str
+    games: int = 0
+    matches: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    low_sample: bool = True
+    cast_count: int = 0
+    preboard: BoardSplit = Field(default_factory=BoardSplit)
+    postboard: BoardSplit = Field(default_factory=BoardSplit)
+
+
+class SideboardCard(BaseModel):
+    """A card seen in games 2+ of a match whose game 1 it was not seen in.
+
+    ``games`` / ``wins`` / ``losses`` / ``win_rate`` cover those post-board
+    games. ``baseline_*`` cover the matchup's other decided post-board games,
+    the ones the card was not seen in. ``delta`` is ``win_rate`` minus
+    ``baseline_win_rate`` in percentage points, ``None`` when there is no
+    baseline game. ``low_sample`` is true when either side has fewer than
+    ``min_sample`` games.
+    """
+
+    card_name: str
+    games: int = 0
+    matches: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    baseline_games: int = 0
+    baseline_wins: int = 0
+    baseline_win_rate: float = 0.0
+    delta: float | None = None
+    low_sample: bool = True
+
+
+class MatchupCardsResponse(BaseModel):
+    min_sample: int = MATCHUP_MIN_SAMPLE
+    hero_archetype_id: uuid.UUID
+    opponent_archetype_id: uuid.UUID
+    # Matches in scope for this archetype pair (the matrix cell's match count).
+    matches: int = 0
+    cards: list[MatchupCard] = Field(default_factory=list)
+    sideboard: list[SideboardCard] = Field(default_factory=list)
 
 
 class MatchupMatrixResponse(BaseModel):
@@ -316,6 +377,199 @@ async def get_matchups(
             )
         )
     out = MatchupMatrixResponse(cells=cells, unclassified_matches=unclassified)
+    if redis_client:
+        await set_cached(redis_client, ck, out.model_dump(mode="json"))
+    return out
+
+
+async def _load_hero_card_rows(
+    db: AsyncSession,
+    match_ids: list[Any],
+) -> list[tuple[Any, int, str, bool | None, int]]:
+    """Hero ``(match_id, game_number, card_name, won, cast)`` rows for the matches."""
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT match_id, game_number, card_name, won, "cast"
+                FROM analytics.card_game_stats
+                WHERE match_id = ANY(:match_ids)
+                  AND is_local = true
+                """
+            ),
+            {"match_ids": match_ids},
+        )
+    ).all()
+    return [(r[0], int(r[1]), str(r[2]), r[3], int(r[4] or 0)) for r in rows]
+
+
+def _rate(wins: int, games: int) -> float:
+    return (wins / games) * 100.0 if games else 0.0
+
+
+def _key_cards(rows: list[tuple[Any, int, str, bool | None, int]]) -> list[MatchupCard]:
+    per_card: dict[str, dict[str, Any]] = {}
+    for match_id, game_number, card, won, cast in rows:
+        if won is None:
+            continue
+        b = per_card.setdefault(
+            card,
+            {"matches": set(), "cast": 0, "pre_w": 0, "pre_l": 0, "post_w": 0, "post_l": 0},
+        )
+        b["matches"].add(match_id)
+        b["cast"] += cast
+        side = "pre" if game_number == 1 else "post"
+        b[f"{side}_w" if won else f"{side}_l"] += 1
+    cards: list[MatchupCard] = []
+    for card, b in per_card.items():
+        wins = b["pre_w"] + b["post_w"]
+        losses = b["pre_l"] + b["post_l"]
+        games = wins + losses
+        low, high = _wilson_interval(wins, games)
+        cards.append(
+            MatchupCard(
+                card_name=card,
+                games=games,
+                matches=len(b["matches"]),
+                wins=wins,
+                losses=losses,
+                win_rate=_rate(wins, games),
+                win_rate_low=low,
+                win_rate_high=high,
+                low_sample=games < MATCHUP_MIN_SAMPLE,
+                cast_count=b["cast"],
+                preboard=_board_split(b["pre_w"], b["pre_l"]),
+                postboard=_board_split(b["post_w"], b["post_l"]),
+            )
+        )
+    cards.sort(key=lambda c: (-c.games, c.card_name.lower()))
+    return cards
+
+
+def _sideboard_cards(
+    rows: list[tuple[Any, int, str, bool | None, int]],
+    post_games: dict[tuple[Any, int], bool],
+) -> list[SideboardCard]:
+    """Cards seen post-board in a match whose game 1 they were not seen in.
+
+    ``post_games`` maps ``(match_id, game_number)`` to whether the hero won,
+    for every decided game 2 or later of the matchup; it is the pool the
+    baseline is drawn from. A card's baseline is that pool minus every post-board
+    game the card was seen in (sided in or not), so the two sides never overlap.
+    """
+    seen_g1: set[tuple[Any, str]] = {(m, c) for m, gn, c, _w, _cast in rows if gn == 1}
+    seen_post: dict[str, set[tuple[Any, int]]] = {}
+    sided: dict[str, dict[tuple[Any, int], bool]] = {}
+    for match_id, game_number, card, won, _cast in rows:
+        if game_number < 2 or won is None:
+            continue
+        key = (match_id, game_number)
+        seen_post.setdefault(card, set()).add(key)
+        if (match_id, card) not in seen_g1:
+            sided.setdefault(card, {})[key] = bool(won)
+    out: list[SideboardCard] = []
+    for card, games_set in sided.items():
+        wins = sum(1 for v in games_set.values() if v)
+        games = len(games_set)
+        baseline = [v for k, v in post_games.items() if k not in seen_post[card]]
+        b_games = len(baseline)
+        b_wins = sum(1 for v in baseline if v)
+        low, high = _wilson_interval(wins, games)
+        out.append(
+            SideboardCard(
+                card_name=card,
+                games=games,
+                matches=len({m for m, _gn in games_set}),
+                wins=wins,
+                losses=games - wins,
+                win_rate=_rate(wins, games),
+                win_rate_low=low,
+                win_rate_high=high,
+                baseline_games=b_games,
+                baseline_wins=b_wins,
+                baseline_win_rate=_rate(b_wins, b_games),
+                delta=(_rate(wins, games) - _rate(b_wins, b_games)) if b_games else None,
+                low_sample=games < MATCHUP_MIN_SAMPLE or b_games < MATCHUP_MIN_SAMPLE,
+            )
+        )
+    out.sort(key=lambda c: (-c.games, c.card_name.lower()))
+    return out
+
+
+@router.get("/matchups/cards", response_model=MatchupCardsResponse)
+async def get_matchup_cards(
+    hero_archetype_id: Annotated[uuid.UUID, Query()],
+    opponent_archetype_id: Annotated[uuid.UUID, Query()],
+    user: AuthenticatedUser = Depends(require_user),
+    db: AsyncSession = Depends(get_session),
+    format: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+) -> MatchupCardsResponse:
+    """Key cards and sideboard effectiveness for one hero x opponent pair.
+
+    Matches are scoped exactly like ``/stats/matchups`` (caller's matches,
+    ``format`` / ``date_from`` / ``date_to``, pending-review excluded) and
+    narrowed to the archetype pair. ``cards`` lists the hero's cards by games
+    seen; ``sideboard`` lists cards seen in games 2+ of a match but not in its
+    game 1, with the win-rate delta against the matchup's other post-board
+    games.
+    """
+    format_filter = format if format and format.lower() != "all" else None
+
+    redis_client = await _get_redis_or_none()
+    ck = cache_key(
+        user.user_id,
+        "matchup-cards",
+        format=format_filter.lower() if format_filter else None,
+        date_from=date_from,
+        date_to=date_to,
+        hero_archetype_id=hero_archetype_id,
+        opponent_archetype_id=opponent_archetype_id,
+    )
+    if redis_client:
+        cached = await get_cached(redis_client, ck, endpoint="matchup-cards")
+        if isinstance(cached, dict):
+            return MatchupCardsResponse(**cached)
+
+    matches = await _load_user_matches(
+        db,
+        user.user_id,
+        date_from=date_from,
+        date_to=date_to,
+        format_=format_filter,
+    )
+    archetypes = await _load_match_archetypes(db, [m["id"] for m in matches]) if matches else {}
+    in_scope = []
+    for m in matches:
+        hero, opp = archetypes.get(m["id"], (None, None))
+        if hero and opp and hero[0] == hero_archetype_id and opp[0] == opponent_archetype_id:
+            in_scope.append(m)
+    scope_ids = [m["id"] for m in in_scope]
+
+    cards: list[MatchupCard] = []
+    sideboard: list[SideboardCard] = []
+    if scope_ids:
+        rows = await _load_hero_card_rows(db, scope_ids)
+        game_winners = await _load_game_winners(db, scope_ids)
+        post_games: dict[tuple[Any, int], bool] = {}
+        for m in in_scope:
+            hero_name = m.get("hero_player_name") or (m["players"][0] if m["players"] else None)
+            if hero_name is None:
+                continue
+            for game_number, winner in game_winners.get(m["id"], []):
+                if game_number >= 2:
+                    post_games[(m["id"], game_number)] = winner.lower() == hero_name.lower()
+        cards = _key_cards(rows)
+        sideboard = _sideboard_cards(rows, post_games)
+
+    out = MatchupCardsResponse(
+        hero_archetype_id=hero_archetype_id,
+        opponent_archetype_id=opponent_archetype_id,
+        matches=len(in_scope),
+        cards=cards,
+        sideboard=sideboard,
+    )
     if redis_client:
         await set_cached(redis_client, ck, out.model_dump(mode="json"))
     return out

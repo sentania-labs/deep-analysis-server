@@ -45,7 +45,7 @@ The core product value — per-user performance breakdowns that answer "what sho
   - Existing format and date range filters apply to all views
   - Read-only API surface so the AI add-on can query
 - **Dependencies:** Archetype detection (shipped), date filtering (shipped), card analytics engine (shipped)
-- **Status:** In progress — #129 first slice: hero x opponent archetype matrix API and `/matchups` table; second slice: pre-board/post-board split per matchup and links to the supporting match list. Remaining: key cards per matchup, sideboard effectiveness.
+- **Status:** Complete, awaiting release (#129): hero x opponent archetype matrix API and `/matchups` table; pre-board/post-board split per matchup with links to the supporting match list; key cards and sideboard effectiveness per matchup.
 
 ### 2. BNR epoch awareness
 
