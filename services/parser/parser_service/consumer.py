@@ -396,7 +396,9 @@ class ParserConsumer:
             self._retry_state.pop(key, None)
             return None
         except (ObjectStorageError, OSError) as exc:
-            _log.exception("failed to read raw object sha=%s", sha256)
+            _log.warning(
+                "failed to read raw object sha=%s user_id=%s error=%s", sha256, user_id, exc
+            )
             await self._next_attempt(sha256, user_id, exc, record)
             return None
         self._retry_state.pop(key, None)

@@ -302,26 +302,35 @@ async def test_window_exhausted_logs_error_and_counts_without_a_row(
             AsyncMock(side_effect=lambda *a, **kw: _store_error()),
         ),
         patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
-        caplog.at_level(logging.ERROR, logger="parser.consumer"),
+        caplog.at_level(logging.WARNING, logger="parser.consumer"),
     ):
         await consumer.handle_event(sha, 7)
-        caplog.clear()
+        clock.advance(_CAP)
+        await consumer.handle_event(sha, 7)
         clock.advance(_WINDOW)
         assert await consumer.handle_event(sha, 7) is None
 
     assert consumer._retry_state == {}, "the give-up clears the retry table"
     assert session.executed == [], "the give-up must not write any row"
     assert session.committed == 0
-    gave_up = [r for r in caplog.records if "window exhausted" in r.getMessage()]
-    assert len(gave_up) == 1
-    assert gave_up[0].levelno == logging.ERROR
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1, "intermediate failures are WARNING, only the give-up is ERROR"
+    gave_up = errors
+    assert "window exhausted" in gave_up[0].getMessage()
+    assert (
+        sum(
+            r.levelno == logging.WARNING and "failed to read" in r.getMessage()
+            for r in caplog.records
+        )
+        == 3
+    )
     message = gave_up[0].getMessage()
     assert f"sha={sha}" in message
-    assert f"outage_seconds={_WINDOW:.0f}" in message
+    assert f"outage_seconds={_WINDOW + _CAP:.0f}" in message
     assert _counter(GIVEUPS_COUNTER) - giveups_before == 1, "one give-up per file"
-    # The boundary call is the give-up itself, so exactly one deferred
-    # attempt was counted for this file.
-    assert _counter(RETRIES_COUNTER) - retries_before == 1
+    # The boundary call is the give-up itself, so only the two earlier
+    # failures were counted as deferred attempts.
+    assert _counter(RETRIES_COUNTER) - retries_before == 2
 
 
 @pytest.mark.asyncio
