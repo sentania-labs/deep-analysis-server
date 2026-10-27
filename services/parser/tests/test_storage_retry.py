@@ -216,7 +216,7 @@ async def test_repeated_failures_back_off_exponentially_to_the_cap(
     ):
         for _ in range(attempts):
             await consumer.handle_event(sha, 1)
-            record = consumer._retry_state[sha]
+            record = consumer._retry_state[(sha, 1)]
             delays.append(record.due_at - clock.now)
             clock.advance(advance)
 
@@ -237,12 +237,11 @@ async def test_huge_attempt_counts_keep_the_delay_finite(prior_attempts: int) ->
     clock = _Clock()
     consumer = _make_consumer(clock=clock)
     sha = "4" * 64
-    consumer._retry_state[sha] = _RetryRecord(
+    consumer._retry_state[(sha, 1)] = _RetryRecord(
         first_failure=0.0,
         attempts=prior_attempts,
         due_at=0.0,
         kind="match-log",
-        user_id=1,
     )
 
     with (
@@ -254,7 +253,7 @@ async def test_huge_attempt_counts_keep_the_delay_finite(prior_attempts: int) ->
     ):
         await consumer.handle_event(sha, 1)
 
-    record = consumer._retry_state[sha]
+    record = consumer._retry_state[(sha, 1)]
     assert record.attempts == prior_attempts + 1
     delay = record.due_at - clock.now
     assert delay == delay, "the jittered delay must be a finite float"
@@ -278,7 +277,7 @@ async def test_backoff_never_exceeds_the_cap_across_many_failures() -> None:
     ):
         for _ in range(12):
             await consumer.handle_event(sha, 1)
-            record = consumer._retry_state[sha]
+            record = consumer._retry_state[(sha, 1)]
             assert record.due_at - clock.now <= _CAP + 1e-9
             clock.advance(_CAP)
 
@@ -326,8 +325,8 @@ async def test_window_exhausted_lands_in_holding_pen_and_counts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upsert_targets_the_sha_user_identity() -> None:
-    """The hold row uses the same identity the parse would have used."""
+async def test_same_content_for_two_users_is_retried_and_held_per_user() -> None:
+    """Retry state follows the (sha, user) parse identity, not the sha alone."""
     clock = _Clock()
     session = _FakeSession()
     consumer = _make_consumer(session, clock)
@@ -341,13 +340,14 @@ async def test_upsert_targets_the_sha_user_identity() -> None:
         patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
     ):
         await consumer.handle_event(sha, 3)
+        await consumer.handle_event(sha, 4)
+        assert set(consumer._retry_state) == {(sha, 3), (sha, 4)}
         clock.advance(_WINDOW)
         await consumer.handle_event(sha, 3)
+        await consumer.handle_event(sha, 4)
 
-    stmt = session.executed[0][0].text
-    assert "parser.matches" in stmt
-    assert "uq_matches_sha256_user" in stmt, "must upsert on the parse identity"
-    assert "'pending_review'" in stmt
+    assert consumer._retry_state == {}
+    assert sorted(params["user_id"] for _s, params in session.executed) == [3, 4]
 
 
 @pytest.mark.asyncio
@@ -480,7 +480,7 @@ async def test_retry_is_not_re_attempted_before_its_due_time() -> None:
         patch("parser_service.consumer.link_deck_to_match", AsyncMock(return_value=None)),
     ):
         await consumer.handle_event(sha, 1)
-        due = consumer._retry_state[sha].due_at
+        due = consumer._retry_state[(sha, 1)].due_at
         assert due >= clock.now
         # Same clock value: not due yet, so no second store call.
         assert await consumer.handle_event(sha, 1) is None
@@ -539,7 +539,7 @@ async def test_run_loop_drains_due_retries_between_messages() -> None:
     consumer._resolve_hero = AsyncMock(return_value="alice")
 
     def _read(*_a: object, **_kw: object) -> bytes:
-        record = consumer._retry_state[sha]
+        record = consumer._retry_state[(sha, 1)]
         if record.attempts == 0:
             raise ObjectStorageError("blip")
         return b"raw"

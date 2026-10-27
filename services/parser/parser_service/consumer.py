@@ -88,7 +88,6 @@ class _RetryRecord:
     attempts: int
     due_at: float
     kind: str
-    user_id: int
     agent_classification: str | None = None
     file_mtime: float | None = None
 
@@ -116,9 +115,10 @@ class ParserConsumer:
         # Injectable clock (seconds) so tests can advance the retry window
         # without real waiting. Monotonic: the window is a duration.
         self._clock = clock or time.monotonic
-        # sha256 -> pending retry. Process-local; see the module docstring
-        # for the restart limitation.
-        self._retry_state: dict[str, _RetryRecord] = {}
+        # (sha256, user_id) -> pending retry, the same identity a parse
+        # persists under. Process-local; see the module docstring for the
+        # restart limitation.
+        self._retry_state: dict[tuple[str, int], _RetryRecord] = {}
 
     def stop(self) -> None:
         """Signal the consumer to stop on the next iteration."""
@@ -249,39 +249,51 @@ class ParserConsumer:
         """
         now = self._clock()
         due = sorted(
-            (record.due_at, sha)
-            for sha, record in self._retry_state.items()
+            (record.due_at, key)
+            for key, record in self._retry_state.items()
             if record.due_at <= now
         )
-        for _due_at, sha in due:
-            record = self._retry_state.get(sha)
+        for _due_at, key in due:
+            sha, user_id = key
+            record = self._retry_state.get(key)
             if record is None:  # resolved by an earlier attempt in this pass
                 continue
             try:
                 if record.kind == "decklist":
                     done = await self.handle_decklist_event(
                         sha,
-                        record.user_id,
+                        user_id,
                         file_mtime=record.file_mtime,
                     )
                 else:
                     parsed = await self.handle_event(
                         sha,
-                        record.user_id,
+                        user_id,
                         record.agent_classification,
                     )
                     done = parsed is not None
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 — the backfill scan picks the file up again
-                _log.exception("storage retry failed unexpectedly sha=%s", sha)
-                self._retry_state.pop(sha, None)
+                _log.exception("storage retry failed unexpectedly sha=%s user_id=%s", sha, user_id)
+                self._retry_state.pop(key, None)
                 continue
             if done:
-                self._retry_state.pop(sha, None)
-                _log.info("storage retry succeeded sha=%s attempts=%d", sha, record.attempts)
+                self._retry_state.pop(key, None)
+                _log.info(
+                    "storage retry succeeded sha=%s user_id=%s attempts=%d",
+                    sha,
+                    user_id,
+                    record.attempts,
+                )
 
-    async def _next_attempt(self, sha256: str, exc: Exception, record: _RetryRecord) -> None:
+    async def _next_attempt(
+        self,
+        sha256: str,
+        user_id: int,
+        exc: Exception,
+        record: _RetryRecord,
+    ) -> None:
         """Advance the retry schedule for one file.
 
         Exponential with full jitter and a capped interval:
@@ -294,7 +306,7 @@ class ParserConsumer:
         settings = get_parser_settings()
         now = self._clock()
         if now - record.first_failure >= settings.storage_retry_window_seconds:
-            await self._give_up(sha256, exc)
+            await self._give_up(sha256, user_id, exc)
             return
         record.attempts += 1
         exponent = min(record.attempts - 1, _MAX_BACKOFF_EXPONENT)
@@ -305,29 +317,33 @@ class ParserConsumer:
         record.due_at = now + raw * random.random()
         _parse_retries_total.inc()
         _log.info(
-            "storage retry deferred sha=%s attempt=%d delay=%.3fs window_remaining=%.0fs",
+            "storage retry deferred sha=%s user_id=%s attempt=%d "
+            "delay=%.3fs window_remaining=%.0fs",
             sha256,
+            user_id,
             record.attempts,
             record.due_at - now,
             settings.storage_retry_window_seconds - (now - record.first_failure),
         )
 
-    async def _give_up(self, sha256: str, exc: Exception) -> None:
+    async def _give_up(self, sha256: str, user_id: int, exc: Exception) -> None:
         """Fail one file visibly: holding-pen entry plus metrics counter."""
         _parse_giveups_total.inc()
-        record = self._retry_state.pop(sha256, None)
+        record = self._retry_state.pop((sha256, user_id), None)
         _log.warning(
-            "storage retry window exhausted sha=%s attempts=%s error=%s",
+            "storage retry window exhausted sha=%s user_id=%s attempts=%s error=%s",
             sha256,
+            user_id,
             record.attempts if record is not None else 0,
             exc,
         )
         if record is not None and record.kind == "match-log":
-            await self._write_storage_outage_hold(sha256, exc, record)
+            await self._write_storage_outage_hold(sha256, user_id, exc, record)
 
     async def _write_storage_outage_hold(
         self,
         sha256: str,
+        user_id: int,
         exc: Exception,
         record: _RetryRecord,
     ) -> None:
@@ -357,7 +373,7 @@ class ParserConsumer:
                     {
                         "id": uuid.uuid4(),
                         "sha": sha256,
-                        "user_id": int(record.user_id),
+                        "user_id": int(user_id),
                         "now": now,
                         "reason": reason,
                     },
@@ -380,23 +396,23 @@ class ParserConsumer:
         :meth:`_drain_due_retries` on a later loop turn, so this never
         sits in an inline sleep and other files keep flowing.
         """
-        record = self._retry_state.get(sha256)
+        key = (sha256, user_id)
+        record = self._retry_state.get(key)
         if record is None:
             record = _RetryRecord(
                 first_failure=self._clock(),
                 attempts=0,
                 due_at=self._clock(),
                 kind=kind,
-                user_id=user_id,
                 agent_classification=agent_classification,
                 file_mtime=file_mtime,
             )
-            self._retry_state[sha256] = record
+            self._retry_state[key] = record
         else:
-            # Refresh the call parameters — the newest event for this sha
-            # is the authoritative one, and the attempt count stays put.
+            # Refresh the call parameters — the newest event for this
+            # (sha, user) is the authoritative one, and the attempt count
+            # stays put.
             record.kind = kind
-            record.user_id = user_id
             record.agent_classification = agent_classification
             record.file_mtime = file_mtime
             if record.due_at > self._clock():
@@ -410,17 +426,17 @@ class ParserConsumer:
             )
         except RawFileNotFoundError:
             _log.warning("raw object missing for sha=%s; skipping", sha256)
-            self._retry_state.pop(sha256, None)
+            self._retry_state.pop(key, None)
             return None
         except RawFileTooLargeError:
             _log.warning("raw object exceeds size ceiling sha=%s; skipping", sha256)
-            self._retry_state.pop(sha256, None)
+            self._retry_state.pop(key, None)
             return None
         except (ObjectStorageError, OSError) as exc:
             _log.exception("failed to read raw object sha=%s", sha256)
-            await self._next_attempt(sha256, exc, record)
+            await self._next_attempt(sha256, user_id, exc, record)
             return None
-        self._retry_state.pop(sha256, None)
+        self._retry_state.pop(key, None)
         return content
 
     async def handle_event(
