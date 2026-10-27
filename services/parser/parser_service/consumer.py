@@ -186,6 +186,7 @@ class ParserConsumer:
             except Exception:  # noqa: BLE001 — keep draining on transient errors
                 _log.exception("redis pubsub get_message failed")
                 await asyncio.sleep(1.0)
+                await self._drain_due_retries()
                 continue
             if msg is None:
                 # No message this tick — a good moment to run retries
@@ -252,19 +253,26 @@ class ParserConsumer:
             record = self._retry_state.get(sha)
             if record is None:  # resolved by an earlier attempt in this pass
                 continue
-            if record.kind == "decklist":
-                done = await self.handle_decklist_event(
-                    sha,
-                    record.user_id,
-                    file_mtime=record.file_mtime,
-                )
-            else:
-                parsed = await self.handle_event(
-                    sha,
-                    record.user_id,
-                    record.agent_classification,
-                )
-                done = parsed is not None
+            try:
+                if record.kind == "decklist":
+                    done = await self.handle_decklist_event(
+                        sha,
+                        record.user_id,
+                        file_mtime=record.file_mtime,
+                    )
+                else:
+                    parsed = await self.handle_event(
+                        sha,
+                        record.user_id,
+                        record.agent_classification,
+                    )
+                    done = parsed is not None
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — the backfill scan picks the file up again
+                _log.exception("storage retry failed unexpectedly sha=%s", sha)
+                self._retry_state.pop(sha, None)
+                continue
             if done:
                 self._retry_state.pop(sha, None)
                 _log.info("storage retry succeeded sha=%s attempts=%d", sha, record.attempts)
@@ -307,26 +315,25 @@ class ParserConsumer:
             record.attempts if record is not None else 0,
             exc,
         )
-        await self._write_storage_outage_hold(sha256, exc, record)
+        if record is not None and record.kind == "match-log":
+            await self._write_storage_outage_hold(sha256, exc, record)
 
     async def _write_storage_outage_hold(
         self,
         sha256: str,
         exc: Exception,
-        record: _RetryRecord | None,
+        record: _RetryRecord,
     ) -> None:
         """Drop a holding-pen row for a file that ran out its window.
 
         ``parser.matches`` is the app's existing review/holding-pen
         surface (``review_status`` + ``review_reason``), so the give-up
         lands there under the same ``(sha256, user_id)`` identity the
-        parse would have used. The upsert keeps it idempotent when the
-        backfill scan re-parses the file later.
+        parse would have used. An existing row for that identity (a
+        parsed match, an admin verdict) is left untouched.
         """
         now = datetime.now(UTC)
-        attempts = record.attempts if record is not None else 0
-        user_id = int(record.user_id) if record is not None else 0
-        reason = f"storage outage: object unreadable after {attempts} attempts ({exc})"
+        reason = f"storage outage: object unreadable after {record.attempts} attempts ({exc})"
         try:
             async with self._sessionmaker() as session:
                 await session.execute(
@@ -337,16 +344,13 @@ class ParserConsumer:
                              review_status, review_reason)
                         VALUES
                             (:id, :sha, :user_id, 0, :now, 'pending_review', :reason)
-                        ON CONFLICT ON CONSTRAINT uq_matches_sha256_user DO UPDATE
-                           SET review_status = 'pending_review',
-                               review_reason = EXCLUDED.review_reason,
-                               parsed_at = EXCLUDED.parsed_at
+                        ON CONFLICT ON CONSTRAINT uq_matches_sha256_user DO NOTHING
                         """
                     ),
                     {
                         "id": uuid.uuid4(),
                         "sha": sha256,
-                        "user_id": user_id,
+                        "user_id": int(record.user_id),
                         "now": now,
                         "reason": reason,
                     },

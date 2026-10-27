@@ -12,6 +12,7 @@ Everything here runs on an injected clock, so no test waits in real time.
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -315,6 +316,57 @@ async def test_upsert_targets_the_sha_user_identity() -> None:
     assert "'pending_review'" in stmt
 
 
+@pytest.mark.asyncio
+async def test_decklist_give_up_counts_but_writes_no_match_row() -> None:
+    """A decklist sha is not a match: no phantom holding-pen row."""
+    clock = _Clock()
+    session = _FakeSession()
+    consumer = _make_consumer(session, clock)
+    sha = "9" * 64
+    giveups_before = _counter(GIVEUPS_COUNTER)
+
+    with (
+        patch(
+            "parser_service.consumer.read_raw",
+            AsyncMock(side_effect=lambda *a, **kw: _store_error()),
+        ),
+        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+    ):
+        assert await consumer.handle_decklist_event(sha, 4) is False
+        clock.advance(_WINDOW)
+        assert await consumer.handle_decklist_event(sha, 4) is False
+
+    assert consumer._retry_state == {}
+    assert session.executed == [], "decklist give-up must not touch parser.matches"
+    assert _counter(GIVEUPS_COUNTER) - giveups_before == 1
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_in_a_retry_does_not_escape_the_drain() -> None:
+    """A retried parse that blows up is logged and dropped, not fatal."""
+    clock = _Clock()
+    consumer = _make_consumer(_FakeSession(), clock)
+    sha = "8" * 64
+    calls = {"n": 0}
+
+    def _read(*_a: object, **_kw: object) -> bytes:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ObjectStorageError("blip")
+        raise RuntimeError("boom")
+
+    with (
+        patch("parser_service.consumer.read_raw", AsyncMock(side_effect=_read)),
+        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+    ):
+        await consumer.handle_event(sha, 1)
+        clock.advance(_BASE * 10)
+        await consumer._drain_due_retries()
+
+    assert consumer._retry_state == {}, "the failed retry is dropped for the backfill scan"
+    assert calls["n"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Non-transient errors keep their existing handling
 # ---------------------------------------------------------------------------
@@ -502,3 +554,47 @@ async def test_hold_row_written_to_the_database(parser_session) -> None:
     assert rows[0].review_status == "pending_review"
     assert rows[0].review_reason is not None
     assert rows[0].review_reason.startswith("storage outage:")
+
+
+@pytest.mark.asyncio
+async def test_hold_row_never_overwrites_an_existing_match(parser_session) -> None:
+    """A give-up on a sha that already has a row leaves that row untouched."""
+    from parser_service.models import Match
+    from sqlalchemy import select
+
+    clock = _Clock()
+    session = parser_session
+    sha = "4" * 64
+    session.add(
+        Match(
+            id=uuid.uuid4(),
+            sha256=sha,
+            user_id=12,
+            game_count=2,
+            review_status="rejected",
+            review_reason="admin said no",
+        )
+    )
+    await session.commit()
+    consumer = ParserConsumer(
+        redis_client=MagicMock(),
+        sessionmaker=lambda: session,
+        store=MagicMock(),
+        clock=clock,
+    )
+
+    with (
+        patch(
+            "parser_service.consumer.read_raw",
+            AsyncMock(side_effect=lambda *a, **kw: _store_error()),
+        ),
+        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+    ):
+        await consumer.handle_event(sha, 12)
+        clock.advance(_WINDOW)
+        await consumer.handle_event(sha, 12)
+
+    row = (await session.execute(select(Match).where(Match.sha256 == sha))).scalar_one()
+    assert row.review_status == "rejected"
+    assert row.review_reason == "admin said no"
+    assert row.game_count == 2
