@@ -40,8 +40,8 @@ class ParserSettings(S3StorageSettings):
     backfill_batch_size: int = 100
     # --- Transient object-store retry window (#158) -----------------------
     # How long a file keeps being retried after its first storage failure.
-    # Past this the file fails visibly: a holding-pen entry with a
-    # storage-outage reason plus a counter on the metrics endpoint.
+    # Past this the file fails visibly: an ERROR log line plus a counter
+    # on the metrics endpoint.
     # Default 24 hours.
     storage_retry_window_seconds: int = 86400
     # Exponential-backoff base (delay = base * 2**attempt, then jitter).

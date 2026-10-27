@@ -4,15 +4,15 @@
 return, leaving only a log line behind. It now keeps a per-file retry
 schedule (capped, jittered exponential backoff) for a bounded window
 from the first failure, and only after that window does the file fail
-visibly: a holding-pen row with a storage-outage reason plus a counter
-on the metrics endpoint.
+visibly: an ERROR log line naming the file and the outage duration plus
+a counter on the metrics endpoint, with no row written.
 
 Everything here runs on an injected clock, so no test waits in real time.
 """
 
 from __future__ import annotations
 
-import uuid
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -129,11 +129,6 @@ def _counter(name: str) -> float:
     value = REGISTRY.get_sample_value(name)
     assert value is not None, f"{name} is not registered"
     return value
-
-
-def _stmt_text(stmt: Any) -> str:
-    """The SQL string of a ``text()`` clause or a plain string."""
-    return getattr(stmt, "text", stmt)
 
 
 def _store_error() -> None:
@@ -285,13 +280,15 @@ async def test_backoff_never_exceeds_the_cap_across_many_failures() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Window exhausted → holding pen + give-up counter
+# 3. Window exhausted → ERROR log + give-up counter, no row
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_window_exhausted_lands_in_holding_pen_and_counts() -> None:
-    """Past the window the file gets a ``pending_review`` row and one give-up."""
+async def test_window_exhausted_logs_error_and_counts_without_a_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Past the window the file gets one ERROR log and one give-up, no DB row."""
     clock = _Clock()
     session = _FakeSession()
     consumer = _make_consumer(session, clock)
@@ -305,19 +302,22 @@ async def test_window_exhausted_lands_in_holding_pen_and_counts() -> None:
             AsyncMock(side_effect=lambda *a, **kw: _store_error()),
         ),
         patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+        caplog.at_level(logging.ERROR, logger="parser.consumer"),
     ):
         await consumer.handle_event(sha, 7)
+        caplog.clear()
         clock.advance(_WINDOW)
         assert await consumer.handle_event(sha, 7) is None
 
     assert consumer._retry_state == {}, "the give-up clears the retry table"
-    holds = [(_stmt_text(s), p) for s, p in session.executed]
-    assert holds, "the give-up must write a holding-pen row"
-    _stmt, params = holds[-1]
-    assert params["sha"] == sha
-    assert params["user_id"] == 7
-    assert params["reason"].startswith("storage outage:")
-    assert session.committed == 1
+    assert session.executed == [], "the give-up must not write any row"
+    assert session.committed == 0
+    gave_up = [r for r in caplog.records if "window exhausted" in r.getMessage()]
+    assert len(gave_up) == 1
+    assert gave_up[0].levelno == logging.ERROR
+    message = gave_up[0].getMessage()
+    assert f"sha={sha}" in message
+    assert f"outage_seconds={_WINDOW:.0f}" in message
     assert _counter(GIVEUPS_COUNTER) - giveups_before == 1, "one give-up per file"
     # The boundary call is the give-up itself, so exactly one deferred
     # attempt was counted for this file.
@@ -325,12 +325,12 @@ async def test_window_exhausted_lands_in_holding_pen_and_counts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_same_content_for_two_users_is_retried_and_held_per_user() -> None:
+async def test_same_content_for_two_users_is_retried_and_failed_per_user() -> None:
     """Retry state follows the (sha, user) parse identity, not the sha alone."""
     clock = _Clock()
-    session = _FakeSession()
-    consumer = _make_consumer(session, clock)
+    consumer = _make_consumer(_FakeSession(), clock)
     sha = "e" * 64
+    giveups_before = _counter(GIVEUPS_COUNTER)
 
     with (
         patch(
@@ -347,12 +347,14 @@ async def test_same_content_for_two_users_is_retried_and_held_per_user() -> None
         await consumer.handle_event(sha, 4)
 
     assert consumer._retry_state == {}
-    assert sorted(params["user_id"] for _s, params in session.executed) == [3, 4]
+    assert _counter(GIVEUPS_COUNTER) - giveups_before == 2
 
 
 @pytest.mark.asyncio
-async def test_decklist_give_up_counts_but_writes_no_match_row() -> None:
-    """A decklist sha is not a match: no phantom holding-pen row."""
+async def test_decklist_give_up_counts_and_logs_without_a_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A decklist give-up is counted and logged like a match log, with no row."""
     clock = _Clock()
     session = _FakeSession()
     consumer = _make_consumer(session, clock)
@@ -365,13 +367,20 @@ async def test_decklist_give_up_counts_but_writes_no_match_row() -> None:
             AsyncMock(side_effect=lambda *a, **kw: _store_error()),
         ),
         patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
+        caplog.at_level(logging.ERROR, logger="parser.consumer"),
     ):
         assert await consumer.handle_decklist_event(sha, 4) is False
         clock.advance(_WINDOW)
         assert await consumer.handle_decklist_event(sha, 4) is False
 
     assert consumer._retry_state == {}
-    assert session.executed == [], "decklist give-up must not touch parser.matches"
+    assert session.executed == [], "a give-up must not touch the database"
+    assert any(
+        r.levelno == logging.ERROR
+        and "window exhausted" in r.getMessage()
+        and sha in r.getMessage()
+        for r in caplog.records
+    )
     assert _counter(GIVEUPS_COUNTER) - giveups_before == 1
 
 
@@ -554,81 +563,3 @@ async def test_run_loop_drains_due_retries_between_messages() -> None:
 
     assert consumer._retry_state == {}, "the loop resolved the deferred file"
     assert parser.parse.call_count == 1, "exactly one parse for one file"
-
-
-@pytest.mark.asyncio
-async def test_hold_row_written_to_the_database(parser_session) -> None:
-    """Against a real Postgres the give-up row is readable in the pen."""
-    clock = _Clock()
-    session = parser_session
-    consumer = ParserConsumer(
-        redis_client=MagicMock(),
-        sessionmaker=lambda: session,
-        store=MagicMock(),
-        clock=clock,
-    )
-    sha = "3" * 64
-
-    with (
-        patch(
-            "parser_service.consumer.read_raw",
-            AsyncMock(side_effect=lambda *a, **kw: _store_error()),
-        ),
-        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
-    ):
-        await consumer.handle_event(sha, 11)
-        clock.advance(_WINDOW)
-        await consumer.handle_event(sha, 11)
-
-    from parser_service.models import Match
-    from sqlalchemy import select
-
-    rows = (await parser_session.execute(select(Match).where(Match.sha256 == sha))).scalars().all()
-    assert len(rows) == 1, "the give-up is one row per (sha256, user_id)"
-    assert rows[0].review_status == "pending_review"
-    assert rows[0].review_reason is not None
-    assert rows[0].review_reason.startswith("storage outage:")
-
-
-@pytest.mark.asyncio
-async def test_hold_row_never_overwrites_an_existing_match(parser_session) -> None:
-    """A give-up on a sha that already has a row leaves that row untouched."""
-    from parser_service.models import Match
-    from sqlalchemy import select
-
-    clock = _Clock()
-    session = parser_session
-    sha = "4" * 64
-    session.add(
-        Match(
-            id=uuid.uuid4(),
-            sha256=sha,
-            user_id=12,
-            game_count=2,
-            review_status="rejected",
-            review_reason="admin said no",
-        )
-    )
-    await session.commit()
-    consumer = ParserConsumer(
-        redis_client=MagicMock(),
-        sessionmaker=lambda: session,
-        store=MagicMock(),
-        clock=clock,
-    )
-
-    with (
-        patch(
-            "parser_service.consumer.read_raw",
-            AsyncMock(side_effect=lambda *a, **kw: _store_error()),
-        ),
-        patch("parser_service.consumer.get_parser_settings", return_value=_settings()),
-    ):
-        await consumer.handle_event(sha, 12)
-        clock.advance(_WINDOW)
-        await consumer.handle_event(sha, 12)
-
-    row = (await session.execute(select(Match).where(Match.sha256 == sha))).scalar_one()
-    assert row.review_status == "rejected"
-    assert row.review_reason == "admin said no"
-    assert row.game_count == 2

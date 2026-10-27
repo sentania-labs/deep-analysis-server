@@ -199,10 +199,11 @@ error. It retries with capped, jittered exponential backoff for
 file's first failure, with the per-attempt delay bounded by
 `DA_STORAGE_RETRY_BASE_DELAY_SECONDS` (1) and
 `DA_STORAGE_RETRY_MAX_DELAY_SECONDS` (60). A file that outlasts the window
-lands in the review holding pen (`pending_review` in `parser.matches`, with
-a storage-outage `review_reason`) and increments
-`parser_storage_giveups_total` on the parser metrics port
-(`DA_METRICS_PORT`); `parser_storage_retries_total` counts deferred
+is logged at ERROR (naming the file's sha256 and the outage duration) and
+counted by `parser_storage_giveups_total` on the parser metrics port
+(`DA_METRICS_PORT`), for match logs and decklists alike. No holding-pen row
+is written, and the file stays unparsed for the backfill scan to pick up once
+the store is back. `parser_storage_retries_total` counts deferred
 attempts. The retry queue is process-local, so a parser restart restarts the
 window; the backfill scan still picks up any file with no row. A missing or
 oversized object is logged and skipped without a retry.

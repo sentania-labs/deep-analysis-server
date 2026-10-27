@@ -19,10 +19,12 @@ API surface stabilizes.
   settings: `DA_STORAGE_RETRY_WINDOW_SECONDS` (default 86400, i.e. 24 hours),
   `DA_STORAGE_RETRY_BASE_DELAY_SECONDS` (1) and
   `DA_STORAGE_RETRY_MAX_DELAY_SECONDS` (60). A file that runs out its window
-  fails visibly: a `pending_review` holding-pen row in `parser.matches` whose
-  `review_reason` names the storage outage, plus two counters on the metrics
-  port — `parser_storage_retries_total` (deferred attempts) and
-  `parser_storage_giveups_total` (files that ran out their window). The retry
+  fails visibly: it is logged at ERROR with its sha256 and the outage
+  duration, and counted (match logs and decklists alike) by
+  `parser_storage_giveups_total`; no holding-pen row is written and the
+  backfill scan parses the file once storage recovers.
+  `parser_storage_retries_total` counts deferred attempts. Both counters are on
+  the metrics port. The retry
   queue is process-local, so a restart restarts the window for in-flight
   files; the durable `parser.*` rows and the backfill scan remain the source
   of truth. Non-transient reads keep their previous handling: a missing object

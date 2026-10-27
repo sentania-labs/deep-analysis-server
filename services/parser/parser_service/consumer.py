@@ -16,9 +16,10 @@ jittered exponential backoff instead of a silent skip. Pending retries
 live in a due-time table (:attr:`ParserConsumer._retry_state`) that the
 message loop walks between pub/sub polls, so no single file holds the
 loop inside an inline sleep while other files wait. Once the window from
-a file's first failure runs out, that file fails visibly: a holding-pen
-entry carrying a storage-outage reason, plus a counter on the metrics
-endpoint.
+a file's first failure runs out, that file fails visibly: an ERROR log
+line naming the file and the outage duration, plus a counter on the
+metrics endpoint. No row is written; the backfill scan parses the file
+once the store is back.
 
 Known limitation: the first-failure stamp is process-local, so a restart
 resets the window for in-flight files. Parsed data is unaffected — the
@@ -34,7 +35,6 @@ import json
 import logging
 import random
 import time
-import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -306,7 +306,7 @@ class ParserConsumer:
         settings = get_parser_settings()
         now = self._clock()
         if now - record.first_failure >= settings.storage_retry_window_seconds:
-            await self._give_up(sha256, user_id, exc)
+            self._give_up(sha256, user_id, exc, record)
             return
         record.attempts += 1
         exponent = min(record.attempts - 1, _MAX_BACKOFF_EXPONENT)
@@ -326,61 +326,24 @@ class ParserConsumer:
             settings.storage_retry_window_seconds - (now - record.first_failure),
         )
 
-    async def _give_up(self, sha256: str, user_id: int, exc: Exception) -> None:
-        """Fail one file visibly: holding-pen entry plus metrics counter."""
+    def _give_up(self, sha256: str, user_id: int, exc: Exception, record: _RetryRecord) -> None:
+        """Fail one file visibly: ERROR log plus metrics counter.
+
+        No row is written: the file stays unparsed and the backfill scan
+        parses it once the store is back.
+        """
         _parse_giveups_total.inc()
-        record = self._retry_state.pop((sha256, user_id), None)
-        _log.warning(
-            "storage retry window exhausted sha=%s user_id=%s attempts=%s error=%s",
+        self._retry_state.pop((sha256, user_id), None)
+        _log.error(
+            "storage retry window exhausted sha=%s user_id=%s kind=%s attempts=%d "
+            "outage_seconds=%.0f error=%s",
             sha256,
             user_id,
-            record.attempts if record is not None else 0,
+            record.kind,
+            record.attempts,
+            self._clock() - record.first_failure,
             exc,
         )
-        if record is not None and record.kind == "match-log":
-            await self._write_storage_outage_hold(sha256, user_id, exc, record)
-
-    async def _write_storage_outage_hold(
-        self,
-        sha256: str,
-        user_id: int,
-        exc: Exception,
-        record: _RetryRecord,
-    ) -> None:
-        """Drop a holding-pen row for a file that ran out its window.
-
-        ``parser.matches`` is the app's existing review/holding-pen
-        surface (``review_status`` + ``review_reason``), so the give-up
-        lands there under the same ``(sha256, user_id)`` identity the
-        parse would have used. An existing row for that identity (a
-        parsed match, an admin verdict) is left untouched.
-        """
-        now = datetime.now(UTC)
-        reason = f"storage outage: object unreadable after {record.attempts} attempts ({exc})"
-        try:
-            async with self._sessionmaker() as session:
-                await session.execute(
-                    sa_text(
-                        """
-                        INSERT INTO parser.matches
-                            (id, sha256, user_id, game_count, parsed_at,
-                             review_status, review_reason)
-                        VALUES
-                            (:id, :sha, :user_id, 0, :now, 'pending_review', :reason)
-                        ON CONFLICT ON CONSTRAINT uq_matches_sha256_user DO NOTHING
-                        """
-                    ),
-                    {
-                        "id": uuid.uuid4(),
-                        "sha": sha256,
-                        "user_id": int(user_id),
-                        "now": now,
-                        "reason": reason,
-                    },
-                )
-                await session.commit()
-        except Exception:  # noqa: BLE001 — the counters already tell the story
-            _log.exception("holding-pen write failed sha=%s", sha256)
 
     async def _read_raw_once(
         self,
