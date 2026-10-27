@@ -5,7 +5,9 @@
 {% block content %}
 {# Hero archetype x opponent archetype table. The archetype names drill down by
    narrowing the matching filter, built with filter_url so the format and date
-   filters the user already set survive the click. #}
+   filters the user already set survive the click. The match count and the W/L
+   figures link to the supporting Match History rows, narrowed to the cell's
+   two archetypes (same format and date range). #}
 <div class="mb-6">
     <h1 class="text-xl font-semibold dark:text-txt-primary text-txt-primary-light">Matchups</h1>
     <p class="text-sm dark:text-txt-secondary text-txt-secondary-light mt-1">
@@ -84,6 +86,8 @@
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Matches</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">W-L-D</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Win rate</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Pre-board (G1)</th>
+                    <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-right px-4 py-2.5">Post-board (G2+)</th>
                     <th class="text-xs uppercase tracking-wider dark:text-txt-secondary text-txt-secondary-light font-medium text-left px-4 py-2.5">Sample</th>
                 </tr>
             </thead>
@@ -96,8 +100,13 @@
                     <td class="px-4 py-2.5 text-sm">
                         <a href="{{ filter_url('/matchups', filters, {'opponent_archetype_id': c.opponent_archetype_id}) }}" class="text-accent hover:text-accent-hover">{{ c.opponent_archetype }}</a>
                     </td>
-                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ c.matches }}</td>
-                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">{{ c.wins }}-{{ c.losses }}-{{ c.draws }}</td>
+                    {% set cell_ids = {'hero_archetype_id': c.hero_archetype_id, 'opponent_archetype_id': c.opponent_archetype_id} %}
+                    <td class="px-4 py-2.5 text-sm font-mono text-right">
+                        <a href="{{ filter_url('/matches', filters, cell_ids) }}" class="text-accent hover:text-accent-hover" title="Show these {{ c.matches }} matches">{{ c.matches }}</a>
+                    </td>
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">
+                        {% if c.wins %}<a href="{{ filter_url('/matches', filters, {'hero_archetype_id': c.hero_archetype_id, 'opponent_archetype_id': c.opponent_archetype_id, 'result': 'wins'}) }}" class="text-accent hover:text-accent-hover">{{ c.wins }}</a>{% else %}0{% endif %}-{% if c.losses %}<a href="{{ filter_url('/matches', filters, {'hero_archetype_id': c.hero_archetype_id, 'opponent_archetype_id': c.opponent_archetype_id, 'result': 'losses'}) }}" class="text-accent hover:text-accent-hover">{{ c.losses }}</a>{% else %}0{% endif %}-{{ c.draws }}
+                    </td>
                     <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">
                         {% if c.decided %}
                         {{ "%.1f"|format(c.win_rate) }}%
@@ -106,6 +115,20 @@
                         &mdash;
                         {% endif %}
                     </td>
+                    {% for sp in [c.preboard, c.postboard] %}
+                    <td class="px-4 py-2.5 text-sm font-mono text-right dark:text-txt-primary text-txt-primary-light">
+                        {% if sp.games %}
+                        {{ "%.1f"|format(sp.win_rate) }}%
+                        <span class="block text-xs dark:text-txt-secondary text-txt-secondary-light">{{ sp.wins }}-{{ sp.losses }} &middot; {{ "%.0f"|format(sp.win_rate_low) }}&ndash;{{ "%.0f"|format(sp.win_rate_high) }}%</span>
+                        {% if sp.low_sample %}
+                        <span class="inline-block bg-warning-muted text-warning text-xs font-medium px-2 py-0.5 rounded mt-0.5" title="Fewer than {{ matrix.min_sample }} games: do not over-read this win rate.">Low sample</span>
+                        {% endif %}
+                        {% else %}
+                        &mdash;
+                        <span class="block text-xs dark:text-txt-secondary text-txt-secondary-light">no games</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
                     <td class="px-4 py-2.5 text-sm">
                         {% if c.low_sample %}
                         <span class="bg-warning-muted text-warning text-xs font-medium px-2 py-0.5 rounded" title="Fewer than {{ matrix.min_sample }} decided matches: do not over-read this win rate.">Low sample</span>
@@ -122,6 +145,7 @@
         <p class="text-xs dark:text-txt-secondary text-txt-secondary-light">
             Win rate is wins over decided (won or lost) matches, with the 95% range beneath it.
             Rows with fewer than {{ matrix.min_sample }} decided matches are marked low sample.
+            The pre-board and post-board columns count games (game 1, then games 2 and up) rather than matches, and carry their own low sample mark when they hold fewer than {{ matrix.min_sample }} games.
             {% if matrix.unclassified_matches %}
             {{ matrix.unclassified_matches }} match{{ "" if matrix.unclassified_matches == 1 else "es" }} in this view could not be classified for one or both decks and are not shown.
             {% endif %}

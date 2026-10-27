@@ -73,9 +73,17 @@ def _match(
     hero_arch: uuid.UUID | None,
     opp_arch: uuid.UUID | None,
     match_tied: bool = False,
+    games: list[str] | None = None,
 ) -> dict[str, Any]:
-    """A match row in the shape ``_load_user_matches`` returns, plus its archetypes."""
+    """A match row in the shape ``_load_user_matches`` returns, plus its archetypes.
+
+    ``games`` is the winner of game 1, 2, ... in order; by default it is the
+    ``wins_by_player`` tally laid out hero wins first.
+    """
+    if games is None:
+        games = [p for p in ("alice", "bob") for _ in range(wins_by_player.get(p, 0))]
     return {
+        "_games": games,
         "id": uuid.uuid4(),
         "format": fmt,
         "players": ["alice", "bob"],
@@ -159,6 +167,13 @@ def _patch_data(
             for mid in match_ids
         }
 
+    async def fake_game_winners(_db: Any, match_ids: list[Any]) -> dict[Any, Any]:
+        by_id = {m["id"]: m for m in matches}
+        return {
+            mid: [(n, w) for n, w in enumerate(by_id[mid]["_games"], start=1)] for mid in match_ids
+        }
+
+    monkeypatch.setattr(_matchups, "_load_game_winners", fake_game_winners)
     monkeypatch.setattr(_matchups, "_load_user_matches", fake_loader)
     monkeypatch.setattr(_matchups, "_load_match_archetypes", fake_archetypes)
     return calls
@@ -521,3 +536,125 @@ async def test_repeated_request_is_served_from_cache(
     assert first == second
     assert len(fake.store) == 1
     assert len(calls) == 1  # format is case-folded in the key: second call never loaded
+
+
+# ---------------------------------------------------------------------------
+# Pre-board (game 1) vs post-board (games 2+) split
+# ---------------------------------------------------------------------------
+
+
+def _bo3(day: int, games: list[str], opp: uuid.UUID = TRON) -> dict[str, Any]:
+    wins = {"alice": games.count("alice"), "bob": games.count("bob")}
+    return _match(
+        "Modern",
+        datetime(2026, 5, day, tzinfo=UTC),
+        wins,
+        hero_arch=BURN,
+        opp_arch=opp,
+        games=games,
+    )
+
+
+@pytest.mark.asyncio
+async def test_split_counts_game_one_apart_from_later_games(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    _patch_data(
+        monkeypatch,
+        [
+            _bo3(1, ["alice", "bob", "alice"]),  # G1 W; G2 L, G3 W
+            _bo3(2, ["bob", "alice", "alice"]),  # G1 L; G2 W, G3 W
+            _bo3(3, ["alice", "alice"]),  # G1 W; G2 W
+        ],
+    )
+
+    body = await _get_matchups(app_client)
+
+    (cell,) = body["cells"]
+    assert cell["matches"] == 3
+    pre, post = cell["preboard"], cell["postboard"]
+    assert (pre["games"], pre["wins"], pre["losses"]) == (3, 2, 1)
+    assert pre["win_rate"] == pytest.approx(200 / 3)
+    assert (post["games"], post["wins"], post["losses"]) == (5, 4, 1)
+    assert post["win_rate"] == pytest.approx(80.0)
+    # Splits are game-level; the cell's match-level numbers are unchanged.
+    assert (cell["wins"], cell["losses"]) == (3, 0)
+    assert pre["win_rate_low"] < pre["win_rate"] < pre["win_rate_high"]
+
+
+@pytest.mark.asyncio
+async def test_match_with_only_game_one_has_empty_postboard(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    _patch_data(monkeypatch, [_bo3(1, ["alice"])])
+
+    (cell,) = (await _get_matchups(app_client))["cells"]
+
+    assert cell["preboard"]["games"] == 1
+    assert cell["postboard"] == {
+        "games": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0.0,
+        "win_rate_low": 0.0,
+        "win_rate_high": 0.0,
+        "low_sample": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_match_with_no_game_rows_gives_empty_splits(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    _patch_data(
+        monkeypatch,
+        [_match("Modern", datetime(2026, 5, 1, tzinfo=UTC), {}, hero_arch=BURN, opp_arch=TRON)],
+    )
+
+    (cell,) = (await _get_matchups(app_client))["cells"]
+
+    assert cell["matches"] == 1
+    assert cell["preboard"]["games"] == 0
+    assert cell["postboard"]["games"] == 0
+    assert cell["preboard"]["low_sample"] and cell["postboard"]["low_sample"]
+
+
+@pytest.mark.asyncio
+async def test_each_split_is_low_sample_on_its_own_game_count(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from analytics_service.matchups import MATCHUP_MIN_SAMPLE
+
+    _no_redis(monkeypatch)
+    # MATCHUP_MIN_SAMPLE matches: G1 hits the threshold exactly, while one
+    # match ends after G1, so post-board sits one game under it.
+    matches = [_bo3(d + 1, ["alice", "alice"]) for d in range(MATCHUP_MIN_SAMPLE - 1)]
+    matches.append(_bo3(MATCHUP_MIN_SAMPLE, ["alice"]))
+    _patch_data(monkeypatch, matches)
+
+    (cell,) = (await _get_matchups(app_client))["cells"]
+
+    assert cell["preboard"]["games"] == MATCHUP_MIN_SAMPLE
+    assert cell["preboard"]["low_sample"] is False
+    assert cell["postboard"]["games"] == MATCHUP_MIN_SAMPLE - 1
+    assert cell["postboard"]["low_sample"] is True
+
+
+@pytest.mark.asyncio
+async def test_split_is_per_cell_and_follows_the_hero_not_the_player_order(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_redis(monkeypatch)
+    flipped = _bo3(1, ["bob", "bob"], opp=MURKTIDE)
+    flipped["hero_player_name"] = "bob"  # bob is the hero in this match
+    flipped["players"] = ["alice", "bob"]
+    _patch_data(monkeypatch, [_bo3(2, ["alice", "bob", "bob"]), flipped])
+
+    cells = {c["opponent_archetype"]: c for c in (await _get_matchups(app_client))["cells"]}
+
+    assert cells["Tron"]["preboard"]["wins"] == 1
+    assert (cells["Tron"]["postboard"]["wins"], cells["Tron"]["postboard"]["losses"]) == (0, 2)
+    assert (cells["Murktide"]["preboard"]["wins"], cells["Murktide"]["postboard"]["wins"]) == (1, 1)

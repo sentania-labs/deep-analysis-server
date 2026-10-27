@@ -16,6 +16,7 @@ re-resolving via ``auth.users.mtgo_usernames`` at query time.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import date, datetime
 from typing import Annotated, Any
 
@@ -132,6 +133,40 @@ def _classify_match(
     return "D", opponent, user_wins, opp_wins
 
 
+def _archetype_predicate(
+    hero_archetype_id: uuid.UUID | None,
+    opponent_archetype_id: uuid.UUID | None,
+    params: dict[str, Any],
+    alias: str = "",
+) -> str:
+    """SQL fragment keeping matches whose hero/opponent archetype matches.
+
+    Uses the same hero rule as the matchup matrix (``COALESCE(hero_player_name,
+    players[0])``; the opponent is the other player's row), so a drill-down
+    from a matrix cell lands on exactly the matches the cell counted. Returns
+    ``""`` when neither id is set. ``alias`` is the matches table alias with
+    its dot, e.g. ``"m."``. It must be qualified: a bare ``id`` inside the
+    subquery would bind to ``match_archetypes.id``.
+    """
+    sql = ""
+    hero = f"COALESCE({alias}hero_player_name, {alias}players->>0)"
+    if hero_archetype_id:
+        sql += (
+            " AND EXISTS (SELECT 1 FROM parser.match_archetypes hma"
+            f" WHERE hma.match_id = {alias}id AND hma.player_name = {hero}"
+            " AND hma.archetype_id = :hero_archetype_id)"
+        )
+        params["hero_archetype_id"] = hero_archetype_id
+    if opponent_archetype_id:
+        sql += (
+            " AND EXISTS (SELECT 1 FROM parser.match_archetypes oma"
+            f" WHERE oma.match_id = {alias}id AND oma.player_name != {hero}"
+            " AND oma.archetype_id = :opponent_archetype_id)"
+        )
+        params["opponent_archetype_id"] = opponent_archetype_id
+    return sql
+
+
 async def _load_user_matches(
     db: AsyncSession,
     user_id: int,
@@ -140,6 +175,8 @@ async def _load_user_matches(
     date_to: date | None = None,
     format_: str | None = None,
     opponent: str | None = None,
+    hero_archetype_id: uuid.UUID | None = None,
+    opponent_archetype_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a user's matches plus per-match game-winner counts.
 
@@ -171,6 +208,10 @@ async def _load_user_matches(
     if opponent:
         where += " AND players::text ILIKE :opp_pattern ESCAPE '\\'"
         params["opp_pattern"] = f"%{_escape_like(opponent)}%"
+    # Qualified: unqualified ``id`` would bind to the subquery's own column.
+    where += _archetype_predicate(
+        hero_archetype_id, opponent_archetype_id, params, "parser.matches."
+    )
 
     rows = (
         await db.execute(
@@ -365,6 +406,8 @@ async def get_by_opponent(
     result: Annotated[str | None, Query()] = None,
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
+    hero_archetype_id: Annotated[uuid.UUID | None, Query()] = None,
+    opponent_archetype_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> list[OpponentStat]:
     """Per-opponent aggregates, honouring the same filters as ``/stats/matches``.
 
@@ -389,6 +432,8 @@ async def get_by_opponent(
         result=result_filter,
         date_from=date_from,
         date_to=date_to,
+        hero_archetype_id=hero_archetype_id,
+        opponent_archetype_id=opponent_archetype_id,
     )
     if redis_client:
         cached = await get_cached(redis_client, ck, endpoint="by-opponent")
@@ -401,6 +446,8 @@ async def get_by_opponent(
         date_to=date_to,
         format_=format_filter,
         opponent=opponent_filter,
+        hero_archetype_id=hero_archetype_id,
+        opponent_archetype_id=opponent_archetype_id,
     )
     if not matches:
         return []
@@ -519,6 +566,8 @@ async def list_matches(
     result: Annotated[str | None, Query()] = None,
     date_from: Annotated[date | None, Query()] = None,
     date_to: Annotated[date | None, Query()] = None,
+    hero_archetype_id: Annotated[uuid.UUID | None, Query()] = None,
+    opponent_archetype_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> MatchListResponse:
     """Paginated, filterable match listing for the dashboard.
 
@@ -548,6 +597,7 @@ async def list_matches(
     if date_to:
         where += " AND COALESCE(m.played_at, m.parsed_at)::date <= :date_to"
         params["date_to"] = date_to
+    where += _archetype_predicate(hero_archetype_id, opponent_archetype_id, params, "m.")
 
     # When there's no result filter, we can paginate in SQL
     has_result_filter = result is not None and result.lower() != "all"

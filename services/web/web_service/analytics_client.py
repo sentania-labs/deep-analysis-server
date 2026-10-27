@@ -689,6 +689,8 @@ async def get_match_list(
     result: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hero_archetype_id: str | None = None,
+    opponent_archetype_id: str | None = None,
 ) -> MatchListResponse:
     params: dict[str, Any] = {"page": page, "per_page": per_page}
     if format_filter and format_filter.lower() != "all":
@@ -701,6 +703,10 @@ async def get_match_list(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
+    if hero_archetype_id:
+        params["hero_archetype_id"] = hero_archetype_id
+    if opponent_archetype_id:
+        params["opponent_archetype_id"] = opponent_archetype_id
     resp = await request(
         "GET",
         f"{base_url}/analytics/stats/matches",
@@ -750,6 +756,8 @@ async def get_stats_by_opponent(
     result: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hero_archetype_id: str | None = None,
+    opponent_archetype_id: str | None = None,
 ) -> list[OpponentStatItem]:
     """Per-opponent aggregates, optionally narrowed by the Match History filters.
 
@@ -767,6 +775,10 @@ async def get_stats_by_opponent(
         params["date_from"] = date_from
     if date_to:
         params["date_to"] = date_to
+    if hero_archetype_id:
+        params["hero_archetype_id"] = hero_archetype_id
+    if opponent_archetype_id:
+        params["opponent_archetype_id"] = opponent_archetype_id
     resp = await request(
         "GET",
         f"{base_url}/analytics/stats/by-opponent",
@@ -784,6 +796,17 @@ async def get_stats_by_opponent(
 
 
 @dataclass
+class BoardSplitItem:
+    games: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    win_rate_low: float = 0.0
+    win_rate_high: float = 0.0
+    low_sample: bool = True
+
+
+@dataclass
 class MatchupCellItem:
     hero_archetype_id: str
     hero_archetype: str
@@ -798,6 +821,8 @@ class MatchupCellItem:
     win_rate_low: float
     win_rate_high: float
     low_sample: bool
+    preboard: BoardSplitItem = field(default_factory=BoardSplitItem)
+    postboard: BoardSplitItem = field(default_factory=BoardSplitItem)
 
 
 @dataclass
@@ -805,6 +830,19 @@ class MatchupMatrix:
     min_sample: int = 5
     cells: list[MatchupCellItem] = field(default_factory=list)
     unclassified_matches: int = 0
+
+
+def _to_board_split(payload: dict[str, Any] | None) -> BoardSplitItem:
+    d = payload or {}
+    return BoardSplitItem(
+        games=int(d.get("games") or 0),
+        wins=int(d.get("wins") or 0),
+        losses=int(d.get("losses") or 0),
+        win_rate=float(d.get("win_rate") or 0.0),
+        win_rate_low=float(d.get("win_rate_low") or 0.0),
+        win_rate_high=float(d.get("win_rate_high") or 0.0),
+        low_sample=bool(d.get("low_sample", True)),
+    )
 
 
 def _to_matchup_cell(payload: dict[str, Any]) -> MatchupCellItem:
@@ -822,6 +860,8 @@ def _to_matchup_cell(payload: dict[str, Any]) -> MatchupCellItem:
         win_rate_low=float(payload.get("win_rate_low") or 0.0),
         win_rate_high=float(payload.get("win_rate_high") or 0.0),
         low_sample=bool(payload.get("low_sample", True)),
+        preboard=_to_board_split(payload.get("preboard")),
+        postboard=_to_board_split(payload.get("postboard")),
     )
 
 

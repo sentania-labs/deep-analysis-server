@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -53,6 +54,8 @@ def _cell(
     wins: int = 6,
     losses: int = 2,
     low_sample: bool = False,
+    preboard: Any = None,
+    postboard: Any = None,
 ) -> Any:
     from web_service import analytics_client
 
@@ -71,6 +74,8 @@ def _cell(
         win_rate_low=40.0,
         win_rate_high=90.0,
         low_sample=low_sample,
+        preboard=preboard or analytics_client.BoardSplitItem(),
+        postboard=postboard or analytics_client.BoardSplitItem(),
     )
 
 
@@ -228,7 +233,7 @@ async def test_table_renders_counts_win_rate_and_drilldown_links(
     body = r.text
     assert "Burn" in body and "Tron" in body
     assert "75.0%" in body  # 6 / (6 + 2)
-    assert "6-2-0" in body
+    assert ">6</a>-<a" in body and ">2</a>-0" in body  # W-L-D, wins and losses linked
     assert "40&ndash;90%" in body or "40–90%" in body
     assert "Low sample" not in body
     # Drill-down keeps the format/date filters the user already set.
@@ -429,3 +434,258 @@ async def test_client_drops_all_sentinel_and_blanks(
 
     assert seen["params"] == {}
     assert matrix.cells == []
+
+
+# ---------------------------------------------------------------------------
+# Pre-board / post-board split and drill-down links
+# ---------------------------------------------------------------------------
+
+
+def _split(games: int, wins: int, *, low_sample: bool = False) -> Any:
+    from web_service import analytics_client
+
+    return analytics_client.BoardSplitItem(
+        games=games,
+        wins=wins,
+        losses=games - wins,
+        win_rate=(wins / games) * 100.0 if games else 0.0,
+        win_rate_low=30.0,
+        win_rate_high=80.0,
+        low_sample=low_sample,
+    )
+
+
+@pytest.mark.asyncio
+async def test_split_columns_show_each_side_with_its_own_low_sample_mark(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    cell = _cell(preboard=_split(10, 7), postboard=_split(3, 1, low_sample=True))
+    r, _seen = await _get(
+        app_client, monkeypatch, "/matchups", matrix=analytics_client.MatchupMatrix(cells=[cell])
+    )
+
+    body = r.text
+    assert "Pre-board" in body and "Post-board" in body
+    assert "70.0%" in body  # G1: 7 / 10
+    assert "33.3%" in body  # G2+: 1 / 3
+    # The 3-game post-board side is marked; the 10-game pre-board side is not.
+    # (the cell itself is not low sample, so this badge can only be the split's).
+    assert body.count("Low sample") == 1
+    assert "Fewer than 5 games" in body
+
+
+@pytest.mark.asyncio
+async def test_empty_postboard_reads_as_no_games_not_zero_percent(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    cell = _cell(preboard=_split(2, 1, low_sample=True))
+    r, _seen = await _get(
+        app_client, monkeypatch, "/matchups", matrix=analytics_client.MatchupMatrix(cells=[cell])
+    )
+
+    assert "no games" in r.text
+    assert not re.search(r"(?<![\d.])0\.0%", r.text)
+
+
+@pytest.mark.asyncio
+async def test_cell_links_to_supporting_matches_with_format_and_dates(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    matrix = analytics_client.MatchupMatrix(cells=[_cell()])
+    r, _seen = await _get(
+        app_client,
+        monkeypatch,
+        "/matchups?format=Modern&date_from=2026-05-01&date_to=2026-05-31",
+        matrix=matrix,
+    )
+
+    base = (
+        "/matches?format=Modern&amp;date_from=2026-05-01&amp;date_to=2026-05-31"
+        f"&amp;hero_archetype_id={HERO}&amp;opponent_archetype_id={OPP}"
+    )
+    assert f'href="{base}"' in r.text  # the match count
+    assert f'href="{base}&amp;result=wins"' in r.text
+    assert f'href="{base}&amp;result=losses"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_cell_link_replaces_the_pages_archetype_filters_with_the_cells(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from web_service import analytics_client
+
+    other = "33333333-3333-3333-3333-333333333333"
+    r, _seen = await _get(
+        app_client,
+        monkeypatch,
+        f"/matchups?hero_archetype_id={HERO}",
+        matrix=analytics_client.MatchupMatrix(cells=[_cell()]),
+        archetypes=[_archetype(HERO, "Burn"), _archetype(OPP, "Tron"), _archetype(other, "Other")],
+    )
+
+    assert f'href="/matches?hero_archetype_id={HERO}&amp;opponent_archetype_id={OPP}"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_client_parses_the_split_and_tolerates_its_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import analytics_client
+
+    base = {
+        "hero_archetype_id": HERO,
+        "hero_archetype": "Burn",
+        "opponent_archetype_id": OPP,
+        "opponent_archetype": "Tron",
+        "matches": 1,
+    }
+    payload = {
+        "cells": [
+            {
+                **base,
+                "preboard": {
+                    "games": 4,
+                    "wins": 3,
+                    "losses": 1,
+                    "win_rate": 75.0,
+                    "low_sample": True,
+                },
+                "postboard": {"games": 0},
+            },
+            base,  # an older analytics build with no split at all
+        ]
+    }
+
+    class _Resp:
+        @staticmethod
+        def json() -> dict[str, Any]:
+            return payload
+
+    async def fake_request(*_a: Any, **_kw: Any) -> Any:
+        return _Resp()
+
+    monkeypatch.setattr(analytics_client, "request", fake_request)
+
+    with_split, without = (await analytics_client.get_matchups("http://a", "t")).cells
+
+    assert (with_split.preboard.games, with_split.preboard.wins, with_split.preboard.win_rate) == (
+        4,
+        3,
+        75.0,
+    )
+    assert with_split.postboard.games == 0 and with_split.postboard.low_sample is True
+    assert without.preboard.games == 0 and without.postboard.low_sample is True
+
+
+# ---------------------------------------------------------------------------
+# Match History: the landing end of the drill-down
+# ---------------------------------------------------------------------------
+
+
+async def _get_matches(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, url: str
+) -> tuple[httpx.Response, dict[str, Any]]:
+    from web_service import analytics_client
+    from web_service import deps as _deps
+    from web_service import main as _main
+
+    seen: dict[str, Any] = {}
+
+    async def fake_match_list(*_a: Any, **kw: Any) -> Any:
+        seen["match_list"] = kw
+        return analytics_client.MatchListResponse(matches=[], total=0, page=1, per_page=20)
+
+    async def fake_by_opponent(*_a: Any, **kw: Any) -> Any:
+        seen["by_opponent"] = kw
+        return []
+
+    monkeypatch.setattr(analytics_client, "get_match_list", fake_match_list)
+    monkeypatch.setattr(analytics_client, "get_stats_by_opponent", fake_by_opponent)
+    _main.app.dependency_overrides[_deps.get_current_browser_user] = _override_user()
+    try:
+        r = await app_client.get(url)
+    finally:
+        _main.app.dependency_overrides.clear()
+    return r, seen
+
+
+@pytest.mark.asyncio
+async def test_match_history_forwards_archetype_filters_to_both_calls(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, seen = await _get_matches(
+        app_client,
+        monkeypatch,
+        f"/matches?hero_archetype_id={HERO}&opponent_archetype_id={OPP}&format=Modern",
+    )
+
+    assert r.status_code == 200
+    for call in ("match_list", "by_opponent"):
+        assert seen[call]["hero_archetype_id"] == HERO, call
+        assert seen[call]["opponent_archetype_id"] == OPP, call
+    # The filter form keeps them, and the page says a matchup filter is on.
+    assert f'name="hero_archetype_id" value="{HERO}"' in r.text
+    assert f'name="opponent_archetype_id" value="{OPP}"' in r.text
+    assert "Clear matchup filter" in r.text
+    assert 'href="/matchups?format=Modern"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_match_history_drops_non_uuid_archetype_filters(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, seen = await _get_matches(
+        app_client, monkeypatch, "/matches?hero_archetype_id=nope&opponent_archetype_id="
+    )
+
+    assert r.status_code == 200
+    assert seen["match_list"]["hero_archetype_id"] is None
+    assert seen["match_list"]["opponent_archetype_id"] is None
+    assert "Clear matchup filter" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_match_history_without_archetype_filters_shows_no_matchup_chip(
+    app_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r, _seen = await _get_matches(app_client, monkeypatch, "/matches")
+
+    assert "Clear matchup filter" not in r.text
+    assert 'name="hero_archetype_id"' not in r.text
+
+
+@pytest.mark.asyncio
+async def test_client_sends_archetype_filters_for_match_list_and_by_opponent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from web_service import analytics_client
+
+    seen: list[dict[str, Any]] = []
+
+    class _Resp:
+        @staticmethod
+        def json() -> Any:
+            return {}
+
+    async def fake_request(_method: str, _url: str, **kw: Any) -> Any:
+        seen.append(kw["params"])
+        return _Resp()
+
+    monkeypatch.setattr(analytics_client, "request", fake_request)
+
+    await analytics_client.get_match_list(
+        "http://a", "t", hero_archetype_id=HERO, opponent_archetype_id=OPP
+    )
+    await analytics_client.get_stats_by_opponent(
+        "http://a", "t", hero_archetype_id=HERO, opponent_archetype_id=OPP
+    )
+
+    for params in seen:
+        assert params["hero_archetype_id"] == HERO
+        assert params["opponent_archetype_id"] == OPP

@@ -548,9 +548,16 @@ async def match_history_page(
     result: Annotated[str, Query()] = "",
     date_from: Annotated[str, Query()] = "",
     date_to: Annotated[str, Query()] = "",
+    hero_archetype_id: Annotated[str, Query()] = "",
+    opponent_archetype_id: Annotated[str, Query()] = "",
 ) -> Response:
     if user.role == "admin":
         return RedirectResponse(url=_ADMIN_LANDING_PATH, status_code=status.HTTP_302_FOUND)
+
+    # Archetype ids come from matchup-page drill-down links; a hand-edited
+    # value that is not a UUID is dropped rather than sent to analytics as a 422.
+    hero_archetype_id = _uuid_or_empty(hero_archetype_id)
+    opponent_archetype_id = _uuid_or_empty(opponent_archetype_id)
 
     # Validate date range before calling analytics.
     date_valid, date_error = validate_date_range(date_from, date_to)
@@ -561,6 +568,8 @@ async def match_history_page(
             "result": result,
             "date_from": date_from,
             "date_to": date_to,
+            "hero_archetype_id": hero_archetype_id,
+            "opponent_archetype_id": opponent_archetype_id,
         }
         filter_qs = urlencode({k: v for k, v in filters.items() if v})
         return templates.TemplateResponse(
@@ -597,6 +606,8 @@ async def match_history_page(
             result=result or None,
             date_from=date_from or None,
             date_to=date_to or None,
+            hero_archetype_id=hero_archetype_id or None,
+            opponent_archetype_id=opponent_archetype_id or None,
         )
         match_list = await analytics_client.get_match_list(
             settings.analytics_service_url,
@@ -608,6 +619,8 @@ async def match_history_page(
             result=result or None,
             date_from=date_from or None,
             date_to=date_to or None,
+            hero_archetype_id=hero_archetype_id or None,
+            opponent_archetype_id=opponent_archetype_id or None,
         )
     except analytics_client.AnalyticsForbidden:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -621,6 +634,8 @@ async def match_history_page(
         "result": result,
         "date_from": date_from,
         "date_to": date_to,
+        "hero_archetype_id": hero_archetype_id,
+        "opponent_archetype_id": opponent_archetype_id,
     }
     filter_qs = urlencode({k: v for k, v in filters.items() if v})
     # Only carry a non-default page size on the opponent drill-down links, so an

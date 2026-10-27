@@ -9,6 +9,20 @@ API surface stabilizes.
 
 ### Added
 
+- **Matchup pre-board / post-board split and drill-down links (#129).** Each
+  cell of `GET /analytics/stats/matchups` now carries `preboard` (game 1) and
+  `postboard` (games 2 and up) objects with `games`, `wins`, `losses`, win
+  rate, the 95% Wilson range and their own `low_sample` flag, judged on that
+  split's game count against the same `min_sample`. Games without a recorded
+  winner are skipped; a cell whose matches all ended after game 1 has an empty
+  post-board (0 games, low sample) rather than a 0% win rate. `/stats/matches`
+  and `/stats/by-opponent` accept `hero_archetype_id` and `opponent_archetype_id`
+  with the same hero rule the matrix uses, so a cell's matches can be listed
+  exactly. On the web `/matchups` table the match count and the win and loss
+  figures link to Match History narrowed to that archetype pair (format and date
+  range kept), and Match History shows a "clear matchup filter" note while one is
+  active. Per-matchup key cards and sideboard effectiveness are still to do.
+
 - **Matchup matrix API and dashboard table, first slice (#129).** A new
   read-only `GET /analytics/stats/matchups` returns one cell per hero
   archetype x opponent archetype pair: matches, wins, losses, draws, win rate
