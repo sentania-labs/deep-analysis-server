@@ -194,7 +194,16 @@ services:
     command:
       - |
         set -e
-        mc alias set da http://minio:9000 "$$DA_S3_ACCESS_KEY" "$$DA_S3_SECRET_KEY"
+        # The bitnami image runs a throwaway MinIO for its own setup, so
+        # the healthcheck can pass against that instance just before it is
+        # stopped and the real server starts. Retry the first call until
+        # the real one answers; a genuine outage still fails after ~30s.
+        n=0
+        until mc alias set da http://minio:9000 "$$DA_S3_ACCESS_KEY" "$$DA_S3_SECRET_KEY"; do
+          n=$$((n + 1))
+          [ "$$n" -lt 30 ] || exit 1
+          sleep 1
+        done
         mc mb --ignore-existing "da/$$DA_S3_BUCKET"
         echo "bucket ready: $$DA_S3_BUCKET"
     depends_on:
