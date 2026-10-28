@@ -112,9 +112,10 @@ auth, ingest, analytics and parser, so one gateway request can be followed acros
 services with a single id. The middleware is `common.request_id.RequestIDMiddleware`.
 The uvicorn access line carries the same value: `common.logging` replaces the
 default access formatter with `RequestIdAccessFormatter`, which appends
-`request_id=<id>` (or `request_id=-` when no id was present) after the usual
-`INFO: 10.0.0.5 - "GET /analytics/stats 200 OK"` line, so a proxy log line and a
-service log line match on that one field. No other header is logged.
+`request_id=<id>` after the usual
+`INFO: 10.0.0.5 - "GET /analytics/stats HTTP/1.1" 200 OK` line, so a proxy log line
+and a service log line match on that one field (`-` only for a line written
+outside the middleware). No other header is logged.
 
 Optional Loki + Grafana + Prometheus stack:
 

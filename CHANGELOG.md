@@ -97,8 +97,8 @@ API surface stabilizes.
   The uvicorn access line now carries the id too: `common.logging` installs
   `RequestIdAccessFormatter`, a `uvicorn.logging.AccessFormatter` that appends
   `request_id=<id>` to the usual
-  `INFO: 10.0.0.5 - "GET /analytics/stats 200 OK"` line (`-` when the request
-  carried no id), so a reverse-proxy log line matches a service access line by
+  `INFO: 10.0.0.5 - "GET /analytics/stats HTTP/1.1" 200 OK` line (`-` only for
+  a line written outside the middleware), so a reverse-proxy log line matches a service access line by
   that one value. Only the request id is added; no other header is logged.
 
 ### Fixed
