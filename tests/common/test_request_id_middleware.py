@@ -221,6 +221,93 @@ def test_configure_logging_installs_access_formatter() -> None:
         access.handlers = saved
 
 
+def test_no_access_log_keeps_the_logger_handlerless(uvicorn_logging_state: None) -> None:
+    """AC8: ``--no-access-log`` stays off. uvicorn expresses "access logging
+    disabled" as a handlerless, non-propagating ``uvicorn.access`` logger, and
+    ``configure_logging`` must not add a handler back."""
+    import uvicorn.config as uvicorn_config
+
+    from common.logging import configure_logging
+
+    async def asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
+        pass
+
+    access = logging.getLogger("uvicorn.access")
+    uvicorn_config.Config(asgi_app, access_log=False)
+    assert access.handlers == [], "uvicorn itself should leave the logger silent"
+
+    configure_logging("test-no-access")
+    assert access.handlers == [], "a disabled access logger must stay handlerless"
+    assert access.propagate is False
+
+    # The enabled path is still the installed one, for contrast.
+    uvicorn_config.Config(asgi_app)
+    configure_logging("test-access")
+    assert access.handlers, "an enabled access logger keeps its handler"
+    assert any(h.formatter is not None for h in access.handlers)
+
+
+@pytest.mark.parametrize("style", ["{", "$"], ids=["brace", "dollar"])
+def test_custom_formatter_style_is_preserved(style: str, uvicorn_logging_state: None) -> None:
+    """AC9: a ``--log-config`` formatter written in ``{`` or ``$`` style keeps
+    that style, so its own fields still interpolate instead of turning into
+    literal text."""
+    from common.logging import RequestIdAccessFormatter, _install_access_formatter
+
+    base = (
+        "{levelname}:{client_addr} {request_line} {status_code}"
+        if style == "{"
+        else "${levelname}:${client_addr} ${request_line} ${status_code}"
+    )
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(logging.Formatter(base, style=style))
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [handler]
+    try:
+        _install_access_formatter()
+        assert isinstance(handler.formatter, RequestIdAccessFormatter)
+        line = handler.formatter.formatMessage(_access_record())
+    finally:
+        access.handlers = saved
+
+    # Every original field still interpolates, and the suffix matches the style.
+    assert line == (
+        f"INFO:{_ACCESS_ARGS[0]} {_ACCESS_ARGS[1]} {_ACCESS_ARGS[2]} "
+        f"HTTP/{_ACCESS_ARGS[3]} {_ACCESS_ARGS[4]} OK request_id=-"
+    ), line
+
+
+def test_percent_formatter_keeps_percent_suffix(uvicorn_logging_state: None) -> None:
+    """The default percent style is unchanged by the style-aware suffix."""
+    from common.logging import (
+        ACCESS_FMT,
+        RequestIdAccessFormatter,
+        _install_access_formatter,
+    )
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False))
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [handler]
+    try:
+        # Twice: the already-installed formatter must not gain a second suffix.
+        _install_access_formatter()
+        first = handler.formatter
+        _install_access_formatter()
+        assert handler.formatter is first
+        assert isinstance(handler.formatter, RequestIdAccessFormatter)
+        line = handler.formatter.formatMessage(_access_record())
+    finally:
+        access.handlers = saved
+
+    assert line.endswith("200 OK request_id=-")
+    assert line.count("request_id=") == 1
+
+
 @pytest.fixture()
 def uvicorn_logging_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Reset uvicorn's ``LOGGING_CONFIG`` access formatter to its unpatched

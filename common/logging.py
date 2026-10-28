@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Mapping, MutableMapping
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 import uvicorn.logging
@@ -16,9 +16,37 @@ from common.request_id import _request_id_ctx
 #: so the request id can be appended to the line that already ships.
 UVICORN_ACCESS_FMT = '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
 
+#: Per-``logging``-style request-id suffix. The suffix has to be built in the
+#: same style as the format it joins, or that format's own fields would come
+#: out as literal text.
+_STYLE_SUFFIX: dict[str, str] = {
+    "%": "request_id=%(request_id)s",
+    "{": "request_id={request_id}",
+    "$": "request_id=${request_id}",
+}
+
 #: The access line uvicorn emits plus the request id, so a proxy log line can
 #: be matched to the service line for the same request (issue #182).
-ACCESS_FMT = f"{UVICORN_ACCESS_FMT} request_id=%(request_id)s"
+ACCESS_FMT = f"{UVICORN_ACCESS_FMT} {_STYLE_SUFFIX['%']}"
+
+
+def _access_fmt(base: str, style: Literal["%", "{", "$"] = "%") -> str:
+    """The given access format plus the request-id suffix in its own style."""
+    return f"{base} {_STYLE_SUFFIX.get(style, _STYLE_SUFFIX['%'])}"
+
+
+def _style_of(formatter: logging.Formatter | None) -> Literal["%", "{", "$"]:
+    """The interpolation style ``logging`` gave an existing formatter.
+
+    ``StrFormatStyle`` and ``StringTemplateStyle`` subclass ``PercentStyle``, so
+    the specific classes have to be tested first.
+    """
+    style = getattr(formatter, "_style", None)
+    if isinstance(style, logging.StringTemplateStyle):
+        return "$"
+    if isinstance(style, logging.StrFormatStyle):
+        return "{"
+    return "%"
 
 
 class RequestIdAccessFormatter(uvicorn.logging.AccessFormatter):
@@ -88,18 +116,27 @@ def _install_access_formatter() -> None:
 
     access = logging.getLogger("uvicorn.access")
     if not access.handlers:
+        if not access.propagate:
+            # ``--no-access-log`` clears the handlers and sets
+            # ``propagate = False``; an unconfigured logger still propagates to
+            # the root handler. A non-propagating, handlerless logger is
+            # therefore uvicorn's own "access logging is off", and adding a
+            # handler back would undo what the operator asked for.
+            return
         access.addHandler(logging.StreamHandler(sys.stdout))
         access.propagate = False
     for handler in access.handlers:
         existing = handler.formatter
         if isinstance(existing, RequestIdAccessFormatter):
             continue
-        # Keep whatever a custom ``--log-config`` already chose, and add only
-        # the request id to it.
+        # Keep whatever a custom ``--log-config`` already chose — format and
+        # interpolation style alike — and add only the request id to it.
+        style = _style_of(existing)
         base = getattr(existing, "_fmt", None) or UVICORN_ACCESS_FMT
         handler.setFormatter(
             RequestIdAccessFormatter(
-                fmt=f"{base} request_id=%(request_id)s",
+                fmt=_access_fmt(base, style),
+                style=style,
                 use_colors=getattr(existing, "use_colors", None),
             )
         )

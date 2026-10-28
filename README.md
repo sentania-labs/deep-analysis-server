@@ -115,7 +115,9 @@ default access formatter with `RequestIdAccessFormatter`, which appends
 `request_id=<id>` after the usual
 `INFO: 10.0.0.5 - "GET /analytics/stats HTTP/1.1" 200 OK` line, so a proxy log line
 and a service log line match on that one field (`-` only for a line written
-outside the middleware). No other header is logged.
+outside the middleware). No other header is logged. A `--no-access-log` start
+stays silent, and a custom `--log-config` formatter keeps its own format and
+`{`/`$` interpolation style.
 
 Optional Loki + Grafana + Prometheus stack:
 
