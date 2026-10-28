@@ -100,8 +100,8 @@ API surface stabilizes.
   `INFO: 10.0.0.5 - "GET /analytics/stats HTTP/1.1" 200 OK` line (`-` only for
   a line written outside the middleware), so a reverse-proxy log line matches a service access line by
   that one value. Only the request id is added; no other header is logged. A
-  `--no-access-log` start stays silent, and a custom `--log-config` formatter
-  keeps its own format and `{`/`$` interpolation style.
+  `--no-access-log` start stays silent, and a custom `--log-config` access
+  formatter is left untouched.
 
 ### Fixed
 

@@ -247,40 +247,30 @@ def test_no_access_log_keeps_the_logger_handlerless(uvicorn_logging_state: None)
     assert any(h.formatter is not None for h in access.handlers)
 
 
-@pytest.mark.parametrize("style", ["{", "$"], ids=["brace", "dollar"])
-def test_custom_formatter_style_is_preserved(style: str, uvicorn_logging_state: None) -> None:
-    """AC9: a ``--log-config`` formatter written in ``{`` or ``$`` style keeps
-    that style, so its own fields still interpolate instead of turning into
-    literal text."""
-    from common.logging import RequestIdAccessFormatter, _install_access_formatter
+def test_custom_formatter_is_left_untouched(uvicorn_logging_state: None) -> None:
+    """A ``--log-config`` formatter in ``{`` style is the operator's choice:
+    it stays the same object and renders exactly as configured."""
+    from common.logging import _install_access_formatter
 
-    base = (
-        "{levelname}:{client_addr} {request_line} {status_code}"
-        if style == "{"
-        else "${levelname}:${client_addr} ${request_line} ${status_code}"
-    )
-    buf = io.StringIO()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(logging.Formatter(base, style=style))
+    handler = logging.StreamHandler(io.StringIO())
+    custom = logging.Formatter("{levelname}:{client_addr} {status_code}", style="{")
+    handler.setFormatter(custom)
     access = logging.getLogger("uvicorn.access")
     saved = list(access.handlers)
     access.handlers = [handler]
     try:
         _install_access_formatter()
-        assert isinstance(handler.formatter, RequestIdAccessFormatter)
-        line = handler.formatter.formatMessage(_access_record())
+        assert handler.formatter is custom
+        record = _access_record()
+        record.client_addr = _ACCESS_ARGS[0]
+        record.status_code = _ACCESS_ARGS[4]
+        assert custom.format(record) == f"INFO:{_ACCESS_ARGS[0]} {_ACCESS_ARGS[4]}"
     finally:
         access.handlers = saved
 
-    # Every original field still interpolates, and the suffix matches the style.
-    assert line == (
-        f"INFO:{_ACCESS_ARGS[0]} {_ACCESS_ARGS[1]} {_ACCESS_ARGS[2]} "
-        f"HTTP/{_ACCESS_ARGS[3]} {_ACCESS_ARGS[4]} OK request_id=-"
-    ), line
-
 
 def test_percent_formatter_keeps_percent_suffix(uvicorn_logging_state: None) -> None:
-    """The default percent style is unchanged by the style-aware suffix."""
+    """An already-installed request-id formatter is not wrapped twice."""
     from common.logging import (
         ACCESS_FMT,
         RequestIdAccessFormatter,
