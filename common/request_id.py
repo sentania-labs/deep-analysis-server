@@ -44,6 +44,7 @@ import contextvars
 import uuid
 
 from starlette.datastructures import Headers
+from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REQUEST_ID_HEADER = "x-request-id"
@@ -62,7 +63,8 @@ class RequestIDMiddleware:
 
     * Reads X-Request-ID from request headers; generates a UUID4 when absent.
     * Binds the value into the stdlib context-var context.
-    * Echoes X-Request-ID on the response header.
+    * Echoes X-Request-ID on the response header, including the 500 sent for
+      an unhandled exception.
     * Forwards ``lifespan`` and any other non-http scope to the app untouched.
     """
 
@@ -81,10 +83,14 @@ class RequestIDMiddleware:
         if not request_id:
             request_id = str(uuid.uuid4())
 
+        response_started = False
+
         async def inner_send(message: Message) -> None:
+            nonlocal response_started
             if message["type"] != "http.response.start":
                 await send(message)
                 return
+            response_started = True
             # Add X-Request-ID to the response headers while keeping every
             # other field of the message (status, trailers, ...) intact.
             message_headers = list(message.get("headers", []))
@@ -94,6 +100,17 @@ class RequestIDMiddleware:
         token = _request_id_ctx.set(request_id)
         try:
             await self.app(scope, receive, inner_send)
+        except Exception:
+            if not response_started:
+                # Starlette's ServerErrorMiddleware sits outside this one and
+                # would send the 500 after the id is unbound. Send it here so
+                # the response carries X-Request-ID and uvicorn writes its
+                # access line while the id is still bound, then re-raise so
+                # the error is still logged and surfaced.
+                await PlainTextResponse("Internal Server Error", status_code=500)(
+                    scope, receive, inner_send
+                )
+            raise
         finally:
             _request_id_ctx.reset(token)
 

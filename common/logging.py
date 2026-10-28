@@ -25,7 +25,8 @@ class RequestIdAccessFormatter(uvicorn.logging.AccessFormatter):
     """uvicorn's access formatter with the current ``X-Request-ID`` appended.
 
     The id comes from the context-var that ``RequestIDMiddleware`` sets, which
-    is still bound while uvicorn writes the access line for that request. A
+    is still bound while uvicorn writes the access line for that request,
+    including the 500 for an unhandled exception. A
     request that produced no id (a non-http scope, or a line emitted outside
     the middleware) renders as ``-``.
     """
@@ -73,7 +74,7 @@ def _patch_uvicorn_dict_config() -> None:
         entry["fmt"] = ACCESS_FMT
 
 
-def _install_access_formatter(log_level: int) -> None:
+def _install_access_formatter() -> None:
     """Give ``uvicorn.access`` the formatter that carries the request id.
 
     Covers a Config built *before* this module is imported, which is what the
@@ -102,7 +103,6 @@ def _install_access_formatter(log_level: int) -> None:
                 use_colors=getattr(existing, "use_colors", None),
             )
         )
-    access.setLevel(log_level)
 
 
 def configure_logging(service_name: str, level: str = "INFO") -> None:
@@ -115,7 +115,7 @@ def configure_logging(service_name: str, level: str = "INFO") -> None:
         level=log_level,
         force=True,
     )
-    _install_access_formatter(log_level)
+    _install_access_formatter()
 
     structlog.configure(
         processors=[
