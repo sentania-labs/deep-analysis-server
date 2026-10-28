@@ -25,7 +25,7 @@ from alembic import context
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Override the placeholder in alembic.ini with the real URL from env.
 config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])

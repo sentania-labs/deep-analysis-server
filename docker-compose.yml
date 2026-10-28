@@ -362,6 +362,10 @@ services:
       <<: *s3-env
       DA_LOG_LEVEL: ${DA_LOG_LEVEL:-INFO}
       DA_METRICS_PORT: ${DA_METRICS_PORT:-9000}
+      # Transient object-store retry window for the parser (#158).
+      DA_STORAGE_RETRY_WINDOW_SECONDS: ${DA_STORAGE_RETRY_WINDOW_SECONDS:-86400}
+      DA_STORAGE_RETRY_BASE_DELAY_SECONDS: ${DA_STORAGE_RETRY_BASE_DELAY_SECONDS:-1}
+      DA_STORAGE_RETRY_MAX_DELAY_SECONDS: ${DA_STORAGE_RETRY_MAX_DELAY_SECONDS:-60}
     expose:
       - "9000"  # DA_METRICS_PORT (internal-only, not published to host)
     volumes:

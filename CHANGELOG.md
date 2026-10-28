@@ -9,6 +9,26 @@ API surface stabilizes.
 
 ### Added
 
+- **Bounded retry for transient object-store errors in the parser (#158).**
+  `ParserConsumer.handle_event` and `handle_decklist_event` no longer skip a
+  file on a single storage error. A transient failure (unreachable store,
+  timed-out read) now queues the file for retry with capped, jittered
+  exponential backoff — `min(cap, base * 2**(n-1))`, then scaled by a random
+  factor — and the consumer loop re-attempts it once its backoff elapses,
+  alongside every other in-flight file. The window and both backoff bounds are
+  settings: `DA_STORAGE_RETRY_WINDOW_SECONDS` (default 86400, i.e. 24 hours),
+  `DA_STORAGE_RETRY_BASE_DELAY_SECONDS` (1) and
+  `DA_STORAGE_RETRY_MAX_DELAY_SECONDS` (60). A file that runs out its window
+  fails visibly: it is logged at ERROR with its sha256 and the outage
+  duration, and counted (match logs and decklists alike) by
+  `parser_storage_giveups_total`; no holding-pen row is written and the
+  backfill scan parses the file once storage recovers.
+  `parser_storage_retries_total` counts deferred attempts. Both counters are on
+  the metrics port. The retry queue is process-local, so a restart restarts
+  the window for in-flight files; the durable `parser.*` rows and the backfill scan remain the source
+  of truth. Non-transient reads keep their previous handling: a missing object
+  or an oversized one is logged and skipped without a retry.
+
 - **Matchup key cards and sideboard effectiveness (#129).** A new read-only
   `GET /analytics/stats/matchups/cards` takes a `hero_archetype_id` and an
   `opponent_archetype_id` (both required) and the usual `format`, `date_from`

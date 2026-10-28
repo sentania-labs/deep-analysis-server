@@ -10,6 +10,22 @@ One worker per process. On each event:
 3. Persistence and publish failures are logged and do not kill the
    worker — pub/sub delivery is best-effort, and the goal is to keep
    draining events. Hard programmer errors still propagate.
+
+Transient object-store failures (#158) get a bounded retry with capped,
+jittered exponential backoff instead of a silent skip. Pending retries
+live in a due-time table (:attr:`ParserConsumer._retry_state`) that the
+message loop walks between pub/sub polls, so no single file holds the
+loop inside an inline sleep while other files wait. Once the window from
+a file's first failure runs out, that file fails visibly: an ERROR log
+line naming the file and the outage duration, plus a counter on the
+metrics endpoint. No row is written; the backfill scan parses the file
+once the store is back.
+
+Known limitation: the first-failure stamp is process-local, so a restart
+resets the window for in-flight files. Parsed data is unaffected — the
+durable ``parser.*`` tables stay the source of truth for what was
+parsed, and the backfill scan keeps its own self-healing role for every
+file that still has no row.
 """
 
 from __future__ import annotations
@@ -17,11 +33,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+import random
+import time
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis
+from prometheus_client import Counter
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -40,6 +60,37 @@ from parser_service.storage import RawFileNotFoundError, RawFileTooLargeError, r
 
 _log = logging.getLogger("parser.consumer")
 
+# Visibility for the storage-error path (#158). A storage blip used to
+# leave only a log line behind, so nothing outside the process could tell
+# how many parses were skipped. ``parser_storage_retries_total`` counts
+# every deferred attempt, ``parser_storage_giveups_total`` one per file
+# that exhausted its retry window. Both are served on the metrics port
+# (DA_METRICS_PORT), not the app port.
+_parse_retries_total = Counter(
+    "parser_storage_retries_total",
+    "Parse attempts deferred on a transient object-store error",
+)
+_parse_giveups_total = Counter(
+    "parser_storage_giveups_total",
+    "Files given up on after exhausting the storage retry window",
+)
+
+# Largest exponent still representable as a finite float; the bounded
+# power saturates long before this against the delay cap.
+_MAX_BACKOFF_EXPONENT = 1023
+
+
+@dataclass
+class _RetryRecord:
+    """Process-local retry state for one file."""
+
+    first_failure: float
+    attempts: int
+    due_at: float
+    kind: str
+    agent_classification: str | None = None
+    file_mtime: float | None = None
+
 
 class ParserConsumer:
     def __init__(
@@ -51,6 +102,7 @@ class ParserConsumer:
         publisher: EventPublisher | None = None,
         max_log_bytes: int | None = None,
         key_prefix: str = "raw",
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._redis = redis_client
         self._sessionmaker = sessionmaker
@@ -60,6 +112,13 @@ class ParserConsumer:
         self._publisher = publisher or EventPublisher(redis_client)
         self._max_log_bytes = max_log_bytes
         self._stop_event = asyncio.Event()
+        # Injectable clock (seconds) so tests can advance the retry window
+        # without real waiting. Monotonic: the window is a duration.
+        self._clock = clock or time.monotonic
+        # (sha256, user_id) -> pending retry, the same identity a parse
+        # persists under. Process-local; see the module docstring for the
+        # restart limitation.
+        self._retry_state: dict[tuple[str, int], _RetryRecord] = {}
 
     def stop(self) -> None:
         """Signal the consumer to stop on the next iteration."""
@@ -131,8 +190,12 @@ class ParserConsumer:
             except Exception:  # noqa: BLE001 — keep draining on transient errors
                 _log.exception("redis pubsub get_message failed")
                 await asyncio.sleep(1.0)
+                await self._drain_due_retries()
                 continue
             if msg is None:
+                # No message this tick — a good moment to run retries
+                # whose backoff has elapsed.
+                await self._drain_due_retries()
                 continue
             yield msg
 
@@ -175,6 +238,172 @@ class ParserConsumer:
         else:
             _log.debug("skipping unknown content_type sha=%s ct=%s", sha, content_type)
 
+        await self._drain_due_retries()
+
+    async def _drain_due_retries(self) -> None:
+        """Re-attempt every retry whose backoff has elapsed.
+
+        One pass per call, no inline sleeping: the pub/sub poll cadence
+        is what gives these attempts another turn. Oldest window first,
+        so a file closest to failing visibly gets its attempt first.
+        """
+        now = self._clock()
+        due = sorted(
+            (record.due_at, key)
+            for key, record in self._retry_state.items()
+            if record.due_at <= now
+        )
+        for _due_at, key in due:
+            sha, user_id = key
+            record = self._retry_state.get(key)
+            if record is None:  # resolved by an earlier attempt in this pass
+                continue
+            try:
+                if record.kind == "decklist":
+                    done = await self.handle_decklist_event(
+                        sha,
+                        user_id,
+                        file_mtime=record.file_mtime,
+                    )
+                else:
+                    parsed = await self.handle_event(
+                        sha,
+                        user_id,
+                        record.agent_classification,
+                    )
+                    done = parsed is not None
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — the backfill scan picks the file up again
+                _log.exception("storage retry failed unexpectedly sha=%s user_id=%s", sha, user_id)
+                self._retry_state.pop(key, None)
+                continue
+            if done:
+                self._retry_state.pop(key, None)
+                _log.info(
+                    "storage retry succeeded sha=%s user_id=%s attempts=%d",
+                    sha,
+                    user_id,
+                    record.attempts,
+                )
+
+    async def _next_attempt(
+        self,
+        sha256: str,
+        user_id: int,
+        exc: Exception,
+        record: _RetryRecord,
+    ) -> None:
+        """Advance the retry schedule for one file.
+
+        Exponential with full jitter and a capped interval:
+        ``delay = min(cap, base * 2**(n-1)) * random()``. The exponent is
+        bounded so the power never leaves the float range (2**1024 already
+        saturates it), which the ``min()`` against the cap makes lossless.
+        When the window from the file's first failure has already elapsed,
+        the file fails visibly instead of being rescheduled.
+        """
+        settings = get_parser_settings()
+        now = self._clock()
+        if now - record.first_failure >= settings.storage_retry_window_seconds:
+            self._give_up(sha256, user_id, exc, record)
+            return
+        record.attempts += 1
+        exponent = min(record.attempts - 1, _MAX_BACKOFF_EXPONENT)
+        raw = min(
+            settings.storage_retry_max_delay_seconds,
+            settings.storage_retry_base_delay_seconds * (2**exponent),
+        )
+        record.due_at = now + raw * random.random()
+        _parse_retries_total.inc()
+        _log.info(
+            "storage retry deferred sha=%s user_id=%s attempt=%d "
+            "delay=%.3fs window_remaining=%.0fs",
+            sha256,
+            user_id,
+            record.attempts,
+            record.due_at - now,
+            settings.storage_retry_window_seconds - (now - record.first_failure),
+        )
+
+    def _give_up(self, sha256: str, user_id: int, exc: Exception, record: _RetryRecord) -> None:
+        """Fail one file visibly: ERROR log plus metrics counter.
+
+        No row is written: the file stays unparsed and the backfill scan
+        parses it once the store is back.
+        """
+        _parse_giveups_total.inc()
+        self._retry_state.pop((sha256, user_id), None)
+        _log.error(
+            "storage retry window exhausted sha=%s user_id=%s kind=%s attempts=%d "
+            "outage_seconds=%.0f error=%s",
+            sha256,
+            user_id,
+            record.kind,
+            record.attempts,
+            self._clock() - record.first_failure,
+            exc,
+        )
+
+    async def _read_raw_once(
+        self,
+        sha256: str,
+        kind: str,
+        user_id: int,
+        agent_classification: str | None = None,
+        file_mtime: float | None = None,
+    ) -> bytes | None:
+        """One non-blocking store read; transient errors go on the queue.
+
+        Returns the object bytes or ``None``. The backoff is applied by
+        :meth:`_drain_due_retries` on a later loop turn, so this never
+        sits in an inline sleep and other files keep flowing.
+        """
+        key = (sha256, user_id)
+        record = self._retry_state.get(key)
+        if record is None:
+            record = _RetryRecord(
+                first_failure=self._clock(),
+                attempts=0,
+                due_at=self._clock(),
+                kind=kind,
+                agent_classification=agent_classification,
+                file_mtime=file_mtime,
+            )
+            self._retry_state[key] = record
+        else:
+            # Refresh the call parameters — the newest event for this
+            # (sha, user) is the authoritative one, and the attempt count
+            # stays put.
+            record.kind = kind
+            record.agent_classification = agent_classification
+            record.file_mtime = file_mtime
+            if record.due_at > self._clock():
+                return None  # not due yet this pass
+        try:
+            content = await read_raw(
+                self._store,
+                sha256,
+                key_prefix=self._key_prefix,
+                max_bytes=self._max_log_bytes,
+            )
+        except RawFileNotFoundError:
+            _log.warning("raw object missing for sha=%s; skipping", sha256)
+            self._retry_state.pop(key, None)
+            return None
+        except RawFileTooLargeError:
+            _log.warning("raw object exceeds size ceiling sha=%s; skipping", sha256)
+            self._retry_state.pop(key, None)
+            return None
+        except (ObjectStorageError, OSError) as exc:
+            _log.warning(
+                "failed to read raw object sha=%s user_id=%s error=%s", sha256, user_id, exc
+            )
+            await self._next_attempt(sha256, user_id, exc, record)
+            return None
+        self._retry_state.pop(key, None)
+        return content
+
     async def handle_event(
         self,
         sha256: str,
@@ -187,24 +416,13 @@ class ParserConsumer:
         the upload ("complete" or "inconclusive"), or None for agents
         that predate the field. It only annotates the review reason;
         the server parse stays authoritative.
+
+        Transient storage failures are recorded on the retry table and
+        re-attempted by :meth:`_drain_due_retries`; non-transient ones
+        (missing object, size ceiling) keep the previous skip behaviour.
         """
-        try:
-            content = await read_raw(
-                self._store,
-                sha256,
-                key_prefix=self._key_prefix,
-                max_bytes=self._max_log_bytes,
-            )
-        except RawFileNotFoundError:
-            _log.warning("raw object missing for sha=%s; skipping", sha256)
-            return None
-        except RawFileTooLargeError:
-            _log.warning("raw object exceeds size ceiling sha=%s; skipping", sha256)
-            return None
-        except (ObjectStorageError, OSError):
-            # Store unreachable. Leave the file unparsed: the backfill
-            # scan retries it once storage is back.
-            _log.exception("failed to read raw object sha=%s", sha256)
+        content = await self._read_raw_once(sha256, "match-log", user_id, agent_classification)
+        if content is None:
             return None
 
         parsed = self._parser.parse(content)
@@ -413,22 +631,12 @@ class ParserConsumer:
         ceiling, read error, unparseable XML, persist failure) returns
         False so callers can count real work. :func:`scan_unparsed`
         keys its processed counter on this.
+
+        A transient storage error schedules a retry the way the
+        match-log path does, and returns False for this pass.
         """
-        try:
-            content = await read_raw(
-                self._store,
-                sha256,
-                key_prefix=self._key_prefix,
-                max_bytes=self._max_log_bytes,
-            )
-        except RawFileNotFoundError:
-            _log.warning("raw grouping object missing for sha=%s; skipping", sha256)
-            return False
-        except RawFileTooLargeError:
-            _log.warning("raw grouping object exceeds size ceiling sha=%s; skipping", sha256)
-            return False
-        except (ObjectStorageError, OSError):
-            _log.exception("failed to read raw grouping object sha=%s", sha256)
+        content = await self._read_raw_once(sha256, "decklist", user_id, None, file_mtime)
+        if content is None:
             return False
 
         parsed = parse_grouping_xml(content)
@@ -497,7 +705,8 @@ def _is_partial_parse(parsed: ParsedMatch) -> bool:
 
     Under v0.9.8 the consumer no longer drops partial parses outright
     — it now persists them with ``review_status='pending_review'`` so
-    an admin can choose to accept or reject.
+    an admin can decide; a later conclusive snapshot of the same
+    logical match clears the flag.
     """
     if parsed.winner:
         return False

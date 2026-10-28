@@ -38,6 +38,16 @@ class ParserSettings(S3StorageSettings):
     backfill_interval_seconds: int = 300
     # Maximum number of unparsed files to process per backfill scan.
     backfill_batch_size: int = 100
+    # --- Transient object-store retry window (#158) -----------------------
+    # How long a file keeps being retried after its first storage failure.
+    # Past this the file fails visibly: an ERROR log line plus a counter
+    # on the metrics endpoint.
+    # Default 24 hours.
+    storage_retry_window_seconds: int = 86400
+    # Exponential-backoff base (delay = base * 2**(n-1) for attempt n, then jitter).
+    storage_retry_base_delay_seconds: float = 1.0
+    # Ceiling on the per-attempt delay before jitter is applied.
+    storage_retry_max_delay_seconds: float = 60.0
 
 
 _settings: ParserSettings | None = None
