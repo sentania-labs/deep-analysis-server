@@ -110,6 +110,11 @@ every structured log line written while the request is being handled, and echoes
 it in the response. The web service forwards the same header on its calls to
 auth, ingest, analytics and parser, so one gateway request can be followed across
 services with a single id. The middleware is `common.request_id.RequestIDMiddleware`.
+The uvicorn access line carries the same value: `common.logging` replaces the
+default access formatter with `RequestIdAccessFormatter`, which appends
+`request_id=<id>` (or `request_id=-` when no id was present) after the usual
+`INFO: 10.0.0.5 - "GET /analytics/stats 200 OK"` line, so a proxy log line and a
+service log line match on that one field. No other header is logged.
 
 Optional Loki + Grafana + Prometheus stack:
 

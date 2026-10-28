@@ -94,6 +94,12 @@ API surface stabilizes.
   a browser request can be traced through the gateway and every service it
   reaches with one id. Non-http ASGI scopes (lifespan, websocket) pass through
   the middleware untouched, so service startup hooks keep running.
+  The uvicorn access line now carries the id too: `common.logging` installs
+  `RequestIdAccessFormatter`, a `uvicorn.logging.AccessFormatter` that appends
+  `request_id=<id>` to the usual
+  `INFO: 10.0.0.5 - "GET /analytics/stats 200 OK"` line (`-` when the request
+  carried no id), so a reverse-proxy log line matches a service access line by
+  that one value. Only the request id is added; no other header is logged.
 
 ### Fixed
 

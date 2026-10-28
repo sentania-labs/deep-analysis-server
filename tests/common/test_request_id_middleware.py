@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -105,6 +107,142 @@ def test_request_id_is_cleared_after_request(app: FastAPI) -> None:
     with TestClient(app) as client:
         client.get("/ping", headers={REQUEST_ID_HEADER: "abc"})
     assert get_request_id() is None
+
+
+# uvicorn passes these five args to its access logger; the formatter unpacks
+# them in ``AccessFormatter.formatMessage``.
+_ACCESS_ARGS: tuple[str, str, str, str, int] = ("10.0.0.5", "GET", "/ping", "1.1", 200)
+
+
+def _access_record() -> logging.LogRecord:
+    return logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=_ACCESS_ARGS,
+        exc_info=None,
+    )
+
+
+async def test_access_line_carries_request_id() -> None:
+    """AC4: the uvicorn access line for a request that carried X-Request-ID
+    ends with that id, so a proxy line and a service line match up."""
+    from common.logging import ACCESS_FMT, RequestIdAccessFormatter
+
+    formatter = RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False)
+    rendered: dict[str, str] = {}
+
+    async def inner(scope: Scope, receive: Receive, send: Send) -> None:
+        # The access line is written while the request is still in flight,
+        # which is exactly when the context var is bound.
+        rendered["line"] = formatter.formatMessage(_access_record())
+
+    scope: Scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/ping",
+        "headers": [[b"x-request-id", b"proxy-42"]],
+        "client": ("10.0.0.5", 54321),
+        "query_string": b"",
+        "http_version": "1.1",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        pass
+
+    await RequestIDMiddleware(inner)(scope, receive, send)
+
+    # ``levelprefix`` pads the level name to 8 characters.
+    assert rendered["line"] == (
+        'INFO:     10.0.0.5 - "GET /ping HTTP/1.1" 200 OK request_id=proxy-42'
+    )
+
+
+async def test_access_line_without_request_id_uses_dash() -> None:
+    """AC5: no id in the request means no id on the line either."""
+    from common.logging import ACCESS_FMT, RequestIdAccessFormatter
+
+    formatter = RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False)
+    assert formatter.formatMessage(_access_record()).endswith("request_id=-")
+
+
+def test_configure_logging_installs_access_formatter() -> None:
+    """AC6: ``configure_logging`` puts the request-id formatter on the
+    ``uvicorn.access`` logger, and a line emitted inside a request carries
+    the id through that handler."""
+    from common.logging import RequestIdAccessFormatter, configure_logging
+
+    buf = io.StringIO()
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [logging.StreamHandler(buf)]
+    try:
+        configure_logging("test-access")
+        assert isinstance(access.handlers[0].formatter, RequestIdAccessFormatter)
+
+        async def drive() -> None:
+            scope: Scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/ping",
+                "headers": [[b"x-request-id", b"abc"]],
+                "client": ("10.0.0.5", 54321),
+                "query_string": b"",
+                "http_version": "1.1",
+            }
+
+            async def receive() -> Message:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: Message) -> None:
+                pass
+
+            async def inner(scope_: Scope, receive_: Receive, send_: Send) -> None:
+                access.log(logging.INFO, '%s - "%s %s HTTP/%s" %d', *_ACCESS_ARGS)
+
+            await RequestIDMiddleware(inner)(scope, receive, send)
+
+        asyncio.run(drive())
+
+        lines = buf.getvalue().splitlines()
+        assert any(
+            line.endswith('10.0.0.5 - "GET /ping HTTP/1.1" 200 OK request_id=abc') for line in lines
+        ), lines
+    finally:
+        access.handlers = saved
+
+
+def test_config_built_after_import_gets_the_id_formatter() -> None:
+    """AC7: the other startup order works too. When ``uvicorn.Config`` is
+    created *after* ``common.logging`` was imported, the id-bearing formatter
+    comes straight from uvicorn's own ``LOGGING_CONFIG``."""
+    import uvicorn.config as uvicorn_config
+
+    from common.logging import RequestIdAccessFormatter, configure_logging
+
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    try:
+        configure_logging("test-order")
+        uvicorn_config.Config(_app_with_middleware())
+        assert isinstance(uvicorn_config.LOGGING_CONFIG["formatters"]["access"]["()"], type)
+        assert uvicorn_config.LOGGING_CONFIG["formatters"]["access"]["()"] is (
+            RequestIdAccessFormatter
+        )
+        assert any(isinstance(h.formatter, RequestIdAccessFormatter) for h in access.handlers), (
+            access.handlers
+        )
+    finally:
+        access.handlers = saved
+
+
+def _app_with_middleware() -> FastAPI:
+    return FastAPI()
 
 
 async def test_middleware_preserves_scope_client_and_headers() -> None:
