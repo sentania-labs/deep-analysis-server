@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import json
+import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 import structlog
@@ -104,6 +106,290 @@ def test_request_id_is_cleared_after_request(app: FastAPI) -> None:
     """The context var does not leak past the request that set it."""
     with TestClient(app) as client:
         client.get("/ping", headers={REQUEST_ID_HEADER: "abc"})
+    assert get_request_id() is None
+
+
+# uvicorn passes these five args to its access logger; the formatter unpacks
+# them in ``AccessFormatter.formatMessage``.
+_ACCESS_ARGS: tuple[str, str, str, str, int] = ("10.0.0.5", "GET", "/ping", "1.1", 200)
+
+
+def _access_record() -> logging.LogRecord:
+    return _access_record_for(_ACCESS_ARGS[4])
+
+
+def _access_record_for(status: int) -> logging.LogRecord:
+    return logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=(*_ACCESS_ARGS[:4], status),
+        exc_info=None,
+    )
+
+
+async def test_access_line_carries_request_id() -> None:
+    """AC4: the uvicorn access line for a request that carried X-Request-ID
+    ends with that id, so a proxy line and a service line match up."""
+    from common.logging import ACCESS_FMT, RequestIdAccessFormatter
+
+    formatter = RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False)
+    rendered: dict[str, str] = {}
+
+    async def inner(scope: Scope, receive: Receive, send: Send) -> None:
+        # The access line is written while the request is still in flight,
+        # which is exactly when the context var is bound.
+        rendered["line"] = formatter.formatMessage(_access_record())
+
+    scope: Scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/ping",
+        "headers": [[b"x-request-id", b"proxy-42"]],
+        "client": ("10.0.0.5", 54321),
+        "query_string": b"",
+        "http_version": "1.1",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        pass
+
+    await RequestIDMiddleware(inner)(scope, receive, send)
+
+    # ``levelprefix`` pads the level name to 8 characters.
+    assert rendered["line"] == (
+        'INFO:     10.0.0.5 - "GET /ping HTTP/1.1" 200 OK request_id=proxy-42'
+    )
+
+
+async def test_access_line_without_request_id_uses_dash() -> None:
+    """AC5: no id in the request means no id on the line either."""
+    from common.logging import ACCESS_FMT, RequestIdAccessFormatter
+
+    formatter = RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False)
+    assert formatter.formatMessage(_access_record()).endswith("request_id=-")
+
+
+def test_configure_logging_installs_access_formatter() -> None:
+    """AC6: ``configure_logging`` puts the request-id formatter on the
+    ``uvicorn.access`` logger, and a line emitted inside a request carries
+    the id through that handler."""
+    from common.logging import RequestIdAccessFormatter, configure_logging
+
+    buf = io.StringIO()
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [logging.StreamHandler(buf)]
+    try:
+        configure_logging("test-access")
+        assert isinstance(access.handlers[0].formatter, RequestIdAccessFormatter)
+
+        async def drive() -> None:
+            scope: Scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/ping",
+                "headers": [[b"x-request-id", b"abc"]],
+                "client": ("10.0.0.5", 54321),
+                "query_string": b"",
+                "http_version": "1.1",
+            }
+
+            async def receive() -> Message:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: Message) -> None:
+                pass
+
+            async def inner(scope_: Scope, receive_: Receive, send_: Send) -> None:
+                access.log(logging.INFO, '%s - "%s %s HTTP/%s" %d', *_ACCESS_ARGS)
+
+            await RequestIDMiddleware(inner)(scope, receive, send)
+
+        asyncio.run(drive())
+
+        lines = buf.getvalue().splitlines()
+        assert any(
+            line.endswith('10.0.0.5 - "GET /ping HTTP/1.1" 200 OK request_id=abc') for line in lines
+        ), lines
+    finally:
+        access.handlers = saved
+
+
+def test_no_access_log_keeps_the_logger_handlerless(uvicorn_logging_state: None) -> None:
+    """AC8: ``--no-access-log`` stays off. uvicorn expresses "access logging
+    disabled" as a handlerless, non-propagating ``uvicorn.access`` logger, and
+    ``configure_logging`` must not add a handler back."""
+    import uvicorn.config as uvicorn_config
+
+    from common.logging import configure_logging
+
+    async def asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
+        pass
+
+    access = logging.getLogger("uvicorn.access")
+    uvicorn_config.Config(asgi_app, access_log=False)
+    assert access.handlers == [], "uvicorn itself should leave the logger silent"
+
+    configure_logging("test-no-access")
+    assert access.handlers == [], "a disabled access logger must stay handlerless"
+    assert access.propagate is False
+
+    # The enabled path is still the installed one, for contrast.
+    uvicorn_config.Config(asgi_app)
+    configure_logging("test-access")
+    assert access.handlers, "an enabled access logger keeps its handler"
+    assert any(h.formatter is not None for h in access.handlers)
+
+
+def test_custom_formatter_is_left_untouched(uvicorn_logging_state: None) -> None:
+    """A ``--log-config`` formatter in ``{`` style is the operator's choice:
+    it stays the same object and renders exactly as configured."""
+    from common.logging import _install_access_formatter
+
+    handler = logging.StreamHandler(io.StringIO())
+    custom = logging.Formatter("{levelname}:{client_addr} {status_code}", style="{")
+    handler.setFormatter(custom)
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [handler]
+    try:
+        _install_access_formatter()
+        assert handler.formatter is custom
+        record = _access_record()
+        record.client_addr = _ACCESS_ARGS[0]
+        record.status_code = _ACCESS_ARGS[4]
+        assert custom.format(record) == f"INFO:{_ACCESS_ARGS[0]} {_ACCESS_ARGS[4]}"
+    finally:
+        access.handlers = saved
+
+
+def test_percent_formatter_keeps_percent_suffix(uvicorn_logging_state: None) -> None:
+    """An already-installed request-id formatter is not wrapped twice."""
+    from common.logging import (
+        ACCESS_FMT,
+        RequestIdAccessFormatter,
+        _install_access_formatter,
+    )
+
+    buf = io.StringIO()
+    handler = logging.StreamHandler(buf)
+    handler.setFormatter(RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False))
+    access = logging.getLogger("uvicorn.access")
+    saved = list(access.handlers)
+    access.handlers = [handler]
+    try:
+        # Twice: the already-installed formatter must not gain a second suffix.
+        _install_access_formatter()
+        first = handler.formatter
+        _install_access_formatter()
+        assert handler.formatter is first
+        assert isinstance(handler.formatter, RequestIdAccessFormatter)
+        line = handler.formatter.formatMessage(_access_record())
+    finally:
+        access.handlers = saved
+
+    assert line.endswith("200 OK request_id=-")
+    assert line.count("request_id=") == 1
+
+
+@pytest.fixture()
+def uvicorn_logging_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Reset uvicorn's ``LOGGING_CONFIG`` access formatter to its unpatched
+    form and put the uvicorn loggers back afterwards.
+
+    ``Config.__init__`` binds ``LOGGING_CONFIG`` as a default argument, so the
+    dict is edited in place rather than replaced.
+    """
+    import uvicorn.config as uvicorn_config
+
+    from common.logging import UVICORN_ACCESS_FMT
+
+    monkeypatch.setitem(
+        uvicorn_config.LOGGING_CONFIG["formatters"],
+        "access",
+        {"()": "uvicorn.logging.AccessFormatter", "fmt": UVICORN_ACCESS_FMT},
+    )
+
+    saved = {
+        name: (list(lg.handlers), lg.propagate, lg.level)
+        for name in ("uvicorn", "uvicorn.error", "uvicorn.access")
+        for lg in [logging.getLogger(name)]
+    }
+    yield
+    for name, (handlers, propagate, level) in saved.items():
+        lg = logging.getLogger(name)
+        lg.handlers, lg.propagate = handlers, propagate
+        lg.setLevel(level)
+
+
+def test_config_built_after_import_gets_the_id_formatter(uvicorn_logging_state: None) -> None:
+    """AC7: the other startup order works too. When ``uvicorn.Config`` is
+    created *after* ``common.logging`` was imported, ``dictConfig`` builds the
+    id-bearing formatter from uvicorn's own ``LOGGING_CONFIG``."""
+    import uvicorn.config as uvicorn_config
+
+    from common.logging import RequestIdAccessFormatter, _patch_uvicorn_dict_config
+
+    async def asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
+        pass
+
+    _patch_uvicorn_dict_config()
+    uvicorn_config.Config(asgi_app)
+
+    access = logging.getLogger("uvicorn.access")
+    assert access.handlers
+    assert all(isinstance(h.formatter, RequestIdAccessFormatter) for h in access.handlers)
+
+
+async def test_unhandled_exception_500_carries_request_id() -> None:
+    """The 500 for an unhandled exception is sent while the id is still bound:
+    it echoes X-Request-ID and the access line written at response start
+    carries the id."""
+    from common.logging import ACCESS_FMT, RequestIdAccessFormatter
+
+    boom_app = FastAPI()
+    boom_app.add_middleware(RequestIDMiddleware)
+
+    @boom_app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("boom")
+
+    formatter = RequestIdAccessFormatter(fmt=ACCESS_FMT, use_colors=False)
+    sent: list[Message] = []
+    lines: list[str] = []
+
+    scope: Scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/boom",
+        "headers": [[b"x-request-id", b"proxy-500"]],
+        "client": ("10.0.0.5", 54321),
+        "query_string": b"",
+        "http_version": "1.1",
+    }
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+        if message["type"] == "http.response.start":
+            lines.append(formatter.formatMessage(_access_record_for(message["status"])))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await boom_app(scope, receive, send)
+
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert len(starts) == 1
+    assert starts[0]["status"] == 500
+    assert (b"x-request-id", b"proxy-500") in starts[0]["headers"]
+    assert lines[0].endswith("request_id=proxy-500")
     assert get_request_id() is None
 
 

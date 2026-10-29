@@ -56,7 +56,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=f"deep-analysis-{SERVICE_NAME}", lifespan=lifespan)
-app.add_middleware(RequestIDMiddleware)
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 templates.env.globals["app_version"] = os.environ.get("APP_VERSION", "dev")
@@ -118,6 +117,13 @@ async def inject_motd_middleware(request: Request, call_next: Any) -> Response:
         motd = auth_client.MotdResult(active=False)
     request.state.motd = motd
     return await call_next(request)
+
+
+# Registered after the ``@app.middleware`` wrappers above so it is the outermost
+# layer: ``BaseHTTPMiddleware`` streams the response from a separate task, so
+# a request-id context var set inside one is gone when uvicorn writes the
+# access line (issue #182).
+app.add_middleware(RequestIDMiddleware)
 
 
 # Patch Jinja2Templates to auto-inject ``motd`` into every render context.
