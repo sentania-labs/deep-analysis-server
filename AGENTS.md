@@ -1,17 +1,22 @@
-# CLAUDE.md — deep-analysis-server
+# AGENTS.md — deep-analysis-server
 
-This file is authoritative for all Claude sessions working in this repo. Read it before taking any action. Cross-reference the approved plan at `/home/scott/.claude/plans/steady-dazzling-charm.md`.
+This file is authoritative for all agent sessions working in this repo. Read it
+before taking any action.
 
 ## What this is
 
-AGPL-3.0 server for the Deep Analysis platform. Six independent services running as a single Docker Compose stack for self-hosted MTGO match analytics.
+AGPL-3.0 server for the Deep Analysis platform. Six independent services running
+as a single Docker Compose stack for self-hosted MTGO match analytics.
 
 This is the server half of a three-repo split:
 - `deep-analysis-server` (this repo) — AGPL-3.0, open source
 - `deep-analysis-agent` — MIT, Windows client
 - `deep-analysis-ai` — Proprietary, private GHCR image (AI add-on)
 
-**Origin:** v0.4.0 is a clean greenfield rewrite. The predecessor (`manalog` through v0.3.8) was a proof-of-concept. No code from manalog is ported. You may read manalog source at `workspaces/manalog/` for design patterns, but do not copy it wholesale.
+**Origin:** v0.4.0 is a clean greenfield rewrite. The predecessor (`manalog`
+through v0.3.8) was a proof-of-concept. No code from manalog is ported. You may
+read manalog source at `workspaces/manalog/` for design patterns, but do not copy
+it wholesale.
 
 ## Charter
 
@@ -38,26 +43,16 @@ sanctioned cross-system channel.
 
 ## Services
 
-| Service    | Responsibility                                                           | Compose container       |
-|------------|--------------------------------------------------------------------------|-------------------------|
-| `gateway`  | TLS termination, HTTP entry, auth middleware, rate limiting              | deep-analysis-gateway   |
-| `auth`     | Users, sessions, agent registrations, admin endpoints, TTL/rotation      | deep-analysis-auth      |
-| `ingest`   | Upload endpoints, sha256 dedup, raw file archive, publishes `file.ingested` | deep-analysis-ingest |
-| `parser`   | Async worker: consumes ingest events, parses `.dat`/`.log`, populates match/game tables | deep-analysis-parser |
-| `analytics`| Query and administration API (see services/analytics/README.md)            | deep-analysis-analytics |
-| `web`      | Dashboard UI, talks only through gateway                                 | deep-analysis-web       |
-
-Shared infra containers: `postgres`, `redis`, `caddy`.
+For the service table, shared infrastructure, and the CI job map, see
+[README.md](README.md#services) and
+[README.md](README.md#what-ci-covers).
 
 ### Event topics
 
-| Topic | Published by | Payload shape |
-|---|---|---|
-| `match.parsed` | `parser` | match_id, user_id, game_count, parsed_at (TBD) |
-| `upload.received` | `ingest` | sha256, user_id, filename, received_at (TBD) |
-| `insight.requested` | `analytics` or client | match_id, user_id, request_id (TBD) |
-
-Payload shapes are TBD — final schema will be in openapi/ or a dedicated events spec. Any subscriber must tolerate extra fields.
+`docs/events.md` is the owning document for the Redis topic names and payload
+shapes (`file.ingested`, `match.parsed`, `insight.requested`); the constants and
+payload dataclasses live in `common/events.py`. Any subscriber must tolerate
+extra fields.
 
 ## Design decisions — do not change without discussion
 
@@ -76,7 +71,7 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 8. **No data migration.** Alembic starts at `001_initial_schema` covering all six schemas. No carry-forward from the manalog postgres.
 9. **Multi-user attribution from day one.** `ingest` schema design: `game_log_files` (sha PK, device-neutral dedup) + `user_uploads` (user_id + sha FK, per-user attribution). Not a migration after the fact.
 10. **No license-check code / phone-home.** GHCR token auth is the license gate for the AI add-on. Server code is clean.
-11. **Server emits standard events on Redis for cross-service consumption.** Topics: `match.parsed`, `upload.received`, `insight.requested`. The parser and ingest services publish. Any service (internal or add-on) can subscribe. This is the same Redis that ingest→parser uses internally; AI add-on subscribes opportunistically. Don't collapse these into HTTP callbacks.
+11. **Server emits standard events on Redis for cross-service consumption.** The parser and ingest services publish; any service (internal or add-on) can subscribe. This is the same Redis that ingest→parser uses internally; the AI add-on subscribes opportunistically. Don't collapse these into HTTP callbacks.
 
 ## Development guidelines
 
@@ -85,11 +80,11 @@ These are locked decisions from the v0.4.0 plan. If you think one needs revisiti
 - **Ruff for linting/formatting, mypy for type checking.** Both must pass clean before commit.
 - **Terse conventions.** Prefer explicit over magic. No clever metaclass tricks.
 - **Tests per service.** Each service has its own `tests/` directory. Integration tests use a real Postgres + Redis (not mocks).
-- **Web templates run under a strict CSP.** The gateway sends `script-src 'self'; style-src 'self'`: no executable inline `<script>` body, `on*=` handler or `style=` attribute in a template, and no third-party script, style or font origin. Alpine uses its CSP build and Tailwind is compiled by `services/web/build-css.sh`. The rules, rebuild trigger, data-attribute behaviours and vendoring procedure are in `services/web/README.md`; `services/web/tests/test_csp_hygiene.py` and `ci/browser/smoke_csp.py` enforce them.
+- **Web templates run under a strict CSP.** The rules, the Tailwind rebuild trigger, data-attribute behaviours and the vendoring procedure are in `services/web/README.md`; `services/web/tests/test_csp_hygiene.py` and `ci/browser/smoke_csp.py` enforce them.
 - **Self-review protocol.** For non-trivial changes, spawn a subagent to review before committing. Catch your own bugs.
-- **PR discipline.** Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are for urgent fixes only and still need CI green on the follow-up run.
-- **CI runs on the `lab` ARC pool.** `runs-on: lab` is an exact scale-set name, not a label array. Runner pods are ephemeral, have no Docker daemon, and run as a non-root user with no sudo; image builds go to the shared in-cluster BuildKit via `driver: remote`. See `sentania-labs/homelab-runner` `docs/ci-consumer-contract.md`.
-- **Compose smoke is a local pre-push step, not CI.** `ci/smoke_e2e.sh` (auth + ingest happy path via the gateway) and `ci/smoke_ui.sh` (the UI paths via curl, followed by the browser CSP pass `ci/browser/smoke_csp.py`) need a real Docker daemon, which the runner pods do not have. They are the only coverage of image builds composing into a working stack, so run them locally before pushing anything touching compose, the Caddyfile, a service Dockerfile, or a route prefix. **Follow the full sequence in README "Pre-push smoke test" verbatim**, it is not just `compose up` plus the two scripts: `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_EMAIL` and `DEEP_ANALYSIS_BOOTSTRAP_ADMIN_PASSWORD` have to be both exported in the shell (the scripts read them to log in) *and* written into `.env` (the auth container bootstraps the account from them), and `ci/docker-compose.ci.yml` bind-mounts a JWT keypair that must be generated into `/tmp/ci-jwt-keys` (`uv run python -m auth_service.keygen --out /tmp/ci-jwt-keys`) before the stack comes up. Wait for every service healthcheck before running the scripts: the gateway answers `502` for a service still starting, which reads as a smoke failure. On a healthy stack the expected result is `ci/smoke_e2e.sh` 23 PASS / 0 FAIL (exit 0), `ci/smoke_ui.sh` 0 FAIL (its PASS count varies, roughly 62 to 66, since some admin checks only run when an agent row exists), and `ci/browser/smoke_csp.py` 0 FAIL (its PASS count varies with the rows the stack has; it needs Playwright's Chromium, which README tells you how to install). Read the FAIL count: any FAIL line is a real regression.
+- **PR discipline.** See [README.md](README.md#contributing) for the required feature-branch + PR flow, and [CONTRIBUTING.md](CONTRIBUTING.md#pre-push-review-gate) for the local pre-push review gate.
+- **CI runner placement.** `runs-on: lab` is an exact scale-set name, not a label array. See [README.md](README.md#what-ci-covers) for which job runs where, and `sentania-labs/homelab-runner` `docs/ci-consumer-contract.md` for the runner contract.
+- **Compose smoke: run it locally before pushing.** `bash ci/smoke.sh` is the pre-push check for anything touching `docker-compose.yml`, the Caddyfile, a service Dockerfile, or a route prefix — it is the only coverage of the image builds composing into a working stack. A passing run ends with `0 FAIL` in every suite and exits 0; any FAIL line is a real regression. The full sequence, the environment knobs, and the expected per-suite counts are in README ["Pre-push smoke test"](README.md#pre-push-smoke-test-run-this-locally) — the script writes its own throwaway env file and generates the JWT keypair itself.
 - **Releases are tag-based.** To cut a release, merge work to `main` via PR (CI green), then `git tag vX.Y.Z && git push origin vX.Y.Z` from `main`. The release workflow builds the 5 service images, publishes them to GHCR (tagged with the semver and `:latest`), and creates a GitHub Release. The version is baked into the images at build time as the `VERSION` build arg. No version-bump commit is required — the tag is the source of truth.
 
 ## Directory layout
