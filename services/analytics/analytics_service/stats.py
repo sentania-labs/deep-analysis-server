@@ -1,7 +1,7 @@
 """User-facing stats endpoints.
 
 Reads ``parser.matches`` and ``parser.games`` cross-schema (analytics
-holds no parser tables — see CLAUDE.md design decision #2). All endpoints
+holds no parser tables — see AGENTS.md design decision #2). All endpoints
 filter by ``user_id`` from the verified JWT and return empty data
 gracefully when the user has no matches yet.
 
